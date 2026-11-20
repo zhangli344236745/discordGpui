@@ -22,7 +22,7 @@ fn section_label(text: String) -> Div {
     div()
         .text_size(px(12.))
         .font_weight(FontWeight::BOLD)
-        .text_color(rgb(palette::TEXT_MUTED))
+        .text_color(rgb(palette::text_muted()))
         .child(text)
 }
 
@@ -37,20 +37,20 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
         .px_6()
         .gap_2()
         .border_b_1()
-        .border_color(rgb(palette::BG_HEADER_BORDER))
-        .child(ico(IconName::Users, Size::Medium).text_color(rgb(palette::TEXT_DIM)))
+        .border_color(rgb(palette::bg_header_border()))
+        .child(ico(IconName::Users, Size::Medium).text_color(rgb(palette::text_dim())))
         .child(
             div()
                 .text_size(px(16.))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(palette::TEXT_PRIMARY))
+                .text_color(rgb(palette::text_primary()))
                 .child("好友"),
         )
-        .child(div().w(px(1.)).h(px(24.)).mx_2().bg(rgb(palette::BG_TOOLBAR_HOVER)))
+        .child(div().w(px(1.)).h(px(24.)).mx_2().bg(rgb(palette::bg_toolbar_hover())))
         .child(
             div()
                 .text_size(px(13.))
-                .text_color(rgb(palette::TEXT_SECONDARY))
+                .text_color(rgb(palette::text_secondary()))
                 .child(format!("{} 位好友 · {} 位在线", app.friends.len(), online.len())),
         );
 
@@ -61,7 +61,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
         .px_6()
         .gap_1()
         .border_b_1()
-        .border_color(rgb(palette::BG_HEADER_BORDER));
+        .border_color(rgb(palette::bg_header_border()));
     for (index, (tab, label, icon)) in TABS.iter().enumerate() {
         let active = app.friend_tab == *tab;
         let value = *tab;
@@ -78,17 +78,17 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
             .rounded(px(4.))
             .items_center()
             .bg(if active {
-                rgb(palette::BG_CHANNEL_HOVER)
+                rgb(palette::bg_channel_hover())
             } else {
-                rgb(palette::BG_CHAT)
+                rgb(palette::bg_chat())
             })
             .text_size(px(13.))
             .text_color(if active {
-                rgb(palette::TEXT_PRIMARY)
+                rgb(palette::text_primary())
             } else {
-                rgb(palette::TEXT_MUTED)
+                rgb(palette::text_muted())
             })
-            .hover(|el| el.bg(rgb(palette::BG_CHANNEL_HOVER)))
+            .hover(|el| el.bg(rgb(palette::bg_channel_hover())))
             .child(ico(*icon, Size::XSmall))
             .child(*label);
         if let Some(count) = badge {
@@ -99,7 +99,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                         .h(px(18.))
                         .px_1()
                         .rounded_full()
-                        .bg(rgb(palette::DANGER))
+                        .bg(rgb(palette::danger()))
                         .text_color(rgb(palette::WHITE))
                         .text_size(px(10.))
                         .font_weight(FontWeight::BOLD)
@@ -181,7 +181,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
         .flex_1()
         .min_w_0()
         .h_full()
-        .bg(rgb(palette::BG_CHAT))
+        .bg(rgb(palette::bg_chat()))
         .child(header)
         .child(tabs)
         .child(content)
@@ -237,7 +237,7 @@ fn request_row(
         .px_4()
         .gap_3()
         .rounded(px(8.))
-        .bg(rgb(palette::BG_SIDEBAR))
+        .bg(rgb(palette::bg_sidebar()))
         .child(avatar(short, color, px(40.), false))
         .child(
             v_flex()
@@ -249,13 +249,13 @@ fn request_row(
                         .truncate()
                         .text_size(px(15.))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(palette::TEXT_PRIMARY))
+                        .text_color(rgb(palette::text_primary()))
                         .child(name.clone()),
                 )
                 .child(
                     div()
                         .text_size(px(12.))
-                        .text_color(rgb(palette::TEXT_DIM))
+                        .text_color(rgb(palette::text_dim()))
                         .child(if incoming {
                             "想添加你为好友"
                         } else {
@@ -274,10 +274,10 @@ fn request_row(
                     .items_center()
                     .justify_center()
                     .rounded(px(4.))
-                    .bg(rgb(palette::BG_CHANNEL_HOVER))
-                    .text_color(rgb(palette::TEXT_SECONDARY))
+                    .bg(rgb(palette::bg_channel_hover()))
+                    .text_color(rgb(palette::text_secondary()))
                     .hover(|el| {
-                        el.bg(rgb(palette::DANGER))
+                        el.bg(rgb(palette::danger()))
                             .text_color(rgb(palette::WHITE))
                     })
                     .child(ico(IconName::X, Size::Small))
@@ -294,10 +294,10 @@ fn request_row(
                     .items_center()
                     .gap_1()
                     .rounded(px(4.))
-                    .bg(rgb(palette::ACCENT))
+                    .bg(rgb(palette::accent()))
                     .text_color(rgb(palette::WHITE))
                     .text_size(px(12.))
-                    .hover(|el| el.bg(rgb(palette::ACCENT_HOVER)))
+                    .hover(|el| el.bg(rgb(palette::accent_hover())))
                     .child(ico(IconName::Check, Size::XSmall))
                     .child("接受")
                     .id(format!("request-accept-{index}"))
@@ -310,7 +310,7 @@ fn request_row(
             h_flex()
                 .gap_1()
                 .text_size(px(12.))
-                .text_color(rgb(palette::TEXT_MUTED))
+                .text_color(rgb(palette::text_muted()))
                 .child(ico(IconName::Clock, Size::XSmall))
                 .child("等待中"),
         );
@@ -336,13 +336,13 @@ fn blocked_section(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                 .px_4()
                 .gap_3()
                 .rounded(px(8.))
-                .bg(rgb(palette::BG_SIDEBAR))
-                .child(avatar(short, palette::TEXT_DIM, px(40.), false))
+                .bg(rgb(palette::bg_sidebar()))
+                .child(avatar(short, palette::text_dim(), px(40.), false))
                 .child(
                     div()
                         .flex_1()
                         .text_size(px(15.))
-                        .text_color(rgb(palette::TEXT_SECONDARY))
+                        .text_color(rgb(palette::text_secondary()))
                         .child(name.clone()),
                 )
                 .child(
@@ -352,10 +352,10 @@ fn blocked_section(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                         .flex()
                         .items_center()
                         .rounded(px(4.))
-                        .bg(rgb(palette::BG_CHANNEL_HOVER))
+                        .bg(rgb(palette::bg_channel_hover()))
                         .text_size(px(12.))
-                        .text_color(rgb(palette::TEXT_SECONDARY))
-                        .hover(|el| el.text_color(rgb(palette::TEXT_PRIMARY)))
+                        .text_color(rgb(palette::text_secondary()))
+                        .hover(|el| el.text_color(rgb(palette::text_primary())))
                         .child("取消屏蔽")
                         .id(format!("blocked-unblock-{index}"))
                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -380,13 +380,13 @@ fn add_friend_section(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                     div()
                         .text_size(px(20.))
                         .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(palette::TEXT_PRIMARY))
+                        .text_color(rgb(palette::text_primary()))
                         .child("添加好友"),
                 )
                 .child(
                     div()
                         .text_size(px(13.))
-                        .text_color(rgb(palette::TEXT_MUTED))
+                        .text_color(rgb(palette::text_muted()))
                         .child("输入对方的用户名和标签来发送好友请求。"),
                 ),
         )
@@ -397,14 +397,14 @@ fn add_friend_section(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                     div()
                         .text_size(px(11.))
                         .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(palette::TEXT_SECONDARY))
+                        .text_color(rgb(palette::text_secondary()))
                         .child("用户名#标签"),
                 )
                 .child(
                     div()
                         .w_full()
                         .rounded(px(6.))
-                        .bg(rgb(palette::BG_COMPOSER))
+                        .bg(rgb(palette::bg_composer()))
                         .child(
                             <Input as Sizable>::with_size(Input::new(&app.add_friend_input), Size::Large)
                                 .w_full(),
@@ -419,11 +419,11 @@ fn add_friend_section(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                         .gap_2()
                         .self_start()
                         .rounded(px(4.))
-                        .bg(rgb(palette::ACCENT))
+                        .bg(rgb(palette::accent()))
                         .text_color(rgb(palette::WHITE))
                         .text_size(px(13.))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .hover(|el| el.bg(rgb(palette::ACCENT_HOVER)))
+                        .hover(|el| el.bg(rgb(palette::accent_hover())))
                         .child(ico(IconName::Send, Size::XSmall))
                         .child("发送好友请求")
                         .id("add-friend-submit")
@@ -443,7 +443,7 @@ fn empty_hint(text: &'static str) -> Div {
         .items_center()
         .justify_center()
         .text_size(px(13.))
-        .text_color(rgb(palette::TEXT_DIM))
+        .text_color(rgb(palette::text_dim()))
         .child(text)
 }
 
@@ -462,7 +462,7 @@ fn friend_row(
         .px_4()
         .gap_3()
         .rounded(px(8.))
-        .hover(|el| el.bg(rgb(palette::BG_MESSAGE_HOVER)))
+        .hover(|el| el.bg(rgb(palette::bg_message_hover())))
         .child(avatar(
             name.chars().next().unwrap_or('?'),
             color,
@@ -480,9 +480,9 @@ fn friend_row(
                         .text_size(px(15.))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(if online {
-                            rgb(palette::TEXT_PRIMARY)
+                            rgb(palette::text_primary())
                         } else {
-                            rgb(palette::TEXT_SECONDARY)
+                            rgb(palette::text_secondary())
                         })
                         .child(name),
                 )
@@ -490,7 +490,7 @@ fn friend_row(
                     div()
                         .truncate()
                         .text_size(px(12.))
-                        .text_color(rgb(palette::TEXT_DIM))
+                        .text_color(rgb(palette::text_dim()))
                         .child(activity),
                 ),
         );
@@ -504,9 +504,9 @@ fn friend_row(
             .items_center()
             .justify_center()
             .rounded(px(4.))
-            .text_color(rgb(palette::TEXT_DIM))
+            .text_color(rgb(palette::text_dim()))
             .hover(|el| {
-                el.bg(rgb(palette::DANGER))
+                el.bg(rgb(palette::danger()))
                     .text_color(rgb(palette::WHITE))
             })
             .child(ico(IconName::Ban, Size::XSmall))

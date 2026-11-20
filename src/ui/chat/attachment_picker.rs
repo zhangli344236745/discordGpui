@@ -31,11 +31,11 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                 .py_2()
                 .rounded(px(6.))
                 .bg(if selected {
-                    rgb(palette::BG_CHANNEL_SELECTED)
+                    rgb(palette::bg_channel_selected())
                 } else {
-                    rgb(palette::BG_SIDEBAR)
+                    rgb(palette::bg_sidebar())
                 })
-                .hover(|el| el.bg(rgb(palette::BG_CHANNEL_HOVER)))
+                .hover(|el| el.bg(rgb(palette::bg_channel_hover())))
                 .child(
                     div()
                         .w(px(28.))
@@ -44,11 +44,11 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                         .items_center()
                         .justify_center()
                         .rounded(px(6.))
-                        .bg(rgb(palette::BG_COMPOSER))
+                        .bg(rgb(palette::bg_composer()))
                         .text_color(if is_image {
-                            rgb(palette::ACCENT)
+                            rgb(palette::accent())
                         } else {
-                            rgb(palette::TEXT_SECONDARY)
+                            rgb(palette::text_secondary())
                         })
                         .child(ico(
                             if is_image {
@@ -68,18 +68,18 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                             div()
                                 .truncate()
                                 .text_size(px(13.))
-                                .text_color(rgb(palette::TEXT_PRIMARY))
+                                .text_color(rgb(palette::text_primary()))
                                 .child(name),
                         )
                         .child(
                             div()
                                 .text_size(px(11.))
-                                .text_color(rgb(palette::TEXT_DIM))
+                                .text_color(rgb(palette::text_dim()))
                                 .child(size),
                         ),
                 )
                 .when(selected, |el| {
-                    el.child(ico(IconName::Check, Size::Small).text_color(rgb(palette::SUCCESS)))
+                    el.child(ico(IconName::Check, Size::Small).text_color(rgb(palette::success())))
                 })
                 .id(format!("attach-pick-{index}"))
                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -96,9 +96,9 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
         .p_2()
         .gap_2()
         .rounded(px(10.))
-        .bg(rgb(palette::BG_SIDEBAR))
+        .bg(rgb(palette::bg_sidebar()))
         .border_1()
-        .border_color(rgb(palette::BORDER_DEFAULT))
+        .border_color(rgb(palette::border_default()))
         .shadow_lg()
         .child(
             v_flex()
@@ -108,24 +108,24 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                     div()
                         .text_size(px(12.))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(palette::TEXT_PRIMARY))
+                        .text_color(rgb(palette::text_primary()))
                         .child("上传文件"),
                 )
                 .child(
                     div()
                         .text_size(px(11.))
-                        .text_color(rgb(palette::TEXT_DIM))
+                        .text_color(rgb(palette::text_dim()))
                         .child("Demo 环境，从下面的模拟文件中选择"),
                 ),
         )
         .child(list)
-        .child(div().h(px(1.)).bg(rgb(palette::BG_DIVIDER)))
+        .child(div().h(px(1.)).bg(rgb(palette::bg_divider())))
         .child(
             h_flex()
                 .px_1()
                 .gap_1()
                 .text_size(px(11.))
-                .text_color(rgb(palette::TEXT_DIM))
+                .text_color(rgb(palette::text_dim()))
                 .child(ico(IconName::Info, Size::XSmall))
                 .child("选择后可继续输入文字，或直接发送附件"),
         )

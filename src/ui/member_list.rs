@@ -24,7 +24,7 @@ fn member_row(
         .px_2()
         .gap_3()
         .rounded(px(4.))
-        .hover(|el| el.bg(rgb(palette::BG_CHANNEL_HOVER)))
+        .hover(|el| el.bg(rgb(palette::bg_channel_hover())))
         .id(member_id)
         .on_click(cx.listener(move |this, _, _, cx| {
             this.toggle_profile(member_name);
@@ -51,7 +51,7 @@ fn member_row(
                         .text_color(if online {
                             rgb(color)
                         } else {
-                            rgb(palette::TEXT_DIM)
+                            rgb(palette::text_dim())
                         })
                         .child(display_name),
                 )
@@ -59,7 +59,7 @@ fn member_row(
                     div()
                         .truncate()
                         .text_size(px(11.))
-                        .text_color(rgb(palette::TEXT_DIM))
+                        .text_color(rgb(palette::text_dim()))
                         .child(if online {
                             "正在使用 GPUI Kit"
                         } else {
@@ -89,11 +89,11 @@ fn group_header(
         .gap_1()
         .items_center()
         .text_color(if collapsed {
-            rgb(palette::TEXT_MUTED)
+            rgb(palette::text_muted())
         } else {
             rgb(group.color)
         })
-        .hover(|el| el.text_color(rgb(palette::TEXT_PRIMARY)))
+        .hover(|el| el.text_color(rgb(palette::text_primary())))
         .id(format!("member-group-{}", group.key))
         .on_click(cx.listener(move |this, _, _, cx| {
             this.toggle_role_group(key.clone());
@@ -124,7 +124,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
         .w(px(240.))
         .h_full()
         .flex_shrink_0()
-        .bg(rgb(palette::BG_SIDEBAR))
+        .bg(rgb(palette::bg_sidebar()))
         .px_2()
         .pt_4()
         .gap_1()

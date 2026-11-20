@@ -15,7 +15,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
         .flex_shrink_0()
         .px_2()
         .gap_1()
-        .bg(rgb(palette::BG_FOOTER))
+        .bg(rgb(palette::bg_footer()))
         .child(
             h_flex()
                 .flex_1()
@@ -24,10 +24,10 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                 .h(px(40.))
                 .px_1()
                 .rounded(px(4.))
-                .hover(|el| el.bg(rgb(palette::BG_TOOLBAR_HOVER)))
+                .hover(|el| el.bg(rgb(palette::bg_toolbar_hover())))
                 .child(avatar_status(
                     'R',
-                    palette::ACCENT,
+                    palette::accent(),
                     px(32.),
                     Some(app.my_status.color()),
                 ))
@@ -40,14 +40,14 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                                 .truncate()
                                 .text_size(px(13.))
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(palette::TEXT_PRIMARY))
+                                .text_color(rgb(palette::text_primary()))
                                 .child("Riven"),
                         )
                         .child(
                             div()
                                 .truncate()
                                 .text_size(px(11.))
-                                .text_color(rgb(palette::TEXT_SECONDARY))
+                                .text_color(rgb(palette::text_secondary()))
                                 .child(app.my_status.label()),
                         ),
                 )
@@ -66,11 +66,11 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                 .justify_center()
                 .rounded(px(4.))
                 .text_color(if app.mic_on {
-                    rgb(palette::TEXT_MESSAGE)
+                    rgb(palette::text_message())
                 } else {
-                    rgb(palette::DANGER)
+                    rgb(palette::danger())
                 })
-                .hover(|el| el.bg(rgb(palette::BG_TOOLBAR_HOVER)))
+                .hover(|el| el.bg(rgb(palette::bg_toolbar_hover())))
                 .child(ico(IconName::Mic, Size::Small))
                 .id("sidebar-toggle-mic")
                 .on_click(cx.listener(|this, _, _, cx| {
@@ -87,11 +87,11 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                 .justify_center()
                 .rounded(px(4.))
                 .text_color(if app.headphones_on {
-                    rgb(palette::TEXT_MESSAGE)
+                    rgb(palette::text_message())
                 } else {
-                    rgb(palette::DANGER)
+                    rgb(palette::danger())
                 })
-                .hover(|el| el.bg(rgb(palette::BG_TOOLBAR_HOVER)))
+                .hover(|el| el.bg(rgb(palette::bg_toolbar_hover())))
                 .child(ico(IconName::Headphones, Size::Small))
                 .id("sidebar-toggle-headphones")
                 .on_click(cx.listener(|this, _, _, cx| {
@@ -107,8 +107,8 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                 .items_center()
                 .justify_center()
                 .rounded(px(4.))
-                .text_color(rgb(palette::TEXT_MESSAGE))
-                .hover(|el| el.bg(rgb(palette::BG_TOOLBAR_HOVER)))
+                .text_color(rgb(palette::text_message()))
+                .hover(|el| el.bg(rgb(palette::bg_toolbar_hover())))
                 .child(ico(IconName::Settings, Size::Small))
                 .id("sidebar-open-settings")
                 .on_click(cx.listener(|this, _, _, cx| {

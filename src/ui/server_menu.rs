@@ -36,9 +36,9 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
         .p_1()
         .gap(px(2.))
         .rounded(px(6.))
-        .bg(rgb(palette::BG_FOOTER))
+        .bg(rgb(palette::bg_footer()))
         .border_1()
-        .border_color(rgb(palette::BORDER_DEFAULT))
+        .border_color(rgb(palette::border_default()))
         .shadow_lg()
         .child(
             v_flex()
@@ -49,21 +49,21 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
                     div()
                         .text_size(px(13.))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(palette::TEXT_PRIMARY))
+                        .text_color(rgb(palette::text_primary()))
                         .truncate()
                         .child(name),
                 )
                 .child(
                     div()
                         .text_size(px(11.))
-                        .text_color(rgb(palette::TEXT_DIM))
+                        .text_color(rgb(palette::text_dim()))
                         .child(format!(
                             "{members} 名成员 · {}",
                             if muted { "已静音" } else { "通知开启" }
                         )),
                 ),
         )
-        .child(div().h(px(1.)).my(px(2.)).bg(rgb(palette::BG_DIVIDER)))
+        .child(div().h(px(1.)).my(px(2.)).bg(rgb(palette::bg_divider())))
         .child(
             menu_item("服务器设置", IconName::Settings, false)
                 .id("server-menu-settings")
@@ -94,7 +94,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
                 .id("server-menu-create-category")
                 .on_click(cx.listener(|this, _, window, cx| this.open_create_category(window, cx))),
         )
-        .child(div().h(px(1.)).my(px(2.)).bg(rgb(palette::BG_DIVIDER)))
+        .child(div().h(px(1.)).my(px(2.)).bg(rgb(palette::bg_divider())))
         .child(
             menu_item("离开服务器", IconName::LogOut, true)
                 .id("server-menu-leave")
@@ -119,9 +119,9 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
 /// 菜单项统一样式；danger 为危险操作（红色）。
 fn menu_item(label: &'static str, icon: IconName, danger: bool) -> Div {
     let color = if danger {
-        palette::DANGER
+        palette::danger()
     } else {
-        palette::TEXT_SECONDARY
+        palette::text_secondary()
     };
     div()
         .h(px(30.))
@@ -133,10 +133,10 @@ fn menu_item(label: &'static str, icon: IconName, danger: bool) -> Div {
         .text_size(px(13.))
         .text_color(rgb(color))
         .hover(move |el| {
-            el.bg(rgb(palette::BG_CHANNEL_HOVER)).text_color(rgb(if danger {
-                palette::DANGER
+            el.bg(rgb(palette::bg_channel_hover())).text_color(rgb(if danger {
+                palette::danger()
             } else {
-                palette::TEXT_PRIMARY
+                palette::text_primary()
             }))
         })
         .child(ico(icon, Size::XSmall))

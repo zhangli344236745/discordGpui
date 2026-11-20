@@ -20,14 +20,14 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
         .py_4()
         .px_2()
         .gap(px(2.))
-        .bg(rgb(palette::BG_SIDEBAR))
+        .bg(rgb(palette::bg_sidebar()))
         .child(
             div()
                 .px_3()
                 .pb_3()
                 .text_size(px(11.))
                 .font_weight(FontWeight::BOLD)
-                .text_color(rgb(palette::TEXT_MUTED))
+                .text_color(rgb(palette::text_muted()))
                 .child("用户设置"),
         );
 
@@ -45,17 +45,17 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                 .gap_2()
                 .rounded(px(4.))
                 .bg(if active {
-                    rgb(palette::BG_CHANNEL_SELECTED)
+                    rgb(palette::bg_channel_selected())
                 } else {
-                    rgb(palette::BG_SIDEBAR)
+                    rgb(palette::bg_sidebar())
                 })
                 .text_size(px(13.))
                 .text_color(if active {
-                    rgb(palette::TEXT_PRIMARY)
+                    rgb(palette::text_primary())
                 } else {
-                    rgb(palette::TEXT_SECONDARY)
+                    rgb(palette::text_secondary())
                 })
-                .hover(|el| el.bg(rgb(palette::BG_CHANNEL_HOVER)))
+                .hover(|el| el.bg(rgb(palette::bg_channel_hover())))
                 .child(ico(*icon, Size::Small))
                 .child(*label)
                 .when(active, |el| {

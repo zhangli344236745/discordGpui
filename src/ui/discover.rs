@@ -18,7 +18,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
         .flex_1()
         .min_w_0()
         .h_full()
-        .bg(rgb(palette::BG_CHAT))
+        .bg(rgb(palette::bg_chat()))
         .child(
             h_flex()
                 .h(px(48.))
@@ -27,17 +27,17 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                 .gap_3()
                 .items_center()
                 .border_b_1()
-                .border_color(rgb(palette::BG_HEADER_BORDER))
+                .border_color(rgb(palette::bg_header_border()))
                 .child(
                     h_flex()
                         .gap_2()
                         .items_center()
-                        .child(ico(IconName::Compass, Size::Medium).text_color(rgb(palette::TEXT_DIM)))
+                        .child(ico(IconName::Compass, Size::Medium).text_color(rgb(palette::text_dim())))
                         .child(
                             div()
                                 .text_size(px(16.))
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(palette::TEXT_PRIMARY))
+                                .text_color(rgb(palette::text_primary()))
                                 .child("探索"),
                         ),
                 )
@@ -49,12 +49,12 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                         .px_2()
                         .h(px(28.))
                         .rounded(px(4.))
-                        .bg(rgb(palette::BG_RAIL))
+                        .bg(rgb(palette::bg_rail()))
                         .child(
                             <Input as Sizable>::with_size(Input::new(&app.discover_search), Size::XSmall)
                                 .flex_1(),
                         )
-                        .child(ico(IconName::Search, Size::XSmall).text_color(rgb(palette::TEXT_DIM))),
+                        .child(ico(IconName::Search, Size::XSmall).text_color(rgb(palette::text_dim()))),
                 )
                 .child(
                     div()
@@ -64,10 +64,10 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                         .items_center()
                         .justify_center()
                         .rounded(px(4.))
-                        .text_color(rgb(palette::TEXT_SECONDARY))
+                        .text_color(rgb(palette::text_secondary()))
                         .hover(|el| {
-                            el.bg(rgb(palette::BG_TOOLBAR_HOVER))
-                                .text_color(rgb(palette::TEXT_PRIMARY))
+                            el.bg(rgb(palette::bg_toolbar_hover()))
+                                .text_color(rgb(palette::text_primary()))
                         })
                         .child(ico(IconName::X, Size::Small))
                         .id("discover-close")
@@ -121,17 +121,17 @@ fn content(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                 .items_center()
                 .rounded_full()
                 .bg(if selected {
-                    rgb(palette::ACCENT)
+                    rgb(palette::accent())
                 } else {
-                    rgb(palette::BG_SIDEBAR)
+                    rgb(palette::bg_sidebar())
                 })
                 .text_size(px(12.))
                 .text_color(if selected {
                     rgb(palette::WHITE)
                 } else {
-                    rgb(palette::TEXT_SECONDARY)
+                    rgb(palette::text_secondary())
                 })
-                .hover(|el| el.bg(rgb(palette::BG_CHANNEL_HOVER)))
+                .hover(|el| el.bg(rgb(palette::bg_channel_hover())))
                 .child(*label)
                 .id(id)
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -156,24 +156,24 @@ fn content(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                         .w(px(56.))
                         .h(px(56.))
                         .rounded_full()
-                        .bg(rgb(palette::BG_WELCOME_ICON))
+                        .bg(rgb(palette::bg_welcome_icon()))
                         .flex()
                         .items_center()
                         .justify_center()
-                        .text_color(rgb(palette::TEXT_PRIMARY))
+                        .text_color(rgb(palette::text_primary()))
                         .child(ico(IconName::Compass, Size::Large)),
                 )
                 .child(
                     div()
                         .text_size(px(15.))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(rgb(palette::TEXT_PRIMARY))
+                        .text_color(rgb(palette::text_primary()))
                         .child("没有找到匹配的服务器"),
                 )
                 .child(
                     div()
                         .text_size(px(12.))
-                        .text_color(rgb(palette::TEXT_MUTED))
+                        .text_color(rgb(palette::text_muted()))
                         .child("换个关键词，或切回「全部」分类看看"),
                 ),
         );
@@ -194,13 +194,13 @@ fn content(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                     div()
                         .text_size(px(24.))
                         .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(palette::TEXT_PRIMARY))
+                        .text_color(rgb(palette::text_primary()))
                         .child("发现服务器"),
                 )
                 .child(
                     div()
                         .text_size(px(13.))
-                        .text_color(rgb(palette::TEXT_MUTED))
+                        .text_color(rgb(palette::text_muted()))
                         .child("挑一个感兴趣的社区加入，加入后会出现在左侧服务器栏。"),
                 ),
         )
@@ -208,7 +208,7 @@ fn content(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
         .child(
             div()
                 .text_size(px(11.))
-                .text_color(rgb(palette::TEXT_DIM))
+                .text_color(rgb(palette::text_dim()))
                 .child(if filtered == app.discover_servers.len() {
                     format!("共 {} 个服务器", filtered)
                 } else {
@@ -233,10 +233,10 @@ fn card(
         .gap_3()
         .items_start()
         .rounded(px(10.))
-        .bg(rgb(palette::BG_SIDEBAR))
+        .bg(rgb(palette::bg_sidebar()))
         .border_1()
-        .border_color(rgb(palette::BG_DIVIDER))
-        .hover(|el| el.border_color(rgb(palette::BORDER_DEFAULT)))
+        .border_color(rgb(palette::bg_divider()))
+        .hover(|el| el.border_color(rgb(palette::border_default())))
         .child(
             div()
                 .w(px(44.))
@@ -268,7 +268,7 @@ fn card(
                                 .truncate()
                                 .text_size(px(14.))
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(palette::TEXT_PRIMARY))
+                                .text_color(rgb(palette::text_primary()))
                                 .child(entry.name.clone()),
                         )
                         .child(
@@ -278,9 +278,9 @@ fn card(
                                 .flex()
                                 .items_center()
                                 .rounded_full()
-                                .bg(rgb(palette::BG_RAIL))
+                                .bg(rgb(palette::bg_rail()))
                                 .text_size(px(10.))
-                                .text_color(rgb(palette::TEXT_MUTED))
+                                .text_color(rgb(palette::text_muted()))
                                 .child(entry.category),
                         ),
                 )
@@ -290,7 +290,7 @@ fn card(
                         .overflow_hidden()
                         .text_size(px(12.))
                         .line_height(px(17.))
-                        .text_color(rgb(palette::TEXT_SECONDARY))
+                        .text_color(rgb(palette::text_secondary()))
                         .child(entry.description.clone()),
                 )
                 .child(
@@ -302,7 +302,7 @@ fn card(
                             h_flex()
                                 .gap_1()
                                 .text_size(px(11.))
-                                .text_color(rgb(palette::TEXT_DIM))
+                                .text_color(rgb(palette::text_dim()))
                                 .child(ico(IconName::Users, Size::XSmall))
                                 .child(format!("{} 人", entry.members)),
                         )
@@ -314,21 +314,21 @@ fn card(
                                 .items_center()
                                 .rounded(px(4.))
                                 .bg(if joined {
-                                    rgb(palette::BG_RAIL)
+                                    rgb(palette::bg_rail())
                                 } else {
-                                    rgb(palette::ACCENT)
+                                    rgb(palette::accent())
                                 })
                                 .text_size(px(12.))
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(if joined {
-                                    rgb(palette::TEXT_SECONDARY)
+                                    rgb(palette::text_secondary())
                                 } else {
                                     rgb(palette::WHITE)
                                 })
                                 .hover(|el| el.bg(rgb(if joined {
-                                    palette::BG_CHANNEL_HOVER
+                                    palette::bg_channel_hover()
                                 } else {
-                                    palette::ACCENT_HOVER
+                                    palette::accent_hover()
                                 })))
                                 .child(ico(
                                     if joined {

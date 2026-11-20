@@ -1,44 +1,81 @@
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{Icon, Sizable, Size};
 
-/// Discord 深色主题色板。组件统一从这里取色，避免散落的魔法数字。
+/// Discord 主题色板。深色是默认值，浅色通过 `palette::set_light(true)` 运行时切换。
+///
+/// 所有颜色都是**函数**（形如 `palette::bg_chat()`）而不是常量：
+/// 主题存在一个原子量里，渲染时读取，因此切换主题只要改这个原子量并触发一次重绘，
+/// 整棵树就会用新色板重建，不需要把主题一路透传进每个视图。
 pub mod palette {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// 当前是否为浅色主题。
+    static LIGHT: AtomicBool = AtomicBool::new(false);
+
+    /// 切换主题；调用方负责随后 `cx.notify()` 让界面按新色板重建。
+    pub fn set_light(light: bool) {
+        LIGHT.store(light, Ordering::Relaxed);
+    }
+
+    pub fn is_light() -> bool {
+        LIGHT.load(Ordering::Relaxed)
+    }
+
+    /// 批量声明形如 `bg_chat() -> u32` 的主题感知 token。
+    macro_rules! tokens {
+        ($($name:ident = $dark:expr => $light:expr),* $(,)?) => {
+            $(
+                #[inline]
+                pub fn $name() -> u32 {
+                    if is_light() { $light } else { $dark }
+                }
+            )*
+        };
+    }
+
+    /// 纯白：只用于「彩色底上的文字/图标」（徽标、按钮图标、开关滑块），不随主题变化。
     pub const WHITE: u32 = 0xffffff;
 
-    pub const ACCENT: u32 = 0x5865f2;
-    pub const ACCENT_HOVER: u32 = 0x3ba55c;
-    pub const SUCCESS: u32 = 0x57f287;
-    pub const DANGER: u32 = 0xf23f43;
-    pub const ONLINE: u32 = 0x23a55a;
+    tokens! {
+        // 品牌色与语义色
+        accent = 0x5865f2 => 0x5865f2,
+        accent_hover = 0x3ba55c => 0x4752c4,
+        success = 0x57f287 => 0x248046,
+        danger = 0xf23f43 => 0xd83c3f,
+        online = 0x23a55a => 0x23a55a,
 
-    pub const BG_RAIL: u32 = 0x1e1f22;
-    pub const BG_SIDEBAR: u32 = 0x2b2d31;
-    pub const BG_CHAT: u32 = 0x313338;
-    pub const BG_FOOTER: u32 = 0x232428;
-    pub const BG_HEADER_BORDER: u32 = 0x26272b;
-    pub const BG_SIDEBAR_BORDER: u32 = 0x1f2023;
-    pub const BG_DIVIDER: u32 = 0x35363c;
-    pub const BG_TOOLBAR_HOVER: u32 = 0x3f4147;
-    pub const BG_CHANNEL_HOVER: u32 = 0x35373c;
-    pub const BG_CHANNEL_SELECTED: u32 = 0x404249;
-    pub const BG_MESSAGE_HOVER: u32 = 0x2e3035;
-    pub const BG_COMPOSER: u32 = 0x383a40;
-    pub const BG_WELCOME_ICON: u32 = 0x41434a;
-    /// 附件图片缩略图的占位底色（Demo 不加载真实图片）。
-    pub const BG_ATTACHMENT_PREVIEW: u32 = 0x27282c;
-    pub const BG_REACTION_MINE: u32 = 0x3c4270;
-    pub const BG_MENTION: u32 = 0x3c4270;
-    pub const BG_EDIT: u32 = 0x2b2d31;
+        // 背景层次（由深到浅：服务器栏 → 侧栏 → 聊天区）
+        bg_rail = 0x1e1f22 => 0xe3e5e8,
+        bg_sidebar = 0x2b2d31 => 0xf2f3f5,
+        bg_chat = 0x313338 => 0xffffff,
+        bg_footer = 0x232428 => 0xe9eaed,
+        bg_header_border = 0x26272b => 0xe3e5e8,
+        bg_sidebar_border = 0x1f2023 => 0xd7d9dc,
+        bg_divider = 0x35363c => 0xe3e5e8,
+        bg_toolbar_hover = 0x3f4147 => 0xdfe1e5,
+        bg_channel_hover = 0x35373c => 0xe3e5e8,
+        bg_channel_selected = 0x404249 => 0xdbdde1,
+        bg_message_hover = 0x2e3035 => 0xf6f7f8,
+        bg_composer = 0x383a40 => 0xebedef,
+        bg_welcome_icon = 0x41434a => 0xd3d6da,
+        // 附件图片缩略图 / 贴纸卡的占位底色（Demo 不加载真实图片）
+        bg_attachment_preview = 0x27282c => 0xe9eaed,
+        bg_reaction_mine = 0x3c4270 => 0xdfe3ff,
+        bg_mention = 0x3c4270 => 0xdfe3ff,
+        bg_edit = 0x2b2d31 => 0xf2f3f5,
 
-    pub const TEXT_LINK: u32 = 0x00a8fc;
-    pub const TEXT_PRIMARY: u32 = 0xf2f3f5;
-    pub const TEXT_SECONDARY: u32 = 0xb5bac1;
-    pub const TEXT_MUTED: u32 = 0x949ba4;
-    pub const TEXT_DIM: u32 = 0x80848e;
-    pub const TEXT_MESSAGE: u32 = 0xdbdee1;
-    pub const TEXT_REACTION_MINE: u32 = 0xc9cdfb;
+        // 文字
+        text_link = 0x00a8fc => 0x006ce7,
+        text_primary = 0xf2f3f5 => 0x060607,
+        text_secondary = 0xb5bac1 => 0x4e5058,
+        text_muted = 0x949ba4 => 0x5c5e66,
+        text_dim = 0x80848e => 0x80848e,
+        text_message = 0xdbdee1 => 0x2e3035,
+        text_reaction_mine = 0xc9cdfb => 0x4752c4,
 
-    pub const BORDER_DEFAULT: u32 = 0x3f4147;
+        // 描边
+        border_default = 0x3f4147 => 0xd7d9dc,
+    }
 }
 
 /// 统一创建指定尺寸的 Lucide 图标。

@@ -18,12 +18,12 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
         .items_center()
         .justify_between()
         .border_b_1()
-        .border_color(rgb(palette::BG_HEADER_BORDER))
+        .border_color(rgb(palette::bg_header_border()))
         .child(
             div()
                 .text_size(px(15.))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(palette::TEXT_PRIMARY))
+                .text_color(rgb(palette::text_primary()))
                 .child(format!("置顶消息 — {}", pinned.len())),
         )
         .child(
@@ -34,10 +34,10 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                 .items_center()
                 .justify_center()
                 .rounded(px(4.))
-                .text_color(rgb(palette::TEXT_SECONDARY))
+                .text_color(rgb(palette::text_secondary()))
                 .hover(|el| {
-                    el.bg(rgb(palette::BG_TOOLBAR_HOVER))
-                        .text_color(rgb(palette::TEXT_PRIMARY))
+                    el.bg(rgb(palette::bg_toolbar_hover()))
+                        .text_color(rgb(palette::text_primary()))
                 })
                 .child(ico(IconName::X, Size::Small))
                 .id("pins-close")
@@ -56,7 +56,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                 .items_center()
                 .justify_center()
                 .gap_3()
-                .text_color(rgb(palette::TEXT_MUTED))
+                .text_color(rgb(palette::text_muted()))
                 .child(ico(IconName::Pin, Size::Large))
                 .child(
                     div()
@@ -72,7 +72,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                 .m_2()
                 .p_3()
                 .rounded(px(6.))
-                .bg(rgb(palette::BG_RAIL))
+                .bg(rgb(palette::bg_rail()))
                 .child(
                     h_flex().gap_2().items_center().child(avatar(
                         message.author.chars().next().unwrap_or('?'),
@@ -92,7 +92,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                             .flex_1()
                             .text_right()
                             .text_size(px(10.))
-                            .text_color(rgb(palette::TEXT_DIM))
+                            .text_color(rgb(palette::text_dim()))
                             .child(message.time),
                     ),
                 )
@@ -101,7 +101,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                         .mt_2()
                         .text_size(px(13.))
                         .line_height(px(19.))
-                        .text_color(rgb(palette::TEXT_MESSAGE))
+                        .text_color(rgb(palette::text_message()))
                         .child(message.text.clone()),
                 )
                 .child(
@@ -115,10 +115,10 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                                 .py_1()
                                 .rounded(px(4.))
                                 .text_size(px(11.))
-                                .text_color(rgb(palette::TEXT_SECONDARY))
+                                .text_color(rgb(palette::text_secondary()))
                                 .hover(|el| {
-                                    el.bg(rgb(palette::BG_CHANNEL_HOVER))
-                                        .text_color(rgb(palette::DANGER))
+                                    el.bg(rgb(palette::bg_channel_hover()))
+                                        .text_color(rgb(palette::danger()))
                                 })
                                 .child("取消置顶")
                                 .id(format!("pins-unpin-{index}"))
@@ -138,9 +138,9 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
         .w(px(340.))
         .flex()
         .flex_col()
-        .bg(rgb(palette::BG_SIDEBAR))
+        .bg(rgb(palette::bg_sidebar()))
         .border_l_1()
-        .border_color(rgb(palette::BORDER_DEFAULT))
+        .border_color(rgb(palette::border_default()))
         .shadow_lg()
         .child(header)
         .child(body)

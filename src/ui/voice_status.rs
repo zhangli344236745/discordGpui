@@ -25,10 +25,10 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
         .flex()
         .items_center()
         .gap_2()
-        .bg(rgb(palette::BG_FOOTER))
+        .bg(rgb(palette::bg_footer()))
         .border_b_1()
-        .border_color(rgb(palette::BG_HEADER_BORDER))
-        .child(ico(IconName::Signal, Size::Small).text_color(rgb(palette::SUCCESS)))
+        .border_color(rgb(palette::bg_header_border()))
+        .child(ico(IconName::Signal, Size::Small).text_color(rgb(palette::success())))
         .child(
             v_flex()
                 .flex_1()
@@ -43,14 +43,14 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                         .truncate()
                         .text_size(px(12.))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(palette::SUCCESS))
+                        .text_color(rgb(palette::success()))
                         .child("语音已连接 · 点此查看房间"),
                 )
                 .child(
                     div()
                         .truncate()
                         .text_size(px(11.))
-                        .text_color(rgb(palette::TEXT_SECONDARY))
+                        .text_color(rgb(palette::text_secondary()))
                         .child(format!("{channel} / {server}")),
                 ),
         )
@@ -62,10 +62,10 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                 .items_center()
                 .justify_center()
                 .rounded(px(4.))
-                .text_color(rgb(palette::TEXT_SECONDARY))
+                .text_color(rgb(palette::text_secondary()))
                 .hover(|el| {
-                    el.bg(rgb(palette::BG_TOOLBAR_HOVER))
-                        .text_color(rgb(palette::DANGER))
+                    el.bg(rgb(palette::bg_toolbar_hover()))
+                        .text_color(rgb(palette::danger()))
                 })
                 .child(ico(IconName::PhoneOff, Size::XSmall))
                 .id("voice-disconnect")

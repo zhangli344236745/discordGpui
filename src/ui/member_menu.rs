@@ -21,15 +21,15 @@ fn menu_item(label: &'static str, icon: IconName, danger: bool) -> Div {
         .rounded(px(4.))
         .text_size(px(13.))
         .text_color(if danger {
-            rgb(palette::DANGER)
+            rgb(palette::danger())
         } else {
-            rgb(palette::TEXT_SECONDARY)
+            rgb(palette::text_secondary())
         })
         .hover(move |el| {
-            el.bg(rgb(palette::BG_CHANNEL_HOVER)).text_color(if danger {
-                rgb(palette::DANGER)
+            el.bg(rgb(palette::bg_channel_hover())).text_color(if danger {
+                rgb(palette::danger())
             } else {
-                rgb(palette::TEXT_PRIMARY)
+                rgb(palette::text_primary())
             })
         })
         .child(ico(icon, Size::XSmall))
@@ -47,7 +47,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
     let short = name.split(" —— ").next().unwrap_or(name);
     let role = app.member_menu_role();
     let member = app.members.iter().find(|item| item.name == name);
-    let color = member.map(|item| item.color).unwrap_or(palette::ACCENT);
+    let color = member.map(|item| item.color).unwrap_or(palette::accent());
     let online = member.map(|item| item.online).unwrap_or(false);
     let blocked = app.member_menu_blocked();
 
@@ -72,14 +72,14 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
                         .truncate()
                         .text_size(px(13.))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(palette::TEXT_PRIMARY))
+                        .text_color(rgb(palette::text_primary()))
                         .child(short),
                 )
                 .child(
                     div()
                         .truncate()
                         .text_size(px(11.))
-                        .text_color(rgb(palette::TEXT_DIM))
+                        .text_color(rgb(palette::text_dim()))
                         .child(match role {
                             Some(role) => role.to_string(),
                             None if online => "在线".to_string(),
@@ -96,12 +96,12 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
         .p_1()
         .gap(px(2.))
         .rounded(px(6.))
-        .bg(rgb(palette::BG_FOOTER))
+        .bg(rgb(palette::bg_footer()))
         .border_1()
-        .border_color(rgb(palette::BORDER_DEFAULT))
+        .border_color(rgb(palette::border_default()))
         .shadow_lg()
         .child(header)
-        .child(div().h(px(1.)).my(px(2.)).bg(rgb(palette::BG_DIVIDER)))
+        .child(div().h(px(1.)).my(px(2.)).bg(rgb(palette::bg_divider())))
         .child(
             menu_item("查看资料卡", IconName::User, false)
                 .id("member-menu-profile")
@@ -122,7 +122,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
                 .id("member-menu-copy")
                 .on_click(cx.listener(|this, _, _, cx| this.member_copy_name(cx))),
         )
-        .child(div().h(px(1.)).my(px(2.)).bg(rgb(palette::BG_DIVIDER)))
+        .child(div().h(px(1.)).my(px(2.)).bg(rgb(palette::bg_divider())))
         .child(
             menu_item(
                 if blocked { "取消屏蔽" } else { "屏蔽成员" },

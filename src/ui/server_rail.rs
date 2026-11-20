@@ -16,7 +16,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
         .items_center()
         .gap_2()
         .py_3()
-        .bg(rgb(palette::BG_RAIL));
+        .bg(rgb(palette::bg_rail()));
 
     let home_active = matches!(app.view_mode, ViewMode::DirectMessage | ViewMode::Friends);
     rail = rail.child(
@@ -33,14 +33,14 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                     .left_0()
                     .top(if home_active { px(4.) } else { px(20.) })
                     .rounded(px(2.))
-                    .bg(rgb(palette::WHITE)),
+                    .bg(rgb(palette::text_primary())),
             )
             .child(
                 div()
                     .w(px(48.))
                     .h(px(48.))
                     .rounded(px(if home_active { 16. } else { 24. }))
-                    .bg(rgb(palette::ACCENT))
+                    .bg(rgb(palette::accent()))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -58,7 +58,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
         div()
             .w(px(32.))
             .h(px(2.))
-            .bg(rgb(palette::BG_DIVIDER))
+            .bg(rgb(palette::bg_divider()))
             .rounded_full(),
     );
 
@@ -82,7 +82,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                         .left_0()
                         .top(if active { px(4.) } else { px(20.) })
                         .rounded(px(2.))
-                        .bg(rgb(palette::WHITE)),
+                        .bg(rgb(palette::text_primary())),
                 )
                 .child(
                     div()
@@ -119,14 +119,14 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                     .w(px(48.))
                     .h(px(48.))
                     .rounded(px(24.))
-                    .bg(rgb(palette::BG_SIDEBAR))
-                    .text_color(rgb(palette::SUCCESS))
+                    .bg(rgb(palette::bg_sidebar()))
+                    .text_color(rgb(palette::success()))
                     .flex()
                     .items_center()
                     .justify_center()
                     .child(ico(IconName::Plus, Size::Medium))
                     .hover(|el| {
-                        el.bg(rgb(palette::ACCENT_HOVER))
+                        el.bg(rgb(palette::accent_hover()))
                             .text_color(rgb(palette::WHITE))
                     })
                     .id("rail-create-server")
@@ -140,21 +140,21 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                     .h(px(48.))
                     .rounded(px(if explore_active { 16. } else { 24. }))
                     .bg(if explore_active {
-                        rgb(palette::ACCENT)
+                        rgb(palette::accent())
                     } else {
-                        rgb(palette::BG_SIDEBAR)
+                        rgb(palette::bg_sidebar())
                     })
                     .text_color(if explore_active {
                         rgb(palette::WHITE)
                     } else {
-                        rgb(palette::SUCCESS)
+                        rgb(palette::success())
                     })
                     .flex()
                     .items_center()
                     .justify_center()
                     .child(ico(IconName::Compass, Size::Medium))
                     .hover(|el| {
-                        el.bg(rgb(palette::ACCENT_HOVER))
+                        el.bg(rgb(palette::accent_hover()))
                             .rounded(px(16.))
                             .text_color(rgb(palette::WHITE))
                     })
@@ -167,7 +167,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                 div()
                     .w(px(32.))
                     .h(px(2.))
-                    .bg(rgb(palette::BG_DIVIDER))
+                    .bg(rgb(palette::bg_divider()))
                     .rounded_full(),
             )
             .child(
@@ -175,14 +175,14 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                     .w(px(48.))
                     .h(px(48.))
                     .rounded(px(24.))
-                    .bg(rgb(palette::BG_SIDEBAR))
-                    .text_color(rgb(palette::SUCCESS))
+                    .bg(rgb(palette::bg_sidebar()))
+                    .text_color(rgb(palette::success()))
                     .flex()
                     .items_center()
                     .justify_center()
                     .child(ico(IconName::Download, Size::Medium))
                     .hover(|el| {
-                        el.bg(rgb(palette::ACCENT_HOVER))
+                        el.bg(rgb(palette::accent_hover()))
                             .text_color(rgb(palette::WHITE))
                     }),
             ),

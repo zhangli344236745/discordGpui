@@ -40,13 +40,13 @@ fn shell(title: &'static str, desc: &'static str) -> Div {
                     div()
                         .text_size(px(20.))
                         .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(palette::TEXT_PRIMARY))
+                        .text_color(rgb(palette::text_primary()))
                         .child(title),
                 )
                 .child(
                     div()
                         .text_size(px(13.))
-                        .text_color(rgb(palette::TEXT_MUTED))
+                        .text_color(rgb(palette::text_muted()))
                         .child(desc),
                 ),
         )
@@ -59,7 +59,7 @@ fn card() -> Div {
         .p(px(16.))
         .gap(px(12.))
         .rounded(px(8.))
-        .bg(rgb(palette::BG_SIDEBAR))
+        .bg(rgb(palette::bg_sidebar()))
 }
 
 fn field_label(text: &'static str) -> Div {
@@ -67,11 +67,11 @@ fn field_label(text: &'static str) -> Div {
         .gap_1()
         .text_size(px(11.))
         .font_weight(FontWeight::BOLD)
-        .text_color(rgb(palette::TEXT_MUTED))
+        .text_color(rgb(palette::text_muted()))
         .child(text)
         .child(
             div()
-                .text_color(rgb(palette::DANGER))
+                .text_color(rgb(palette::danger()))
                 .child("*"),
         )
 }
@@ -79,7 +79,7 @@ fn field_label(text: &'static str) -> Div {
 fn hint(text: &'static str) -> Div {
     div()
         .text_size(px(11.))
-        .text_color(rgb(palette::TEXT_DIM))
+        .text_color(rgb(palette::text_dim()))
         .child(text)
 }
 
@@ -104,11 +104,11 @@ fn overview(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                 .bg(rgb(picked))
                 .border_2()
                 .border_color(if selected {
-                    rgb(palette::TEXT_PRIMARY)
+                    rgb(palette::text_primary())
                 } else {
-                    rgb(palette::BG_SIDEBAR)
+                    rgb(palette::bg_sidebar())
                 })
-                .hover(|el| el.border_color(rgb(palette::TEXT_SECONDARY)))
+                .hover(|el| el.border_color(rgb(palette::text_secondary())))
                 .id(format!("server-color-{index}"))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.set_server_color(picked, cx);
@@ -147,7 +147,7 @@ fn overview(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                                 div()
                                     .text_size(px(14.))
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(rgb(palette::TEXT_PRIMARY))
+                                    .text_color(rgb(palette::text_primary()))
                                     .child("服务器图标"),
                             )
                             .child(hint("徽标取名称首字符，改名后自动更新")),
@@ -166,7 +166,7 @@ fn overview(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                                     .flex_1()
                                     .min_w_0()
                                     .rounded(px(6.))
-                                    .bg(rgb(palette::BG_RAIL))
+                                    .bg(rgb(palette::bg_rail()))
                                     .child(
                                         <Input as Sizable>::with_size(
                                             Input::new(&app.server_name_edit),
@@ -182,11 +182,11 @@ fn overview(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                                     .flex()
                                     .items_center()
                                     .rounded(px(6.))
-                                    .bg(rgb(palette::ACCENT))
+                                    .bg(rgb(palette::accent()))
                                     .text_size(px(13.))
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(rgb(palette::WHITE))
-                                    .hover(|el| el.bg(rgb(palette::ACCENT_HOVER)))
+                                    .hover(|el| el.bg(rgb(palette::accent_hover())))
                                     .child("保存")
                                     .id("server-overview-save")
                                     .on_click(cx.listener(|this, _, _, cx| {
@@ -204,7 +204,7 @@ fn overview(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                         div()
                             .w_full()
                             .rounded(px(6.))
-                            .bg(rgb(palette::BG_RAIL))
+                            .bg(rgb(palette::bg_rail()))
                             .child(
                                 <Input as Sizable>::with_size(
                                     Input::new(&app.server_desc_edit),
@@ -222,7 +222,7 @@ fn overview(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                 div()
                     .text_size(px(13.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(palette::TEXT_PRIMARY))
+                    .text_color(rgb(palette::text_primary()))
                     .child("图标颜色"),
             )
             .child(swatches)
@@ -254,7 +254,7 @@ fn roles(app: &DiscordApp) -> Div {
                 .gap_3()
                 .items_center()
                 .rounded(px(8.))
-                .bg(rgb(palette::BG_SIDEBAR))
+                .bg(rgb(palette::bg_sidebar()))
                 .child(div().w(px(8.)).h(px(8.)).rounded_full().bg(rgb(group.color)))
                 .child(
                     div()
@@ -272,7 +272,7 @@ fn roles(app: &DiscordApp) -> Div {
                         .min_w_0()
                         .truncate()
                         .text_size(px(12.))
-                        .text_color(rgb(palette::TEXT_SECONDARY))
+                        .text_color(rgb(palette::text_secondary()))
                         .child(if names.is_empty() {
                             "暂无成员".to_string()
                         } else {
@@ -285,9 +285,9 @@ fn roles(app: &DiscordApp) -> Div {
                         .px_2()
                         .h(px(20.))
                         .rounded_full()
-                        .bg(rgb(palette::BG_RAIL))
+                        .bg(rgb(palette::bg_rail()))
                         .text_size(px(11.))
-                        .text_color(rgb(palette::TEXT_MUTED))
+                        .text_color(rgb(palette::text_muted()))
                         .child(format!("{} 人", group.member_indices.len())),
                 ),
         );
@@ -313,7 +313,7 @@ fn emoji(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                     .justify_center()
                     .gap_1()
                     .rounded(px(8.))
-                    .bg(rgb(palette::BG_SIDEBAR))
+                    .bg(rgb(palette::bg_sidebar()))
                     .text_size(px(20.))
                     .child(item)
                     .child(
@@ -324,9 +324,9 @@ fn emoji(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                             .items_center()
                             .justify_center()
                             .rounded(px(3.))
-                            .text_color(rgb(palette::TEXT_DIM))
+                            .text_color(rgb(palette::text_dim()))
                             .hover(|el| {
-                                el.bg(rgb(palette::DANGER))
+                                el.bg(rgb(palette::danger()))
                                     .text_color(rgb(palette::WHITE))
                             })
                             .child(ico(IconName::X, Size::XSmall))
@@ -352,12 +352,12 @@ fn emoji(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                     .gap_1()
                     .items_center()
                     .rounded(px(6.))
-                    .bg(rgb(palette::BG_SIDEBAR))
+                    .bg(rgb(palette::bg_sidebar()))
                     .text_size(px(13.))
-                    .text_color(rgb(palette::TEXT_MUTED))
+                    .text_color(rgb(palette::text_muted()))
                     .child(item)
                     .child(ico(IconName::RotateCcw, Size::XSmall))
-                    .hover(|el| el.text_color(rgb(palette::TEXT_PRIMARY)))
+                    .hover(|el| el.text_color(rgb(palette::text_primary())))
                     .id(format!("server-emoji-restore-{item}"))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.restore_server_emoji(item, cx);
@@ -378,7 +378,7 @@ fn emoji(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                             div()
                                 .text_size(px(13.))
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(palette::TEXT_PRIMARY))
+                                .text_color(rgb(palette::text_primary()))
                                 .child("已移除"),
                         )
                         .child(hint("点击表情恢复")),
@@ -411,9 +411,9 @@ fn invites(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                                 .px_3()
                                 .items_center()
                                 .rounded(px(6.))
-                                .bg(rgb(palette::BG_RAIL))
+                                .bg(rgb(palette::bg_rail()))
                                 .text_size(px(13.))
-                                .text_color(rgb(palette::TEXT_SECONDARY))
+                                .text_color(rgb(palette::text_secondary()))
                                 .child(format!("discord.gg/{code}")),
                         )
                         .child(
@@ -424,17 +424,17 @@ fn invites(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                                 .items_center()
                                 .rounded(px(6.))
                                 .bg(if copied {
-                                    rgb(palette::BG_RAIL)
+                                    rgb(palette::bg_rail())
                                 } else {
-                                    rgb(palette::ACCENT)
+                                    rgb(palette::accent())
                                 })
                                 .text_size(px(12.))
                                 .text_color(if copied {
-                                    rgb(palette::SUCCESS)
+                                    rgb(palette::success())
                                 } else {
                                     rgb(palette::WHITE)
                                 })
-                                .hover(|el| el.bg(rgb(palette::ACCENT_HOVER)))
+                                .hover(|el| el.bg(rgb(palette::accent_hover())))
                                 .child(ico(IconName::Copy, Size::XSmall))
                                 .child(if copied { "已复制" } else { "复制链接" })
                                 .id("server-invite-copy")
@@ -451,7 +451,7 @@ fn invites(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                     div()
                         .text_size(px(13.))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(palette::TEXT_PRIMARY))
+                        .text_color(rgb(palette::text_primary()))
                         .child("其他邀请方式"),
                 )
                 .child(
@@ -461,12 +461,12 @@ fn invites(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                         .gap_2()
                         .items_center()
                         .rounded(px(6.))
-                        .bg(rgb(palette::BG_RAIL))
+                        .bg(rgb(palette::bg_rail()))
                         .text_size(px(12.))
-                        .text_color(rgb(palette::TEXT_SECONDARY))
+                        .text_color(rgb(palette::text_secondary()))
                         .hover(|el| {
-                            el.bg(rgb(palette::BG_CHANNEL_HOVER))
-                                .text_color(rgb(palette::TEXT_PRIMARY))
+                            el.bg(rgb(palette::bg_channel_hover()))
+                                .text_color(rgb(palette::text_primary()))
                         })
                         .child(ico(IconName::UserPlus, Size::XSmall))
                         .child("打开邀请弹层")

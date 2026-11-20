@@ -5,7 +5,7 @@ use super::theme::palette;
 
 /// 圆形头像，可选在线状态小圆点（默认绿色）。
 pub fn avatar(letter: char, color: u32, size: Pixels, online: bool) -> Div {
-    avatar_status(letter, color, size, if online { Some(palette::ONLINE) } else { None })
+    avatar_status(letter, color, size, if online { Some(palette::online()) } else { None })
 }
 
 /// 圆形头像，状态点颜色可自定义（用于在线/闲置/勿扰/隐身）。
@@ -34,7 +34,7 @@ pub fn avatar_status(letter: char, color: u32, size: Pixels, status_color: Optio
                     .w(px(12.))
                     .h(px(12.))
                     .rounded_full()
-                    .bg(rgb(status_color.unwrap_or(palette::ONLINE))),
+                    .bg(rgb(status_color.unwrap_or(palette::online()))),
             )
         })
 }
@@ -46,7 +46,7 @@ pub fn unread_badge(count: usize) -> Div {
         .h(px(16.))
         .px_1()
         .rounded_full()
-        .bg(rgb(palette::DANGER))
+        .bg(rgb(palette::danger()))
         .text_color(rgb(palette::WHITE))
         .text_size(px(10.))
         .font_weight(FontWeight::BOLD)

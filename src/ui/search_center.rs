@@ -28,20 +28,20 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
         .gap_2()
         .items_center()
         .border_b_1()
-        .border_color(rgb(palette::BG_HEADER_BORDER))
-        .child(ico(IconName::Search, Size::Medium).text_color(rgb(palette::TEXT_DIM)))
+        .border_color(rgb(palette::bg_header_border()))
+        .child(ico(IconName::Search, Size::Medium).text_color(rgb(palette::text_dim())))
         .child(
             div()
                 .text_size(px(16.))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(palette::TEXT_PRIMARY))
+                .text_color(rgb(palette::text_primary()))
                 .child("搜索"),
         )
         .child(
             div()
                 .flex_1()
                 .text_size(px(11.5))
-                .text_color(rgb(palette::TEXT_DIM))
+                .text_color(rgb(palette::text_dim()))
                 .child("跨频道与私信查找历史消息"),
         )
         .child(
@@ -52,10 +52,10 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                 .items_center()
                 .justify_center()
                 .rounded(px(4.))
-                .text_color(rgb(palette::TEXT_SECONDARY))
+                .text_color(rgb(palette::text_secondary()))
                 .hover(|el| {
-                    el.bg(rgb(palette::BG_TOOLBAR_HOVER))
-                        .text_color(rgb(palette::TEXT_PRIMARY))
+                    el.bg(rgb(palette::bg_toolbar_hover()))
+                        .text_color(rgb(palette::text_primary()))
                 })
                 .child(ico(IconName::X, Size::Small))
                 .id("search-center-close")
@@ -75,16 +75,16 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                 .rounded_full()
                 .text_size(px(12.))
                 .bg(if active {
-                    rgb(palette::ACCENT)
+                    rgb(palette::accent())
                 } else {
-                    rgb(palette::BG_SIDEBAR)
+                    rgb(palette::bg_sidebar())
                 })
                 .text_color(if active {
                     rgb(palette::WHITE)
                 } else {
-                    rgb(palette::TEXT_SECONDARY)
+                    rgb(palette::text_secondary())
                 })
-                .hover(|el| el.bg(rgb(palette::BG_TOOLBAR_HOVER)))
+                .hover(|el| el.bg(rgb(palette::bg_toolbar_hover())))
                 .child(label)
                 .id(format!("search-scope-{label}"))
                 .on_click(cx.listener(move |this, _, _, cx| this.set_search_scope(scope, cx))),
@@ -97,16 +97,16 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
         .py_3()
         .gap_3()
         .border_b_1()
-        .border_color(rgb(palette::BG_HEADER_BORDER))
+        .border_color(rgb(palette::bg_header_border()))
         .child(
             h_flex()
                 .h(px(40.))
                 .px_3()
                 .gap_2()
                 .rounded(px(8.))
-                .bg(rgb(palette::BG_COMPOSER))
+                .bg(rgb(palette::bg_composer()))
                 .items_center()
-                .child(ico(IconName::Search, Size::Small).text_color(rgb(palette::TEXT_DIM)))
+                .child(ico(IconName::Search, Size::Small).text_color(rgb(palette::text_dim())))
                 .child(
                     <Input as Sizable>::with_size(Input::new(&app.search_center_input), Size::Large)
                         .flex_1(),
@@ -115,7 +115,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                     el.child(
                         div()
                             .text_size(px(11.))
-                            .text_color(rgb(palette::TEXT_DIM))
+                            .text_color(rgb(palette::text_dim()))
                             .child(format!("{} 条结果", app.search_results.len())),
                     )
                 }),
@@ -141,7 +141,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                         .w(px(56.))
                         .h(px(56.))
                         .rounded_full()
-                        .bg(rgb(palette::BG_WELCOME_ICON))
+                        .bg(rgb(palette::bg_welcome_icon()))
                         .flex()
                         .items_center()
                         .justify_center()
@@ -151,13 +151,13 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                     div()
                         .text_size(px(15.))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(palette::TEXT_PRIMARY))
+                        .text_color(rgb(palette::text_primary()))
                         .child("输入关键词开始搜索"),
                 )
                 .child(
                     div()
                         .text_size(px(12.5))
-                        .text_color(rgb(palette::TEXT_MUTED))
+                        .text_color(rgb(palette::text_muted()))
                         .child("会同时匹配消息正文与发送者昵称"),
                 ),
         );
@@ -172,13 +172,13 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                     div()
                         .text_size(px(14.))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(palette::TEXT_PRIMARY))
+                        .text_color(rgb(palette::text_primary()))
                         .child(format!("没有找到匹配 “{}” 的消息", app.search_center_query)),
                 )
                 .child(
                     div()
                         .text_size(px(12.))
-                        .text_color(rgb(palette::TEXT_DIM))
+                        .text_color(rgb(palette::text_dim()))
                         .child("换个关键词，或把范围切到「全部」再试一次"),
                 ),
         );
@@ -197,7 +197,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                     .gap_3()
                     .items_start()
                     .rounded(px(6.))
-                    .hover(|el| el.bg(rgb(palette::BG_MESSAGE_HOVER)))
+                    .hover(|el| el.bg(rgb(palette::bg_message_hover())))
                     .child(avatar(letter, hit.color.into(), px(32.), false))
                     .child(
                         v_flex()
@@ -212,13 +212,13 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                                         div()
                                             .text_size(px(13.))
                                             .font_weight(FontWeight::SEMIBOLD)
-                                            .text_color(rgb(palette::TEXT_PRIMARY))
+                                            .text_color(rgb(palette::text_primary()))
                                             .child(hit.author),
                                     )
                                     .child(
                                         div()
                                             .text_size(px(11.))
-                                            .text_color(rgb(palette::TEXT_DIM))
+                                            .text_color(rgb(palette::text_dim()))
                                             .child(hit.time),
                                     )
                                     .child(
@@ -226,12 +226,12 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                                             .px_1p5()
                                             .rounded(px(3.))
                                             .bg(if is_dm {
-                                                rgb(palette::BG_EDIT)
+                                                rgb(palette::bg_edit())
                                             } else {
-                                                rgb(palette::BG_CHANNEL_HOVER)
+                                                rgb(palette::bg_channel_hover())
                                             })
                                             .text_size(px(10.5))
-                                            .text_color(rgb(palette::TEXT_MUTED))
+                                            .text_color(rgb(palette::text_muted()))
                                             .child(scope_label),
                                     ),
                             )
@@ -239,14 +239,14 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                                 div()
                                     .text_size(px(13.))
                                     .line_height(px(19.))
-                                    .text_color(rgb(palette::TEXT_MESSAGE))
+                                    .text_color(rgb(palette::text_message()))
                                     .child(highlight(&hit.text, &query)),
                             ),
                     )
                     .child(
                         div()
                             .text_size(px(10.5))
-                            .text_color(rgb(palette::TEXT_DIM))
+                            .text_color(rgb(palette::text_dim()))
                             .child("跳转"),
                     )
                     .id(format!("search-hit-{index}"))
@@ -261,7 +261,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
         .flex_1()
         .min_w_0()
         .h_full()
-        .bg(rgb(palette::BG_CHAT))
+        .bg(rgb(palette::bg_chat()))
         .child(header)
         .child(search_bar)
         .child(body)
@@ -293,8 +293,8 @@ fn highlight(text: &str, query: &str) -> Div {
             div()
                 .px_1()
                 .rounded(px(3.))
-                .bg(rgb(palette::BG_MENTION))
-                .text_color(rgb(palette::TEXT_LINK))
+                .bg(rgb(palette::bg_mention()))
+                .text_color(rgb(palette::text_link()))
                 .child(text[start..end].to_string()),
         );
         cursor = end;

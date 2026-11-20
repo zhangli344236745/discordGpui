@@ -28,11 +28,11 @@ fn conversation_row(
         .gap_2()
         .rounded(px(4.))
         .bg(if selected {
-            rgb(palette::BG_CHANNEL_SELECTED)
+            rgb(palette::bg_channel_selected())
         } else {
-            rgb(palette::BG_SIDEBAR)
+            rgb(palette::bg_sidebar())
         })
-        .hover(|el| el.bg(rgb(palette::BG_CHANNEL_HOVER)))
+        .hover(|el| el.bg(rgb(palette::bg_channel_hover())))
         .child(avatar(friend.chars().next().unwrap_or('?'), color, px(32.), online))
         .child(
             v_flex()
@@ -49,9 +49,9 @@ fn conversation_row(
                             FontWeight::MEDIUM
                         })
                         .text_color(if unread > 0 {
-                            rgb(palette::TEXT_PRIMARY)
+                            rgb(palette::text_primary())
                         } else {
-                            rgb(palette::TEXT_SECONDARY)
+                            rgb(palette::text_secondary())
                         })
                         .child(friend),
                 )
@@ -59,7 +59,7 @@ fn conversation_row(
                     div()
                         .truncate()
                         .text_size(px(11.))
-                        .text_color(rgb(palette::TEXT_DIM))
+                        .text_color(rgb(palette::text_dim()))
                         .child(preview),
                 ),
         )
@@ -78,7 +78,7 @@ fn group_label(text: impl Into<SharedString>) -> Div {
         .pb_1()
         .text_size(px(11.))
         .font_weight(FontWeight::BOLD)
-        .text_color(rgb(palette::TEXT_MUTED))
+        .text_color(rgb(palette::text_muted()))
         .child(text.into())
 }
 
@@ -96,7 +96,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
         .px_2()
         .h(px(26.))
         .rounded(px(4.))
-        .bg(rgb(palette::BG_RAIL))
+        .bg(rgb(palette::bg_rail()))
         .child(ico(IconName::Search, Size::XSmall))
         .child(
             <Input as Sizable>::with_size(Input::new(&app.dm_search), Size::XSmall).flex_1(),
@@ -110,10 +110,10 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                 .items_center()
                 .justify_center()
                 .rounded(px(3.))
-                .text_color(rgb(palette::TEXT_DIM))
+                .text_color(rgb(palette::text_dim()))
                 .hover(|el| {
-                    el.bg(rgb(palette::BG_CHANNEL_HOVER))
-                        .text_color(rgb(palette::TEXT_PRIMARY))
+                    el.bg(rgb(palette::bg_channel_hover()))
+                        .text_color(rgb(palette::text_primary()))
                 })
                 .child(ico(IconName::X, Size::XSmall))
                 .id("dm-search-clear")
@@ -130,7 +130,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
         .px_4()
         .gap_2()
         .border_b_1()
-        .border_color(rgb(palette::BG_SIDEBAR_BORDER))
+        .border_color(rgb(palette::bg_sidebar_border()))
         .child(search_row);
 
     let mut list = v_flex()
@@ -191,7 +191,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                     .px_2()
                     .gap_2()
                     .rounded(px(4.))
-                    .hover(|el| el.bg(rgb(palette::BG_CHANNEL_HOVER)))
+                    .hover(|el| el.bg(rgb(palette::bg_channel_hover())))
                     .child(avatar(
                         name.chars().next().unwrap_or('?'),
                         color,
@@ -208,14 +208,14 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                                     .truncate()
                                     .text_size(px(14.))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_color(rgb(palette::TEXT_PRIMARY))
+                                    .text_color(rgb(palette::text_primary()))
                                     .child(name),
                             )
                             .child(
                                 div()
                                     .truncate()
                                     .text_size(px(11.))
-                                    .text_color(rgb(palette::TEXT_DIM))
+                                    .text_color(rgb(palette::text_dim()))
                                     .child("点击发起新对话"),
                             ),
                     )
@@ -243,18 +243,18 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                     .gap_2()
                     .items_center()
                     .justify_center()
-                    .child(ico(IconName::Search, Size::Large).text_color(rgb(palette::TEXT_DIM)))
+                    .child(ico(IconName::Search, Size::Large).text_color(rgb(palette::text_dim())))
                     .child(
                         div()
                             .text_size(px(13.))
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(rgb(palette::TEXT_SECONDARY))
+                            .text_color(rgb(palette::text_secondary()))
                             .child("没有找到相关会话"),
                     )
                     .child(
                         div()
                             .text_size(px(11.))
-                            .text_color(rgb(palette::TEXT_DIM))
+                            .text_color(rgb(palette::text_dim()))
                             .child("试试其他名字，或到好友页添加好友"),
                     ),
             );
@@ -269,18 +269,18 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
             .gap_3()
             .rounded(px(4.))
             .bg(if friends_active {
-                rgb(palette::BG_CHANNEL_SELECTED)
+                rgb(palette::bg_channel_selected())
             } else {
-                rgb(palette::BG_SIDEBAR)
+                rgb(palette::bg_sidebar())
             })
             .text_color(if friends_active {
-                rgb(palette::TEXT_PRIMARY)
+                rgb(palette::text_primary())
             } else {
-                rgb(palette::TEXT_SECONDARY)
+                rgb(palette::text_secondary())
             })
             .hover(|el| {
-                el.bg(rgb(palette::BG_CHANNEL_HOVER))
-                    .text_color(rgb(palette::TEXT_MESSAGE))
+                el.bg(rgb(palette::bg_channel_hover()))
+                    .text_color(rgb(palette::text_message()))
             })
             .child(ico(IconName::Users, Size::Small))
             .child(
@@ -317,7 +317,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
         .w(px(240.))
         .h_full()
         .flex_shrink_0()
-        .bg(rgb(palette::BG_SIDEBAR))
+        .bg(rgb(palette::bg_sidebar()))
         .child(header)
         .child(list)
         .child(user_footer::render(app, cx))

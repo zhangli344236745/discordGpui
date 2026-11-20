@@ -24,13 +24,13 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
         .px_4()
         .gap_2()
         .border_b_1()
-        .border_color(rgb(palette::BG_HEADER_BORDER))
-        .child(ico(title_icon, Size::Medium).text_color(rgb(palette::TEXT_DIM)))
+        .border_color(rgb(palette::bg_header_border()))
+        .child(ico(title_icon, Size::Medium).text_color(rgb(palette::text_dim())))
         .child(
             div()
                 .text_size(px(16.))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(palette::TEXT_PRIMARY))
+                .text_color(rgb(palette::text_primary()))
                 .child(app.session_title()),
         )
         .when(is_dm, |el| {
@@ -39,16 +39,16 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                     .ml_1()
                     .gap_1()
                     .text_size(px(11.))
-                    .text_color(rgb(palette::TEXT_MUTED))
+                    .text_color(rgb(palette::text_muted()))
                     .child(
                         div()
                             .w(px(7.))
                             .h(px(7.))
                             .rounded_full()
                             .bg(rgb(if app.active_dm_online() {
-                                palette::ONLINE
+                                palette::online()
                             } else {
-                                palette::TEXT_DIM
+                                palette::text_dim()
                             })),
                     )
                     .child(if app.active_dm_online() {
@@ -63,20 +63,20 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                 .w(px(1.))
                 .h(px(24.))
                 .mx_2()
-                .bg(rgb(palette::BG_TOOLBAR_HOVER)),
+                .bg(rgb(palette::bg_toolbar_hover())),
         )
         .child(
             div()
                 .flex_1()
                 .truncate()
                 .text_size(px(13.))
-                .text_color(rgb(palette::TEXT_SECONDARY))
+                .text_color(rgb(palette::text_secondary()))
                 .child(app.active_topic()),
         )
         .child(
             h_flex()
                 .gap_4()
-                .text_color(rgb(palette::TEXT_SECONDARY))
+                .text_color(rgb(palette::text_secondary()))
                 .child(
                     // 频道设置入口：与频道右键菜单同一个浮层。
                     div()
@@ -87,11 +87,11 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                         .justify_center()
                         .rounded(px(4.))
                         .text_color(if app.channel_menu.is_some() {
-                            rgb(palette::TEXT_PRIMARY)
+                            rgb(palette::text_primary())
                         } else {
-                            rgb(palette::TEXT_SECONDARY)
+                            rgb(palette::text_secondary())
                         })
-                        .hover(|el| el.bg(rgb(palette::BG_TOOLBAR_HOVER)))
+                        .hover(|el| el.bg(rgb(palette::bg_toolbar_hover())))
                         .child(ico(IconName::Bell, Size::Small))
                         .id("chat-channel-menu")
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -111,11 +111,11 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                         .justify_center()
                         .rounded(px(4.))
                         .text_color(if app.show_pins {
-                            rgb(palette::TEXT_PRIMARY)
+                            rgb(palette::text_primary())
                         } else {
-                            rgb(palette::TEXT_SECONDARY)
+                            rgb(palette::text_secondary())
                         })
-                        .hover(|el| el.bg(rgb(palette::BG_TOOLBAR_HOVER)))
+                        .hover(|el| el.bg(rgb(palette::bg_toolbar_hover())))
                         .child(ico(IconName::Pin, Size::Small))
                         .id("chat-toggle-pins")
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -129,7 +129,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                         .px_2()
                         .h(px(26.))
                         .rounded(px(4.))
-                        .bg(rgb(palette::BG_RAIL))
+                        .bg(rgb(palette::bg_rail()))
                         .child(
                             <Input as Sizable>::with_size(Input::new(&app.search), Size::XSmall)
                                 .w(px(130.)),
@@ -144,13 +144,13 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                                 .justify_center()
                                 .rounded(px(3.))
                                 .text_color(if app.show_search_center {
-                                    rgb(palette::TEXT_PRIMARY)
+                                    rgb(palette::text_primary())
                                 } else {
-                                    rgb(palette::TEXT_SECONDARY)
+                                    rgb(palette::text_secondary())
                                 })
                                 .hover(|el| {
-                                    el.bg(rgb(palette::BG_TOOLBAR_HOVER))
-                                        .text_color(rgb(palette::TEXT_PRIMARY))
+                                    el.bg(rgb(palette::bg_toolbar_hover()))
+                                        .text_color(rgb(palette::text_primary()))
                                 })
                                 .child(ico(IconName::Search, Size::XSmall))
                                 .id("chat-open-search-center")
@@ -169,11 +169,11 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                         .justify_center()
                         .rounded(px(4.))
                         .text_color(if app.show_inbox {
-                            rgb(palette::TEXT_PRIMARY)
+                            rgb(palette::text_primary())
                         } else {
-                            rgb(palette::TEXT_SECONDARY)
+                            rgb(palette::text_secondary())
                         })
-                        .hover(|el| el.bg(rgb(palette::BG_TOOLBAR_HOVER)))
+                        .hover(|el| el.bg(rgb(palette::bg_toolbar_hover())))
                         .child(ico(IconName::Inbox, Size::Small))
                         .when(app.unread_notification_count() > 0, |el| {
                             el.child(
@@ -185,7 +185,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                                     .h(px(14.))
                                     .px_1()
                                     .rounded_full()
-                                    .bg(rgb(palette::DANGER))
+                                    .bg(rgb(palette::danger()))
                                     .text_color(rgb(palette::WHITE))
                                     .text_size(px(9.))
                                     .font_weight(FontWeight::BOLD)
@@ -213,11 +213,11 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                     .justify_center()
                     .rounded(px(4.))
                     .text_color(if app.show_members {
-                        rgb(palette::TEXT_PRIMARY)
+                        rgb(palette::text_primary())
                     } else {
-                        rgb(palette::TEXT_DIM)
+                        rgb(palette::text_dim())
                     })
-                    .hover(|el| el.bg(rgb(palette::BG_TOOLBAR_HOVER)))
+                    .hover(|el| el.bg(rgb(palette::bg_toolbar_hover())))
                     .child(ico(IconName::Users, Size::Small))
                     .id("chat-toggle-members")
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -235,11 +235,11 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                 .justify_center()
                 .rounded(px(4.))
                 .text_color(if app.notifications_on {
-                    rgb(palette::TEXT_MESSAGE)
+                    rgb(palette::text_message())
                 } else {
-                    rgb(palette::DANGER)
+                    rgb(palette::danger())
                 })
-                .hover(|el| el.bg(rgb(palette::BG_TOOLBAR_HOVER)))
+                .hover(|el| el.bg(rgb(palette::bg_toolbar_hover())))
                 .child(ico(IconName::BellDot, Size::Small))
                 .id("chat-toggle-notifications")
                 .on_click(cx.listener(|this, _, _, cx| {

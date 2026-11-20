@@ -92,9 +92,9 @@ where
                 .gap_4()
                 .p_5()
                 .rounded(px(10.))
-                .bg(rgb(palette::BG_CHAT))
+                .bg(rgb(palette::bg_chat()))
                 .border_1()
-                .border_color(rgb(palette::BORDER_DEFAULT))
+                .border_color(rgb(palette::border_default()))
                 .shadow_lg()
                 .id(format!("{id_prefix}-card"))
                 .child(
@@ -113,14 +113,14 @@ where
                                         .items_center()
                                         .justify_center()
                                         .rounded(px(8.))
-                                        .bg(rgb(palette::BG_CHANNEL_HOVER))
+                                        .bg(rgb(palette::bg_channel_hover()))
                                         .child(ico(icon, Size::Small)),
                                 )
                                 .child(
                                     div()
                                         .text_size(px(18.))
                                         .font_weight(FontWeight::BOLD)
-                                        .text_color(rgb(palette::TEXT_PRIMARY))
+                                        .text_color(rgb(palette::text_primary()))
                                         .child(title),
                                 ),
                         )
@@ -132,8 +132,8 @@ where
                                 .items_center()
                                 .justify_center()
                                 .rounded(px(4.))
-                                .text_color(rgb(palette::TEXT_MUTED))
-                                .hover(|el| el.bg(rgb(palette::BG_TOOLBAR_HOVER)))
+                                .text_color(rgb(palette::text_muted()))
+                                .hover(|el| el.bg(rgb(palette::bg_toolbar_hover())))
                                 .child(ico(IconName::X, Size::Small))
                                 .id(format!("{id_prefix}-close"))
                                 .on_click(cx.listener({
@@ -148,7 +148,7 @@ where
                 .child(
                     div()
                         .text_size(px(13.))
-                        .text_color(rgb(palette::TEXT_MUTED))
+                        .text_color(rgb(palette::text_muted()))
                         .child(subtitle),
                 )
                 .child(
@@ -158,14 +158,14 @@ where
                             div()
                                 .text_size(px(11.))
                                 .font_weight(FontWeight::BOLD)
-                                .text_color(rgb(palette::TEXT_SECONDARY))
+                                .text_color(rgb(palette::text_secondary()))
                                 .child(input_placeholder),
                         )
                         .child(
                             div()
                                 .w_full()
                                 .rounded(px(6.))
-                                .bg(rgb(palette::BG_COMPOSER))
+                                .bg(rgb(palette::bg_composer()))
                                 .child(input),
                         ),
                 )
@@ -182,8 +182,8 @@ where
                                 .items_center()
                                 .rounded(px(4.))
                                 .text_size(px(13.))
-                                .text_color(rgb(palette::TEXT_SECONDARY))
-                                .hover(|el| el.text_color(rgb(palette::TEXT_PRIMARY)))
+                                .text_color(rgb(palette::text_secondary()))
+                                .hover(|el| el.text_color(rgb(palette::text_primary())))
                                 .child("取消")
                                 .id(format!("{id_prefix}-cancel"))
                                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -198,11 +198,11 @@ where
                                 .flex()
                                 .items_center()
                                 .rounded(px(4.))
-                                .bg(rgb(palette::ACCENT))
+                                .bg(rgb(palette::accent()))
                                 .text_color(rgb(palette::WHITE))
                                 .text_size(px(13.))
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .hover(|el| el.bg(rgb(palette::ACCENT_HOVER)))
+                                .hover(|el| el.bg(rgb(palette::accent_hover())))
                                 .child(submit_label)
                                 .id(format!("{id_prefix}-submit"))
                                 .on_click(cx.listener(move |this, _, window, cx| {

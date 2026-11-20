@@ -28,7 +28,7 @@ pub fn render(_app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoEleme
                     .justify_center()
                     .rounded(px(6.))
                     .text_size(px(20.))
-                    .hover(|el| el.bg(rgb(palette::BG_CHANNEL_HOVER)))
+                    .hover(|el| el.bg(rgb(palette::bg_channel_hover())))
                     .id(format!("emoji-{picked}"))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.pick_emoji(picked, window, cx);
@@ -45,9 +45,9 @@ pub fn render(_app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoEleme
         .w(px(320.))
         .p_2()
         .rounded(px(10.))
-        .bg(rgb(palette::BG_SIDEBAR))
+        .bg(rgb(palette::bg_sidebar()))
         .border_1()
-        .border_color(rgb(palette::BORDER_DEFAULT))
+        .border_color(rgb(palette::border_default()))
         .shadow_lg()
         .child(grid)
 }

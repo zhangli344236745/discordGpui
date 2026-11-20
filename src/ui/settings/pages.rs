@@ -40,13 +40,13 @@ fn shell(title: &'static str, desc: &'static str) -> Div {
                     div()
                         .text_size(px(20.))
                         .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(palette::TEXT_PRIMARY))
+                        .text_color(rgb(palette::text_primary()))
                         .child(title),
                 )
                 .child(
                     div()
                         .text_size(px(13.))
-                        .text_color(rgb(palette::TEXT_MUTED))
+                        .text_color(rgb(palette::text_muted()))
                         .child(desc),
                 ),
         )
@@ -57,7 +57,7 @@ fn group(title: &'static str) -> Div {
         .pt(px(8.))
         .text_size(px(12.))
         .font_weight(FontWeight::BOLD)
-        .text_color(rgb(palette::TEXT_MUTED))
+        .text_color(rgb(palette::text_muted()))
         .child(title)
 }
 
@@ -69,17 +69,17 @@ fn info_row(label: &'static str, value: &'static str) -> Div {
         .px(px(16.))
         .py(px(12.))
         .rounded(px(8.))
-        .bg(rgb(palette::BG_SIDEBAR))
+        .bg(rgb(palette::bg_sidebar()))
         .child(
             div()
                 .text_size(px(14.))
-                .text_color(rgb(palette::TEXT_SECONDARY))
+                .text_color(rgb(palette::text_secondary()))
                 .child(label),
         )
         .child(
             div()
                 .text_size(px(14.))
-                .text_color(rgb(palette::TEXT_PRIMARY))
+                .text_color(rgb(palette::text_primary()))
                 .child(value),
         )
 }
@@ -91,9 +91,9 @@ fn note_row(text: &'static str) -> Div {
         .px(px(16.))
         .py(px(12.))
         .rounded(px(8.))
-        .bg(rgb(palette::BG_SIDEBAR))
+        .bg(rgb(palette::bg_sidebar()))
         .text_size(px(12.))
-        .text_color(rgb(palette::TEXT_MUTED))
+        .text_color(rgb(palette::text_muted()))
         .child(ico(IconName::Info, Size::XSmall))
         .child(text)
 }
@@ -117,9 +117,9 @@ fn switch_row(
         .px(px(2.))
         .rounded_full()
         .bg(if on {
-            rgb(palette::ACCENT)
+            rgb(palette::accent())
         } else {
-            rgb(palette::BG_TOOLBAR_HOVER)
+            rgb(palette::bg_toolbar_hover())
         });
     if on {
         track = track.justify_end();
@@ -137,7 +137,7 @@ fn switch_row(
         .px(px(16.))
         .py(px(12.))
         .rounded(px(8.))
-        .bg(rgb(palette::BG_SIDEBAR))
+        .bg(rgb(palette::bg_sidebar()))
         .child(
             v_flex()
                 .gap(px(4.))
@@ -145,13 +145,13 @@ fn switch_row(
                 .child(
                     div()
                         .text_size(px(14.))
-                        .text_color(rgb(palette::TEXT_PRIMARY))
+                        .text_color(rgb(palette::text_primary()))
                         .child(label),
                 )
                 .child(
                     div()
                         .text_size(px(12.))
-                        .text_color(rgb(palette::TEXT_MUTED))
+                        .text_color(rgb(palette::text_muted()))
                         .child(desc),
                 ),
         )
@@ -176,10 +176,10 @@ fn small_button(
         .items_center()
         .justify_center()
         .rounded(px(4.))
-        .bg(rgb(palette::BG_CHANNEL_HOVER))
+        .bg(rgb(palette::bg_channel_hover()))
         .text_size(px(14.))
-        .text_color(rgb(palette::TEXT_PRIMARY))
-        .hover(|el| el.bg(rgb(palette::BG_TOOLBAR_HOVER)))
+        .text_color(rgb(palette::text_primary()))
+        .hover(|el| el.bg(rgb(palette::bg_toolbar_hover())))
         .child(symbol)
         .id(id)
         .on_click(cx.listener(move |this, _, window, cx| {
@@ -208,14 +208,14 @@ fn volume_row(
         .px(px(16.))
         .py(px(12.))
         .rounded(px(8.))
-        .bg(rgb(palette::BG_SIDEBAR))
+        .bg(rgb(palette::bg_sidebar()))
         .child(
             v_flex()
                 .gap(px(8.))
                 .child(
                     div()
                         .text_size(px(14.))
-                        .text_color(rgb(palette::TEXT_PRIMARY))
+                        .text_color(rgb(palette::text_primary()))
                         .child(label),
                 )
                 .child(
@@ -223,13 +223,13 @@ fn volume_row(
                         .w(px(width))
                         .h(px(6.))
                         .rounded_full()
-                        .bg(rgb(palette::BG_TOOLBAR_HOVER))
+                        .bg(rgb(palette::bg_toolbar_hover()))
                         .child(
                             div()
                                 .w(px(fill))
                                 .h(px(6.))
                                 .rounded_full()
-                                .bg(rgb(palette::ACCENT)),
+                                .bg(rgb(palette::accent())),
                         ),
                 ),
         )
@@ -243,7 +243,7 @@ fn volume_row(
                         .w(px(38.))
                         .justify_center()
                         .text_size(px(13.))
-                        .text_color(rgb(palette::TEXT_SECONDARY))
+                        .text_color(rgb(palette::text_secondary()))
                         .child(format!("{value}%")),
                 )
                 .child(small_button("+", inc_id, inc, cx)),
@@ -264,19 +264,19 @@ fn account(app: &DiscordApp, _cx: &mut Context<DiscordApp>) -> Div {
             .px(px(16.))
             .py(px(24.))
             .rounded(px(8.))
-            .bg(rgb(palette::BG_SIDEBAR))
-            .child(avatar('R', palette::ACCENT, px(72.), false))
+            .bg(rgb(palette::bg_sidebar()))
+            .child(avatar('R', palette::accent(), px(72.), false))
             .child(
                 div()
                     .text_size(px(20.))
                     .font_weight(FontWeight::BOLD)
-                    .text_color(rgb(palette::TEXT_PRIMARY))
+                    .text_color(rgb(palette::text_primary()))
                     .child("Riven"),
             )
             .child(
                 div()
                     .text_size(px(12.))
-                    .text_color(rgb(palette::TEXT_MUTED))
+                    .text_color(rgb(palette::text_muted()))
                     .child(format!("当前状态：{}", app.my_status.label())),
             ),
     );
@@ -334,15 +334,15 @@ fn appearance(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                 .rounded(px(8.))
                 .border_1()
                 .border_color(if selected {
-                    rgb(palette::ACCENT)
+                    rgb(palette::accent())
                 } else {
-                    rgb(palette::BORDER_DEFAULT)
+                    rgb(palette::border_default())
                 })
-                .bg(rgb(palette::BG_SIDEBAR))
+                .bg(rgb(palette::bg_sidebar()))
                 .text_color(if selected {
-                    rgb(palette::TEXT_LINK)
+                    rgb(palette::text_link())
                 } else {
-                    rgb(palette::TEXT_SECONDARY)
+                    rgb(palette::text_secondary())
                 })
                 .child(ico(icon, Size::Medium))
                 .child(
@@ -351,15 +351,14 @@ fn appearance(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                         .child(choice.label()),
                 )
                 .id(format!("settings-theme-{slug}"))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.set_theme(choice);
-                    cx.notify();
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.set_theme(choice, window, cx);
                 })),
         );
     }
     page = page
         .child(themes)
-        .child(note_row("Demo 中主题选项仅记录选择，界面保持 Discord 深色风格。"));
+        .child(note_row("深色 / 浅色会立即切换整界面配色；「跟随系统」在 Demo 中等同深色。"));
 
     page = page.child(group("消息")).child(switch_row(
         "紧凑消息",
@@ -387,7 +386,7 @@ fn appearance(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
             .items_center()
             .justify_center()
             .rounded(px(4.))
-            .bg(rgb(palette::DANGER))
+            .bg(rgb(palette::danger()))
             .text_color(rgb(palette::WHITE))
             .text_size(px(13.))
             .child("恢复默认设置")
@@ -502,11 +501,11 @@ fn keybinds() -> Div {
                 .px(px(16.))
                 .py(px(12.))
                 .rounded(px(8.))
-                .bg(rgb(palette::BG_SIDEBAR))
+                .bg(rgb(palette::bg_sidebar()))
                 .child(
                     div()
                         .text_size(px(14.))
-                        .text_color(rgb(palette::TEXT_MESSAGE))
+                        .text_color(rgb(palette::text_message()))
                         .child(desc),
                 )
                 .child(
@@ -514,9 +513,9 @@ fn keybinds() -> Div {
                         .px(px(8.))
                         .py(px(4.))
                         .rounded(px(4.))
-                        .bg(rgb(palette::BG_CHANNEL_HOVER))
+                        .bg(rgb(palette::bg_channel_hover()))
                         .text_size(px(12.))
-                        .text_color(rgb(palette::TEXT_PRIMARY))
+                        .text_color(rgb(palette::text_primary()))
                         .child(keys),
                 ),
         );
@@ -535,19 +534,19 @@ fn language() -> Div {
                 .px(px(16.))
                 .py(px(14.))
                 .rounded(px(8.))
-                .bg(rgb(palette::BG_SIDEBAR))
+                .bg(rgb(palette::bg_sidebar()))
                 .child(
                     div()
                         .text_size(px(14.))
                         .text_color(if selected {
-                            rgb(palette::TEXT_PRIMARY)
+                            rgb(palette::text_primary())
                         } else {
-                            rgb(palette::TEXT_MUTED)
+                            rgb(palette::text_muted())
                         })
                         .child(name),
                 )
                 .when(selected, |el| {
-                    el.child(ico(IconName::Check, Size::Small).text_color(rgb(palette::ACCENT)))
+                    el.child(ico(IconName::Check, Size::Small).text_color(rgb(palette::accent())))
                 }),
         );
     }

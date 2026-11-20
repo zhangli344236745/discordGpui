@@ -22,9 +22,9 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
         .top(px(120.))
         .w(px(300.))
         .rounded(px(8.))
-        .bg(rgb(palette::BG_FOOTER))
+        .bg(rgb(palette::bg_footer()))
         .border_1()
-        .border_color(rgb(palette::BORDER_DEFAULT))
+        .border_color(rgb(palette::border_default()))
         .shadow_lg()
         .overflow_hidden()
         // 顶部横幅
@@ -51,7 +51,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                         div()
                             .text_size(px(20.))
                             .font_weight(FontWeight::BOLD)
-                            .text_color(rgb(palette::TEXT_PRIMARY))
+                            .text_color(rgb(palette::text_primary()))
                             .child(info.name),
                     )
                     .child(
@@ -60,25 +60,25 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                                 .px_2()
                                 .py(px(2.))
                                 .rounded(px(4.))
-                                .bg(rgb(palette::BG_CHANNEL_SELECTED))
+                                .bg(rgb(palette::bg_channel_selected()))
                                 .text_size(px(11.))
-                                .text_color(rgb(palette::TEXT_SECONDARY))
+                                .text_color(rgb(palette::text_secondary()))
                                 .child(info.role),
                         )
                         .child(
                             h_flex()
                                 .gap_1()
                                 .text_size(px(11.))
-                                .text_color(rgb(palette::TEXT_MUTED))
+                                .text_color(rgb(palette::text_muted()))
                                 .child(
                                     div()
                                         .w(px(7.))
                                         .h(px(7.))
                                         .rounded_full()
                                         .bg(rgb(if info.online {
-                                            palette::ONLINE
+                                            palette::online()
                                         } else {
-                                            palette::TEXT_DIM
+                                            palette::text_dim()
                                         })),
                                 )
                                 .child(if info.online { "在线" } else { "离线" }),
@@ -89,9 +89,9 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                     div()
                         .p_3()
                         .rounded(px(6.))
-                        .bg(rgb(palette::BG_RAIL))
+                        .bg(rgb(palette::bg_rail()))
                         .text_size(px(12.))
-                        .text_color(rgb(palette::TEXT_SECONDARY))
+                        .text_color(rgb(palette::text_secondary()))
                         .child(info.activity),
                 )
                 .child(
@@ -106,11 +106,11 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                                 .justify_center()
                                 .gap_2()
                                 .rounded(px(4.))
-                                .bg(rgb(palette::ACCENT))
+                                .bg(rgb(palette::accent()))
                                 .text_color(rgb(palette::WHITE))
                                 .text_size(px(13.))
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .hover(|el| el.bg(rgb(palette::ACCENT_HOVER)))
+                                .hover(|el| el.bg(rgb(palette::accent_hover())))
                                 .child(ico(IconName::MessageSquare, Size::XSmall))
                                 .child("发消息")
                                 .id("profile-send-dm")
@@ -128,9 +128,9 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                                 .items_center()
                                 .justify_center()
                                 .rounded(px(4.))
-                                .bg(rgb(palette::BG_CHANNEL_HOVER))
-                                .text_color(rgb(palette::TEXT_SECONDARY))
-                                .hover(|el| el.text_color(rgb(palette::TEXT_PRIMARY)))
+                                .bg(rgb(palette::bg_channel_hover()))
+                                .text_color(rgb(palette::text_secondary()))
+                                .hover(|el| el.text_color(rgb(palette::text_primary())))
                                 .child(ico(IconName::X, Size::XSmall))
                                 .id("profile-close")
                                 .on_click(cx.listener(|this, _, _, cx| {

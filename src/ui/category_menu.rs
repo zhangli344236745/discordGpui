@@ -36,9 +36,9 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
         .p_1()
         .gap(px(2.))
         .rounded(px(6.))
-        .bg(rgb(palette::BG_FOOTER))
+        .bg(rgb(palette::bg_footer()))
         .border_1()
-        .border_color(rgb(palette::BORDER_DEFAULT))
+        .border_color(rgb(palette::border_default()))
         .shadow_lg();
 
     // 头部：分类名 + 频道数量（不可点击）。
@@ -52,18 +52,18 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
                     div()
                         .text_size(px(13.))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(palette::TEXT_PRIMARY))
+                        .text_color(rgb(palette::text_primary()))
                         .truncate()
                         .child(name.clone()),
                 )
                 .child(
                     div()
                         .text_size(px(11.))
-                        .text_color(rgb(palette::TEXT_DIM))
+                        .text_color(rgb(palette::text_dim()))
                         .child(format!("{channel_count} 个频道")),
                 ),
         )
-        .child(div().h(px(1.)).my(px(2.)).bg(rgb(palette::BG_DIVIDER)));
+        .child(div().h(px(1.)).my(px(2.)).bg(rgb(palette::bg_divider())));
 
     // 在该分类中创建频道。
     card = card.child(
@@ -75,10 +75,10 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
             .gap_2()
             .rounded(px(4.))
             .text_size(px(13.))
-            .text_color(rgb(palette::TEXT_SECONDARY))
+            .text_color(rgb(palette::text_secondary()))
             .hover(|el| {
-                el.bg(rgb(palette::BG_CHANNEL_HOVER))
-                    .text_color(rgb(palette::TEXT_PRIMARY))
+                el.bg(rgb(palette::bg_channel_hover()))
+                    .text_color(rgb(palette::text_primary()))
             })
             .child(ico(IconName::Plus, Size::XSmall))
             .child("在该分类中创建频道")
@@ -99,13 +99,13 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
             .rounded(px(4.))
             .text_size(px(13.))
             .text_color(if unread > 0 {
-                rgb(palette::TEXT_SECONDARY)
+                rgb(palette::text_secondary())
             } else {
-                rgb(palette::TEXT_DIM)
+                rgb(palette::text_dim())
             })
             .hover(|el| {
-                el.bg(rgb(palette::BG_CHANNEL_HOVER))
-                    .text_color(rgb(palette::TEXT_PRIMARY))
+                el.bg(rgb(palette::bg_channel_hover()))
+                    .text_color(rgb(palette::text_primary()))
             })
             .child(ico(IconName::CheckCheck, Size::XSmall))
             .child(div().flex_1().child("标记为已读"))
@@ -124,10 +124,10 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
             .gap_2()
             .rounded(px(4.))
             .text_size(px(13.))
-            .text_color(rgb(palette::TEXT_SECONDARY))
+            .text_color(rgb(palette::text_secondary()))
             .hover(|el| {
-                el.bg(rgb(palette::BG_CHANNEL_HOVER))
-                    .text_color(rgb(palette::TEXT_PRIMARY))
+                el.bg(rgb(palette::bg_channel_hover()))
+                    .text_color(rgb(palette::text_primary()))
             })
             .child(ico(IconName::SquarePen, Size::XSmall))
             .child("重命名分类")
@@ -137,7 +137,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
 
     // 删除分类：会删掉分类内所有频道，不可删时置灰且点击无效。
     card = card
-        .child(div().h(px(1.)).my(px(2.)).bg(rgb(palette::BG_DIVIDER)))
+        .child(div().h(px(1.)).my(px(2.)).bg(rgb(palette::bg_divider())))
         .child(
             div()
                 .h(px(30.))
@@ -148,11 +148,11 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
                 .rounded(px(4.))
                 .text_size(px(13.))
                 .text_color(if deletable {
-                    rgb(palette::DANGER)
+                    rgb(palette::danger())
                 } else {
-                    rgb(palette::TEXT_DIM)
+                    rgb(palette::text_dim())
                 })
-                .hover(|el| el.bg(rgb(palette::BG_CHANNEL_HOVER)))
+                .hover(|el| el.bg(rgb(palette::bg_channel_hover())))
                 .child(ico(IconName::Trash, Size::XSmall))
                 .child(div().flex_1().child(if deletable {
                     "删除分类"

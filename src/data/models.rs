@@ -45,6 +45,105 @@ impl Attachment {
     }
 }
 
+/// 贴纸：Demo 用 emoji 字形 + 名称代替真实贴纸资源，按 pack 分组展示。
+#[derive(Clone, Copy)]
+pub struct Sticker {
+    pub emoji: &'static str,
+    pub label: &'static str,
+    /// 所属贴纸包，同时也是弹层里的分类名。
+    pub pack: &'static str,
+}
+
+impl Sticker {
+    pub const fn new(emoji: &'static str, label: &'static str, pack: &'static str) -> Self {
+        Self { emoji, label, pack }
+    }
+}
+
+/// 转发来源：记录消息从哪个频道/私信转发而来，供正文上方的小字与点击跳转使用。
+#[derive(Clone)]
+pub struct ForwardOrigin {
+    /// 展示文案，如「#闲聊」「@Nova」。
+    pub label: String,
+    pub is_dm: bool,
+    /// 频道所属服务器；私信为 None。
+    pub server: Option<String>,
+    /// 频道名或好友名，跳转时使用。
+    pub channel: String,
+}
+
+impl ForwardOrigin {
+    pub fn channel(server: impl Into<String>, channel: impl Into<String>) -> Self {
+        let channel = channel.into();
+        Self {
+            label: format!("#{channel}"),
+            is_dm: false,
+            server: Some(server.into()),
+            channel,
+        }
+    }
+
+    pub fn dm(friend: impl Into<String>) -> Self {
+        let friend = friend.into();
+        Self {
+            label: format!("@{friend}"),
+            is_dm: true,
+            server: None,
+            channel: friend,
+        }
+    }
+}
+
+/// 转发弹层里的一个可选目标：某个文字频道或某条私信。
+#[derive(Clone)]
+pub struct ForwardTarget {
+    /// 频道所属服务器名；私信为「私信」。
+    pub server: String,
+    /// 频道名或好友名。
+    pub channel: String,
+    pub is_dm: bool,
+    /// 行首图标/文字的高亮色。
+    pub color: u32,
+}
+
+impl ForwardTarget {
+    pub fn channel(server: impl Into<String>, channel: impl Into<String>, color: u32) -> Self {
+        Self {
+            server: server.into(),
+            channel: channel.into(),
+            is_dm: false,
+            color,
+        }
+    }
+
+    pub fn dm(friend: impl Into<String>, color: u32) -> Self {
+        Self {
+            server: "私信".into(),
+            channel: friend.into(),
+            is_dm: true,
+            color,
+        }
+    }
+
+    /// 目标标题：「#闲聊」或「@Nova」。
+    pub fn label(&self) -> String {
+        if self.is_dm {
+            format!("@{}", self.channel)
+        } else {
+            format!("#{}", self.channel)
+        }
+    }
+
+    /// 目标归属：「开发者社区」或「私信」。
+    pub fn scope(&self) -> String {
+        if self.is_dm {
+            "私信".into()
+        } else {
+            self.server.clone()
+        }
+    }
+}
+
 /// 聊天消息。
 #[derive(Clone)]
 pub struct Message {
@@ -56,6 +155,10 @@ pub struct Message {
     pub reactions: Vec<Reaction>,
     pub pinned: bool,
     pub attachment: Option<Attachment>,
+    /// 贴纸消息：正文通常为空，只渲染贴纸卡。
+    pub sticker: Option<Sticker>,
+    /// 转发来源；Some 时正文上方显示「转发自 …」。
+    pub forwarded: Option<ForwardOrigin>,
 }
 
 impl Message {
@@ -69,6 +172,8 @@ impl Message {
             reactions: Vec::new(),
             pinned: false,
             attachment: None,
+            sticker: None,
+            forwarded: None,
         }
     }
 
@@ -91,8 +196,20 @@ impl Message {
         self
     }
 
+    /// 挂一张贴纸（消息正文可为空）。
+    pub fn sticker(mut self, sticker: Sticker) -> Self {
+        self.sticker = Some(sticker);
+        self
+    }
+
     pub fn attachment(mut self, attachment: Attachment) -> Self {
         self.attachment = Some(attachment);
+        self
+    }
+
+    /// 标记为转发消息，并记录来源。
+    pub fn forwarded(mut self, origin: ForwardOrigin) -> Self {
+        self.forwarded = Some(origin);
         self
     }
 }

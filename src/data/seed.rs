@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use super::models::{
     Attachment, Category, Channel, DiscoverServer, DmConversation, Friend, FriendRequest, Member,
-    Message, Server,
+    Message, Server, Sticker,
 };
 
 /// 前端模拟服务器数据。
@@ -145,6 +145,9 @@ pub fn seed_messages() -> HashMap<String, Vec<Message>> {
             .attachment(Attachment::image("sidebar-preview.png", "1.2 MB")),
             Message::new("阿哲", "今天 11:42", "配色稳了，就这个。", 0x5865f2)
                 .attachment(Attachment::file("界面走查清单.md", "12 KB")),
+            Message::new("小满", "今天 11:45", "", 0xfaa61c)
+                .sticker(Sticker::new("🎉", "撒花", "日常")),
+            Message::new("Lin", "今天 11:46", "贴纸也能直接发了，点输入框右边的贴纸图标。", 0x57f287),
         ],
     );
 
@@ -464,4 +467,39 @@ pub fn seed_discover_servers() -> Vec<DiscoverServer> {
             "图标、动效与设计系统的日常分享。",
         ),
     ]
+}
+
+/// 贴纸弹层里的全部贴纸：按 pack 分成三组，pack 名即弹层里的分类标签。
+pub fn seed_stickers() -> Vec<Sticker> {
+    vec![
+        Sticker::new("😂", "笑到模糊", "日常"),
+        Sticker::new("🥹", "泪目", "日常"),
+        Sticker::new("🤔", "陷入思考", "日常"),
+        Sticker::new("😎", "稳了", "日常"),
+        Sticker::new("🥳", "开香槟", "日常"),
+        Sticker::new("👍", "收到", "日常"),
+        Sticker::new("🎉", "撒花", "日常"),
+        Sticker::new("🔥", "上分", "日常"),
+        Sticker::new("🐱", "猫猫探头", "猫咪"),
+        Sticker::new("😺", "猫猫开心", "猫咪"),
+        Sticker::new("😸", "猫猫坏笑", "猫咪"),
+        Sticker::new("😹", "猫猫爆笑", "猫咪"),
+        Sticker::new("😻", "猫猫心动", "猫咪"),
+        Sticker::new("🙀", "猫猫震惊", "猫咪"),
+        Sticker::new("😿", "猫猫委屈", "猫咪"),
+        Sticker::new("😾", "猫猫生气", "猫咪"),
+        Sticker::new("🎁", "礼物", "礼物"),
+        Sticker::new("🎂", "生日蛋糕", "礼物"),
+        Sticker::new("🌹", "玫瑰", "礼物"),
+        Sticker::new("🍰", "来块甜品", "礼物"),
+        Sticker::new("🥂", "干杯", "礼物"),
+        Sticker::new("💝", "心意", "礼物"),
+        Sticker::new("🎈", "庆祝气球", "礼物"),
+        Sticker::new("🧸", "抱抱熊", "礼物"),
+    ]
+}
+
+/// 贴纸包的展示顺序（弹层顶部标签）。
+pub fn sticker_packs() -> Vec<&'static str> {
+    vec!["日常", "猫咪", "礼物"]
 }

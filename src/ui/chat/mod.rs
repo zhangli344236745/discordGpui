@@ -1,6 +1,8 @@
 pub mod attachment_picker;
 pub mod composer;
+pub mod sticker_picker;
 pub mod emoji_picker;
+pub mod forward_dialog;
 pub mod header;
 pub mod inbox_panel;
 pub mod message_menu;

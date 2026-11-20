@@ -36,9 +36,9 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
         .p_1()
         .gap(px(2.))
         .rounded(px(6.))
-        .bg(rgb(palette::BG_FOOTER))
+        .bg(rgb(palette::bg_footer()))
         .border_1()
-        .border_color(rgb(palette::BORDER_DEFAULT))
+        .border_color(rgb(palette::border_default()))
         .shadow_lg();
     card = match left {
         Some(x) => card.left(px(x)),
@@ -56,7 +56,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
                     h_flex()
                         .gap_1()
                         .items_center()
-                        .text_color(rgb(palette::TEXT_PRIMARY))
+                        .text_color(rgb(palette::text_primary()))
                         .child(ico(
                             if is_voice {
                                 IconName::Volume2
@@ -76,7 +76,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
                 .child(
                     div()
                         .text_size(px(11.))
-                        .text_color(rgb(palette::TEXT_DIM))
+                        .text_color(rgb(palette::text_dim()))
                         .truncate()
                         .child(if is_voice {
                             String::from("语音频道")
@@ -87,7 +87,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
                         }),
                 ),
         )
-        .child(div().h(px(1.)).my(px(2.)).bg(rgb(palette::BG_DIVIDER)));
+        .child(div().h(px(1.)).my(px(2.)).bg(rgb(palette::bg_divider())));
 
     // 标记为已读：仅文字频道有意义，未读为 0 时置灰但仍可点（无副作用）。
     card = card.child(
@@ -100,13 +100,13 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
             .rounded(px(4.))
             .text_size(px(13.))
             .text_color(if unread > 0 {
-                rgb(palette::TEXT_SECONDARY)
+                rgb(palette::text_secondary())
             } else {
-                rgb(palette::TEXT_DIM)
+                rgb(palette::text_dim())
             })
             .hover(|el| {
-                el.bg(rgb(palette::BG_CHANNEL_HOVER))
-                    .text_color(rgb(palette::TEXT_PRIMARY))
+                el.bg(rgb(palette::bg_channel_hover()))
+                    .text_color(rgb(palette::text_primary()))
             })
             .child(ico(IconName::CheckCheck, Size::XSmall))
             .child(div().flex_1().child("标记为已读"))
@@ -126,10 +126,10 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
                 .gap_2()
                 .rounded(px(4.))
                 .text_size(px(13.))
-                .text_color(rgb(palette::TEXT_SECONDARY))
+                .text_color(rgb(palette::text_secondary()))
                 .hover(|el| {
-                    el.bg(rgb(palette::BG_CHANNEL_HOVER))
-                        .text_color(rgb(palette::TEXT_PRIMARY))
+                    el.bg(rgb(palette::bg_channel_hover()))
+                        .text_color(rgb(palette::text_primary()))
                 })
                 .child(ico(IconName::SquarePen, Size::XSmall))
                 .child("编辑频道主题")
@@ -138,7 +138,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
         );
     }
 
-    card = card.child(div().h(px(1.)).my(px(2.)).bg(rgb(palette::BG_DIVIDER))).child(
+    card = card.child(div().h(px(1.)).my(px(2.)).bg(rgb(palette::bg_divider()))).child(
         div()
             .h(px(30.))
             .px_2()
@@ -147,10 +147,10 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
             .gap_2()
             .rounded(px(4.))
             .text_size(px(13.))
-            .text_color(rgb(palette::DANGER))
+            .text_color(rgb(palette::danger()))
             .hover(|el| {
-                el.bg(rgb(palette::BG_CHANNEL_HOVER))
-                    .text_color(rgb(palette::DANGER))
+                el.bg(rgb(palette::bg_channel_hover()))
+                    .text_color(rgb(palette::danger()))
             })
             .child(ico(IconName::Trash, Size::XSmall))
             .child("删除频道")

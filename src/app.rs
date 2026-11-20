@@ -2,15 +2,15 @@ use std::collections::HashMap;
 
 use gpui_kit::*;
 use gpui_kit::component::input::{InputEvent, InputState};
-use gpui_kit::component::v_flex;
+use gpui_kit::component::{v_flex, Theme, ThemeMode};
 use gpui_kit::prelude::FluentBuilder as _;
 
 use crate::data::{
-    seed_dm_conversations, seed_dm_messages, seed_friend_requests, seed_friends, seed_members,
-    seed_discover_servers, seed_messages, seed_servers, Attachment, Category, Channel, ChannelKind,
-    DiscoverServer, DmConversation, Friend, FriendRequest, FriendTab, Member, MemberGroup, Message,
-    Notification, NotificationKind, NotificationTarget, Reaction, SearchHit, Server, UserStatus,
-    VoiceParticipant,
+    seed_discover_servers, seed_dm_conversations, seed_dm_messages, seed_friend_requests,
+    seed_friends, seed_members, seed_messages, seed_servers, seed_stickers, sticker_packs, Attachment,
+    Category, Channel, ChannelKind, DiscoverServer, DmConversation, ForwardOrigin, ForwardTarget,
+    Friend, FriendRequest, FriendTab, Member, MemberGroup, Message, Notification, NotificationKind,
+    NotificationTarget, Reaction, SearchHit, Server, Sticker, UserStatus, VoiceParticipant,
 };
 use crate::ui::theme::palette;
 use crate::ui::{
@@ -73,7 +73,7 @@ pub(crate) enum SettingsSection {
     Language,
 }
 
-/// 外观主题选项。Demo 中记录选择状态，不切换 gpui-kit 全局主题。
+/// 外观主题选项。浅色会真正切换色板；「跟随系统」在 Demo 里等同深色（不读系统外观）。
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ThemeChoice {
     Dark,
@@ -156,6 +156,8 @@ pub struct DiscordApp {
 
     pub(crate) profile_target: Option<&'static str>,
     pub(crate) menu_message: Option<usize>,
+    /// 消息菜单的光标锚点：Some 表示根级浮层（右键），None 表示挂在消息行内（省略号入口）。
+    pub(crate) menu_message_point: Option<(f32, f32)>,
     pub(crate) show_pins: bool,
     /// 当前语音连接：(服务器索引, 频道名)；跨会话保持，符合 Discord 行为。
     pub(crate) voice_channel: Option<(usize, String)>,
@@ -215,6 +217,12 @@ pub struct DiscordApp {
     pub(crate) attachment_draft: Option<Attachment>,
     pub(crate) show_attachment_picker: bool,
 
+    // 贴纸弹层：全部贴纸 + 包顺序 + 当前包 + 显隐。
+    pub(crate) stickers: Vec<Sticker>,
+    pub(crate) sticker_packs: Vec<&'static str>,
+    pub(crate) sticker_pack: &'static str,
+    pub(crate) show_sticker_picker: bool,
+
     // 服务器设置页：整屏覆盖主界面，与用户设置页互斥。
     pub(crate) show_server_settings: bool,
     pub(crate) server_settings_section: ServerSettingsSection,
@@ -246,6 +254,14 @@ pub struct DiscordApp {
     pub(crate) search_center_query: String,
     pub(crate) search_scope: SearchScope,
     pub(crate) search_results: Vec<SearchHit>,
+
+    // 消息转发：源消息下标 + 弹层显隐 + 目标搜索 + 成功提示。
+    pub(crate) forward_source: Option<usize>,
+    pub(crate) show_forward: bool,
+    pub(crate) forward_search: Entity<InputState>,
+    pub(crate) forward_query: String,
+    /// 转发成功后的顶栏提示文案，切换会话即清除。
+    pub(crate) forward_notice: Option<String>,
 }
 
 /// 资料卡展示用的用户信息，由 app 从 friends / members 聚合而来。
@@ -293,6 +309,8 @@ impl DiscordApp {
             cx.new(|cx| InputState::new(window, cx).placeholder("搜索服务器或关键词"));
         let search_center_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("搜索所有频道与私信"));
+        let forward_search =
+            cx.new(|cx| InputState::new(window, cx).placeholder("搜索频道或私信"));
 
         cx.subscribe_in(&composer, window, |this, _, event: &InputEvent, window, cx| {
             match event {
@@ -376,6 +394,14 @@ impl DiscordApp {
         })
         .detach();
 
+        cx.subscribe_in(&forward_search, window, |this, _, event: &InputEvent, _, cx| {
+            if matches!(event, InputEvent::Change) {
+                this.forward_query = this.forward_search.read(cx).value().to_string();
+                cx.notify();
+            }
+        })
+        .detach();
+
         // 服务器设置「概览」的两个输入框都按 Enter 保存。
         cx.subscribe_in(&server_name_edit, window, |this, _, event: &InputEvent, _, cx| {
             if matches!(event, InputEvent::PressEnter { secondary: false, .. }) {
@@ -431,6 +457,7 @@ impl DiscordApp {
             mention_candidates: Vec::new(),
             profile_target: None,
             menu_message: None,
+            menu_message_point: None,
             show_pins: false,
             voice_channel: None,
             my_status: UserStatus::Online,
@@ -469,6 +496,10 @@ impl DiscordApp {
             create_channel_category: None,
             attachment_draft: None,
             show_attachment_picker: false,
+            stickers: seed_stickers(),
+            sticker_pack: sticker_packs().first().copied().unwrap_or("日常"),
+            sticker_packs: sticker_packs(),
+            show_sticker_picker: false,
             show_server_settings: false,
             server_settings_section: ServerSettingsSection::Overview,
             server_name_edit,
@@ -490,6 +521,11 @@ impl DiscordApp {
             search_center_query: String::new(),
             search_scope: SearchScope::CurrentServer,
             search_results: Vec::new(),
+            forward_source: None,
+            show_forward: false,
+            forward_search,
+            forward_query: String::new(),
+            forward_notice: None,
         }
     }
 
@@ -587,7 +623,7 @@ impl DiscordApp {
         let friend = self.friends.iter().find(|f| f.name == base);
         let member = self.members.iter().find(|m| base_name(m.name) == base);
 
-        let color = friend.map(|f| f.color).or_else(|| member.map(|m| m.color)).unwrap_or(palette::ACCENT);
+        let color = friend.map(|f| f.color).or_else(|| member.map(|m| m.color)).unwrap_or(palette::accent());
         let online = friend
             .map(|f| f.online)
             .or_else(|| member.map(|m| m.online))
@@ -614,7 +650,7 @@ impl DiscordApp {
             "管理员" => 0xf23f43,
             "版主" => 0x57f287,
             "贡献者" => 0x00a8fc,
-            _ => palette::ACCENT,
+            _ => palette::accent(),
         }
     }
 
@@ -658,7 +694,7 @@ impl DiscordApp {
         if !online.is_empty() {
             groups.push(MemberGroup {
                 title: "在线".into(),
-                color: palette::TEXT_MUTED,
+                color: palette::text_muted(),
                 key: "role-online".into(),
                 member_indices: online,
             });
@@ -666,7 +702,7 @@ impl DiscordApp {
         if !offline.is_empty() {
             groups.push(MemberGroup {
                 title: "离线".into(),
-                color: palette::TEXT_DIM,
+                color: palette::text_dim(),
                 key: "role-offline".into(),
                 member_indices: offline,
             });
@@ -997,7 +1033,7 @@ impl DiscordApp {
                         .find(|m| base_name(m.name) == friend)
                         .map(|m| (m.color, m.online))
                 })
-                .unwrap_or((palette::ACCENT, false));
+                .unwrap_or((palette::accent(), false));
             self.dm_conversations.push(DmConversation {
                 friend,
                 color,
@@ -1026,7 +1062,7 @@ impl DiscordApp {
         self.mention_prefix = None;
         self.mention_candidates.clear();
         self.profile_target = None;
-        self.menu_message = None;
+        self.close_message_menu();
         self.show_pins = false;
         self.show_inbox = false;
         self.show_status_menu = false;
@@ -1044,7 +1080,10 @@ impl DiscordApp {
         self.create_channel_category = None;
         self.attachment_draft = None;
         self.show_attachment_picker = false;
+        self.show_sticker_picker = false;
         self.show_search_center = false;
+        self.close_forward();
+        self.forward_notice = None;
         self.member_menu = None;
         self.cancel_edit();
 
@@ -1105,15 +1144,16 @@ impl DiscordApp {
 
     /// 按当前服务器数量轮换配色，让新建服务器有区分度。
     fn next_server_color(&self) -> u32 {
-        const COLORS: [u32; 6] = [
-            palette::ACCENT,
+        // 品牌色要读当前主题，所以不能写成 const 数组。
+        let colors: [u32; 6] = [
+            palette::accent(),
             0xeb459e,
             0x57f287,
             0xfee75c,
             0x00a8fc,
             0x9b59b6,
         ];
-        COLORS[self.servers.len() % COLORS.len()]
+        colors[self.servers.len() % colors.len()]
     }
 
     /// 创建服务器：写入名称、默认频道，并切换过去。
@@ -1221,7 +1261,7 @@ impl DiscordApp {
         self.category_menu = None;
         self.show_server_menu = false;
         self.profile_target = None;
-        self.menu_message = None;
+        self.close_message_menu();
         self.show_pins = false;
         self.show_inbox = false;
         self.show_status_menu = false;
@@ -1398,7 +1438,7 @@ impl DiscordApp {
         self.show_server_menu = false;
         self.channel_menu = None;
         self.profile_target = None;
-        self.menu_message = None;
+        self.close_message_menu();
         self.show_pins = false;
         self.show_inbox = false;
         self.show_status_menu = false;
@@ -1585,7 +1625,7 @@ impl DiscordApp {
             self.channel_menu = None;
             self.category_menu = None;
             self.profile_target = None;
-            self.menu_message = None;
+            self.close_message_menu();
             self.show_pins = false;
             self.show_inbox = false;
             self.show_status_menu = false;
@@ -1706,7 +1746,7 @@ impl DiscordApp {
 
         self.composer
             .update(cx, |input, cx| input.set_value("", window, cx));
-        let mut message = Message::new("你", "刚刚", text, palette::ACCENT);
+        let mut message = Message::new("你", "刚刚", text, palette::accent());
         if let Some(attachment) = self.attachment_draft.take() {
             message = message.attachment(attachment);
         }
@@ -1723,17 +1763,84 @@ impl DiscordApp {
     }
 
     /// 附件选择弹层显隐：打开时收起表情层与其他浮层，避免叠层。
+    // ------------------------------- 贴纸弹层 -------------------------------
+
+    /// 打开/关闭贴纸弹层；传包名则先切到该包（礼物按钮直达「礼物」包）。
+    pub(crate) fn toggle_sticker_picker(
+        &mut self,
+        pack: Option<&'static str>,
+        cx: &mut Context<Self>,
+    ) {
+        let same = self.show_sticker_picker && pack.is_none_or(|name| name == self.sticker_pack);
+        if same {
+            self.show_sticker_picker = false;
+        } else {
+            self.show_sticker_picker = true;
+            if let Some(name) = pack {
+                self.sticker_pack = name;
+            }
+            self.emoji_picker_open = false;
+            self.emoji_target = None;
+            self.show_attachment_picker = false;
+            self.show_status_menu = false;
+            self.channel_menu = None;
+            self.category_menu = None;
+            self.member_menu = None;
+            self.show_server_menu = false;
+            self.profile_target = None;
+            self.close_message_menu();
+            self.show_pins = false;
+            self.show_inbox = false;
+        }
+        cx.notify();
+    }
+
+    /// 关闭贴纸弹层。
+    pub(crate) fn close_sticker_picker(&mut self) {
+        self.show_sticker_picker = false;
+    }
+
+    /// 切换贴纸包。
+    pub(crate) fn set_sticker_pack(&mut self, pack: &'static str, cx: &mut Context<Self>) {
+        self.sticker_pack = pack;
+        cx.notify();
+    }
+
+    /// 点击贴纸即发送：生成一条只有贴纸的消息并滚到底部。
+    pub(crate) fn send_sticker(
+        &mut self,
+        sticker: Sticker,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.view_mode == ViewMode::Friends {
+            return;
+        }
+        self.show_sticker_picker = false;
+        let message = Message::new("你", "刚刚", "", palette::accent()).sticker(sticker);
+        if let Some(messages) = self.current_messages_mut() {
+            messages.push(message);
+        }
+        self.reply_to = None;
+        self.mention_prefix = None;
+        self.mention_candidates.clear();
+        self.scroll_handle.scroll_to_bottom();
+        self.composer.update(cx, |input, cx| input.focus(window, cx));
+        cx.notify();
+    }
+
     pub(crate) fn toggle_attachment_picker(&mut self, cx: &mut Context<Self>) {
         self.show_attachment_picker = !self.show_attachment_picker;
         if self.show_attachment_picker {
             self.emoji_picker_open = false;
             self.emoji_target = None;
+            self.show_sticker_picker = false;
             self.show_status_menu = false;
             self.channel_menu = None;
             self.category_menu = None;
             self.show_server_menu = false;
             self.profile_target = None;
-            self.menu_message = None;
+            self.close_message_menu();
             self.show_pins = false;
             self.show_inbox = false;
         }
@@ -1790,6 +1897,7 @@ impl DiscordApp {
             self.emoji_picker_open = true;
             self.emoji_target = target;
             self.show_attachment_picker = false;
+            self.show_sticker_picker = false;
         }
     }
 
@@ -1852,7 +1960,7 @@ impl DiscordApp {
             self.profile_target = None;
         } else {
             self.profile_target = Some(name);
-            self.menu_message = None;
+            self.close_message_menu();
             self.show_pins = false;
         }
     }
@@ -1863,12 +1971,45 @@ impl DiscordApp {
 
     /// 打开/关闭某条消息的操作菜单。
     pub(crate) fn toggle_message_menu(&mut self, index: usize) {
-        if self.menu_message == Some(index) {
-            self.menu_message = None;
+        // 省略号入口：菜单挂在消息行内，不跟随光标。
+        if self.menu_message == Some(index) && self.menu_message_point.is_none() {
+            self.close_message_menu();
         } else {
             self.menu_message = Some(index);
+            self.menu_message_point = None;
             self.show_pins = false;
         }
+    }
+
+    /// 右键消息：在光标处展开操作菜单（根级浮层），同时收起其他浮层。
+    pub(crate) fn open_message_menu_at(
+        &mut self,
+        index: usize,
+        x: f32,
+        y: f32,
+        cx: &mut Context<Self>,
+    ) {
+        self.menu_message = Some(index);
+        self.menu_message_point = Some((x, y));
+        self.show_pins = false;
+        self.profile_target = None;
+        self.member_menu = None;
+        self.channel_menu = None;
+        self.category_menu = None;
+        self.show_server_menu = false;
+        self.show_inbox = false;
+        self.show_status_menu = false;
+        self.show_attachment_picker = false;
+        self.close_sticker_picker();
+        self.emoji_picker_open = false;
+        self.emoji_target = None;
+        cx.notify();
+    }
+
+    /// 统一关闭消息菜单：行内菜单与光标浮层一起收掉。
+    pub(crate) fn close_message_menu(&mut self) {
+        self.menu_message = None;
+        self.menu_message_point = None;
     }
 
     /// 置顶/取消置顶当前会话的第 index 条消息。
@@ -1876,7 +2017,7 @@ impl DiscordApp {
         if let Some(message) = self.current_messages_mut().and_then(|m| m.get_mut(index)) {
             message.pinned = !message.pinned;
         }
-        self.menu_message = None;
+        self.close_message_menu();
         cx.notify();
     }
 
@@ -1887,7 +2028,7 @@ impl DiscordApp {
                 messages.remove(index);
             }
         }
-        self.menu_message = None;
+        self.close_message_menu();
         cx.notify();
     }
 
@@ -1903,6 +2044,199 @@ impl DiscordApp {
         cx.notify();
     }
 
+    // -----------------------------------------------------------------------
+    // 消息转发
+    // -----------------------------------------------------------------------
+
+    /// 打开转发弹层：记住源消息下标、清空搜索并聚焦搜索框。
+    pub(crate) fn open_forward(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.current_messages().get(index).is_none() {
+            return;
+        }
+        self.forward_source = Some(index);
+        self.show_forward = true;
+        self.forward_query.clear();
+        self.forward_search.update(cx, |input, cx| {
+            input.set_value("", window, cx);
+            input.focus(window, cx);
+        });
+        self.close_message_menu();
+        self.show_pins = false;
+        self.show_inbox = false;
+        self.profile_target = None;
+        self.emoji_picker_open = false;
+        self.emoji_target = None;
+        self.close_sticker_picker();
+        self.show_attachment_picker = false;
+        cx.notify();
+    }
+
+    /// 关闭转发弹层（Esc、遮罩、取消共用）。
+    pub(crate) fn close_forward(&mut self) {
+        self.show_forward = false;
+        self.forward_source = None;
+        self.forward_query.clear();
+    }
+
+    /// 转发弹层里展示的来源消息摘要：(作者, 摘要)。
+    pub(crate) fn forward_summary(&self) -> Option<(&'static str, String)> {
+        let index = self.forward_source?;
+        let message = self.current_messages().get(index)?.clone();
+        let excerpt = if !message.text.is_empty() {
+            message.text.chars().take(80).collect::<String>()
+        } else if let Some(sticker) = message.sticker {
+            format!("[贴纸] {}", sticker.label)
+        } else if let Some(attachment) = &message.attachment {
+            format!("[附件] {}", attachment.name)
+        } else {
+            "（空消息）".to_string()
+        };
+        Some((message.author, excerpt))
+    }
+
+    /// 当前会话的展示标签：「#频道」或「@好友」，用于弹层副标题。
+    pub(crate) fn current_origin_label(&self) -> String {
+        if self.is_dm() {
+            format!("@{}", self.active_dm.as_deref().unwrap_or(""))
+        } else {
+            format!("#{}", self.active_channel)
+        }
+    }
+
+    /// 全部可转发目标：所有服务器的文字频道 + 现有私信会话。
+    pub(crate) fn forward_targets(&self) -> Vec<ForwardTarget> {
+        let mut targets = Vec::new();
+        for server in &self.servers {
+            for category in &server.categories {
+                for channel in &category.channels {
+                    if channel.kind == ChannelKind::Text {
+                        targets.push(ForwardTarget::channel(
+                            server.name.clone(),
+                            channel.name.clone(),
+                            server.color,
+                        ));
+                    }
+                }
+            }
+        }
+        for conversation in &self.dm_conversations {
+            targets.push(ForwardTarget::dm(conversation.friend, conversation.color));
+        }
+        targets
+    }
+
+    /// 按搜索词过滤后的转发目标（匹配频道名/好友名与服务器名）。
+    pub(crate) fn filtered_forward_targets(&self) -> Vec<ForwardTarget> {
+        let query = self.forward_query.trim().to_lowercase();
+        self.forward_targets()
+            .into_iter()
+            .filter(|target| {
+                query.is_empty()
+                    || target.channel.to_lowercase().contains(&query)
+                    || target.server.to_lowercase().contains(&query)
+            })
+            .collect()
+    }
+
+    /// 把源消息转发到目标会话：保留作者/正文/附件/贴纸，附上来源标记。
+    pub(crate) fn forward_message(&mut self, target: ForwardTarget, cx: &mut Context<Self>) {
+        let Some(index) = self.forward_source else {
+            return;
+        };
+        let Some(source) = self.current_messages().get(index).cloned() else {
+            self.close_forward();
+            return;
+        };
+
+        let origin = if self.is_dm() {
+            ForwardOrigin::dm(self.active_dm.clone().unwrap_or_default())
+        } else {
+            ForwardOrigin::channel(
+                self.active_server_ref().name.clone(),
+                self.active_channel.clone(),
+            )
+        };
+
+        let mut message =
+            Message::new(source.author, "刚刚", source.text.clone(), palette::accent())
+                .forwarded(origin);
+        message.color = source.color;
+        message.attachment = source.attachment.clone();
+        message.sticker = source.sticker;
+
+        let same_session = match self.view_mode {
+            ViewMode::DirectMessage => {
+                target.is_dm && self.active_dm.as_deref() == Some(target.channel.as_str())
+            }
+            ViewMode::Server => {
+                !target.is_dm
+                    && self.active_server_ref().name == target.server
+                    && self.active_channel == target.channel
+            }
+            ViewMode::Friends | ViewMode::Discover => false,
+        };
+        let label = target.label();
+
+        if target.is_dm {
+            self.dm_messages
+                .entry(target.channel.clone())
+                .or_default()
+                .push(message);
+            if let Some(conversation) = self
+                .dm_conversations
+                .iter_mut()
+                .find(|c| c.friend == target.channel)
+            {
+                conversation.preview = "转发了一条消息";
+            }
+        } else {
+            let key = format!("{}/{}", target.server, target.channel);
+            self.messages.entry(key).or_default().push(message);
+        }
+
+        self.forward_notice = Some(format!("已转发到 {label}"));
+        self.close_forward();
+        if same_session {
+            self.scroll_handle.scroll_to_bottom();
+        }
+        cx.notify();
+    }
+
+    /// 点击转发消息的来源标签：跳回原频道/私信。
+    pub(crate) fn jump_to_origin(
+        &mut self,
+        origin: ForwardOrigin,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.forward_notice = None;
+        if origin.is_dm {
+            self.open_dm(origin.channel, window, cx);
+            return;
+        }
+        let index = origin
+            .server
+            .as_deref()
+            .and_then(|name| self.servers.iter().position(|s| s.name == name));
+        if let Some(index) = index {
+            self.view_mode = ViewMode::Server;
+            self.active_server = index;
+            self.active_channel = origin.channel;
+            self.reset_session(window, cx);
+        }
+    }
+
+    /// 关闭转发成功提示条。
+    pub(crate) fn dismiss_forward_notice(&mut self, cx: &mut Context<Self>) {
+        self.forward_notice = None;
+        cx.notify();
+    }
+
     /// 打开/关闭置顶消息面板。
     pub(crate) fn toggle_pins(&mut self) {
         self.show_pins = !self.show_pins;
@@ -1910,7 +2244,7 @@ impl DiscordApp {
             self.show_inbox = false;
         }
         self.profile_target = None;
-        self.menu_message = None;
+        self.close_message_menu();
     }
 
     /// 当前会话中所有置顶消息。
@@ -1974,7 +2308,7 @@ impl DiscordApp {
             input.focus(window, cx);
         });
         self.editing_message = Some(index);
-        self.menu_message = None;
+        self.close_message_menu();
         cx.notify();
     }
 
@@ -2042,7 +2376,7 @@ impl DiscordApp {
         }
         self.friend_requests.push(FriendRequest {
             name: raw,
-            color: palette::ACCENT,
+            color: palette::accent(),
             incoming: false,
         });
         self.add_friend_input
@@ -2192,7 +2526,7 @@ impl DiscordApp {
             anchor: MenuAnchor::Point(x, y),
         });
         self.profile_target = None;
-        self.menu_message = None;
+        self.close_message_menu();
         self.channel_menu = None;
         self.category_menu = None;
         self.show_pins = false;
@@ -2314,10 +2648,11 @@ impl DiscordApp {
         self.show_inbox = false;
         self.show_status_menu = false;
         self.show_attachment_picker = false;
+        self.close_sticker_picker();
         self.emoji_picker_open = false;
         self.emoji_target = None;
         self.profile_target = None;
-        self.menu_message = None;
+        self.close_message_menu();
         self.channel_menu = None;
         self.category_menu = None;
         self.member_menu = None;
@@ -2458,11 +2793,12 @@ impl DiscordApp {
         self.discover_search
             .update(cx, |input, cx| input.set_value("", window, cx));
         self.profile_target = None;
-        self.menu_message = None;
+        self.close_message_menu();
         self.show_pins = false;
         self.show_inbox = false;
         self.show_status_menu = false;
         self.show_attachment_picker = false;
+        self.close_sticker_picker();
         self.emoji_picker_open = false;
         self.emoji_target = None;
         self.channel_menu = None;
@@ -2539,11 +2875,12 @@ impl DiscordApp {
         self.category_menu = None;
         self.member_menu = None;
         self.profile_target = None;
-        self.menu_message = None;
+        self.close_message_menu();
         self.show_pins = false;
         self.show_inbox = false;
         self.show_status_menu = false;
         self.show_attachment_picker = false;
+        self.close_sticker_picker();
         self.emoji_picker_open = false;
         self.emoji_target = None;
         self.show_invite = false;
@@ -2660,7 +2997,7 @@ impl DiscordApp {
         self.show_search_center = false;
         self.show_status_menu = false;
         self.profile_target = None;
-        self.menu_message = None;
+        self.close_message_menu();
         self.emoji_picker_open = false;
         self.emoji_target = None;
         self.show_pins = false;
@@ -2674,6 +3011,7 @@ impl DiscordApp {
         self.close_category_rename();
         self.close_create_category();
         self.show_attachment_picker = false;
+        self.close_sticker_picker();
     }
 
     /// 关闭设置页返回主界面。
@@ -2686,8 +3024,35 @@ impl DiscordApp {
         self.settings_section = section;
     }
 
-    pub(crate) fn set_theme(&mut self, theme: ThemeChoice) {
+    /// 切换主题：同时改自定义色板与 gpui-component 的组件主题（输入框等控件读后者）。
+    /// 色板是原子量，`cx.notify()` 后整棵树会用新颜色重建。
+    pub(crate) fn set_theme(
+        &mut self,
+        theme: ThemeChoice,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.theme_choice = theme;
+        let light = match theme {
+            ThemeChoice::Light => true,
+            ThemeChoice::Dark => false,
+            ThemeChoice::System => Self::window_is_light(window),
+        };
+        palette::set_light(light);
+        Theme::change(
+            if light { ThemeMode::Light } else { ThemeMode::Dark },
+            Some(window),
+            cx,
+        );
+        cx.notify();
+    }
+
+    /// 读窗口当前外观：浅色 / 浅色增强都按浅色处理。
+    fn window_is_light(window: &Window) -> bool {
+        matches!(
+            window.appearance(),
+            WindowAppearance::Light | WindowAppearance::VibrantLight
+        )
     }
 
     pub(crate) fn toggle_compact_messages(&mut self) {
@@ -2721,6 +3086,7 @@ impl DiscordApp {
     /// 把设置项恢复为初始值。
     pub(crate) fn reset_settings(&mut self) {
         self.theme_choice = ThemeChoice::Dark;
+        palette::set_light(false);
         self.compact_messages = false;
         self.show_timestamps = true;
         self.notification_sound = true;
@@ -2776,8 +3142,8 @@ impl DiscordApp {
                 .size_full()
                 .relative()
                 .flex()
-                .bg(rgb(palette::BG_CHAT))
-                .text_color(rgb(palette::TEXT_MESSAGE))
+                .bg(rgb(palette::bg_chat()))
+                .text_color(rgb(palette::text_message()))
                 .text_size(px(14.))
                 .child(server_rail::render(self, cx))
                 .child(discover::render(self, cx))
@@ -2809,7 +3175,7 @@ impl DiscordApp {
                     .flex_1()
                     .min_w_0()
                     .h_full()
-                    .bg(rgb(palette::BG_CHAT))
+                    .bg(rgb(palette::bg_chat()))
                     .child(chat::header::render(self, cx))
                     .child(chat::messages::render(self, cx))
                     .child(chat::composer::render(self, cx))
@@ -2821,8 +3187,8 @@ impl DiscordApp {
             .size_full()
             .relative()
             .flex()
-            .bg(rgb(palette::BG_CHAT))
-            .text_color(rgb(palette::TEXT_MESSAGE))
+            .bg(rgb(palette::bg_chat()))
+            .text_color(rgb(palette::text_message()))
             .text_size(px(14.))
             .child(server_rail::render(self, cx))
             .child(side)
@@ -2839,6 +3205,9 @@ impl DiscordApp {
             })
             .when(self.member_menu.is_some(), |el| {
                 el.child(member_menu::render(self, cx))
+            })
+            .when(self.menu_message_point.is_some(), |el| {
+                el.child(chat::message_menu::render_floating(self, cx))
             })
             .when(self.channel_menu.is_some(), |el| {
                 el.child(channel_menu::render(self, cx))
@@ -2866,6 +3235,9 @@ impl DiscordApp {
             })
             .when(self.show_create_channel, |el| {
                 el.child(create_dialog::render_channel(self, cx))
+            })
+            .when(self.show_forward, |el| {
+                el.child(chat::forward_dialog::render(self, cx))
             })
             .when(self.show_voice_room && self.voice_channel.is_some(), |el| {
                 el.child(voice_room::render(self, cx))

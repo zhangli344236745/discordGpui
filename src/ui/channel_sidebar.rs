@@ -22,23 +22,23 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
         .px_4()
         .gap_1()
         .border_b_1()
-        .border_color(rgb(palette::BG_SIDEBAR_BORDER))
-        .hover(|el| el.bg(rgb(palette::BG_CHANNEL_HOVER)))
+        .border_color(rgb(palette::bg_sidebar_border()))
+        .hover(|el| el.bg(rgb(palette::bg_channel_hover())))
         .child(
             div()
                 .flex_1()
                 .truncate()
                 .text_size(px(15.))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(palette::TEXT_PRIMARY))
+                .text_color(rgb(palette::text_primary()))
                 .child(server_name.clone()),
         )
         .when(muted, |el| {
             el.child(
-                ico(IconName::BellOff, Size::XSmall).text_color(rgb(palette::TEXT_DIM)),
+                ico(IconName::BellOff, Size::XSmall).text_color(rgb(palette::text_dim())),
             )
         })
-        .child(ico(IconName::ChevronDown, Size::Small).text_color(rgb(palette::TEXT_PRIMARY)))
+        .child(ico(IconName::ChevronDown, Size::Small).text_color(rgb(palette::text_primary())))
         .id("sidebar-server-menu")
         .on_click(cx.listener(|this, _, _, cx| this.toggle_server_menu(cx)));
 
@@ -62,8 +62,8 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                     .h(px(24.))
                     .px_4()
                     .gap_1()
-                    .text_color(rgb(palette::TEXT_MUTED))
-                    .hover(|el| el.text_color(rgb(palette::TEXT_PRIMARY)))
+                    .text_color(rgb(palette::text_muted()))
+                    .hover(|el| el.text_color(rgb(palette::text_primary())))
                     .child(ico(
                         if is_collapsed {
                             IconName::ChevronRight
@@ -88,10 +88,10 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                             .items_center()
                             .justify_center()
                             .rounded(px(4.))
-                            .text_color(rgb(palette::TEXT_MUTED))
+                            .text_color(rgb(palette::text_muted()))
                             .hover(|el| {
-                                el.bg(rgb(palette::BG_CHANNEL_HOVER))
-                                    .text_color(rgb(palette::TEXT_PRIMARY))
+                                el.bg(rgb(palette::bg_channel_hover()))
+                                    .text_color(rgb(palette::text_primary()))
                             })
                             .child(ico(IconName::Plus, Size::XSmall))
                             .id(format!("sidebar-create-channel-{category_id}"))
@@ -152,18 +152,18 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                     .gap_1()
                     .rounded(px(4.))
                     .bg(if selected {
-                        rgb(palette::BG_CHANNEL_SELECTED)
+                        rgb(palette::bg_channel_selected())
                     } else {
-                        rgb(palette::BG_SIDEBAR)
+                        rgb(palette::bg_sidebar())
                     })
                     .text_color(if selected || unread > 0 {
-                        rgb(palette::TEXT_PRIMARY)
+                        rgb(palette::text_primary())
                     } else {
-                        rgb(palette::TEXT_MUTED)
+                        rgb(palette::text_muted())
                     })
                     .hover(|el| {
-                        el.bg(rgb(palette::BG_CHANNEL_HOVER))
-                            .text_color(rgb(palette::TEXT_MESSAGE))
+                        el.bg(rgb(palette::bg_channel_hover()))
+                            .text_color(rgb(palette::text_message()))
                     })
                     .child(ico(icon, Size::Small))
                     .child(
@@ -210,7 +210,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
         .w(px(240.))
         .h_full()
         .flex_shrink_0()
-        .bg(rgb(palette::BG_SIDEBAR))
+        .bg(rgb(palette::bg_sidebar()))
         .child(header)
         .child(channels)
         .child(user_footer::render(app, cx))

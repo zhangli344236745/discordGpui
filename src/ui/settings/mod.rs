@@ -38,8 +38,8 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
 
     h_flex()
         .size_full()
-        .bg(rgb(palette::BG_CHAT))
-        .text_color(rgb(palette::TEXT_MESSAGE))
+        .bg(rgb(palette::bg_chat()))
+        .text_color(rgb(palette::text_message()))
         .text_size(px(14.))
         .child(sidebar::render(app, cx))
         .child(
@@ -56,12 +56,12 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                         .items_center()
                         .justify_between()
                         .border_b_1()
-                        .border_color(rgb(palette::BG_HEADER_BORDER))
+                        .border_color(rgb(palette::bg_header_border()))
                         .child(
                             div()
                                 .text_size(px(16.))
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(palette::TEXT_PRIMARY))
+                                .text_color(rgb(palette::text_primary()))
                                 .child(title),
                         )
                         .child(
@@ -72,10 +72,10 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                                 .items_center()
                                 .justify_center()
                                 .rounded(px(4.))
-                                .text_color(rgb(palette::TEXT_SECONDARY))
+                                .text_color(rgb(palette::text_secondary()))
                                 .hover(|el| {
-                                    el.bg(rgb(palette::BG_TOOLBAR_HOVER))
-                                        .text_color(rgb(palette::TEXT_PRIMARY))
+                                    el.bg(rgb(palette::bg_toolbar_hover()))
+                                        .text_color(rgb(palette::text_primary()))
                                 })
                                 .child(ico(IconName::X, Size::Small))
                                 .id("settings-close")

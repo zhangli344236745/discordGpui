@@ -1,3 +1,6 @@
+//! 消息操作菜单：省略号按钮打开时贴在消息行内，右键消息时跟随光标浮在根层级。
+//! 两个入口共用同一份操作项（回应 / 回复 / 编辑 / 置顶 / 复制 / 删除）。
+
 use gpui_kit::*;
 
 use crate::app::DiscordApp;
@@ -8,118 +11,187 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::{v_flex, Size};
 use gpui_kit::prelude::FluentBuilder as _;
 
-/// 消息操作菜单：绝对定位在触发消息附近，提供置顶/复制/删除。
-pub fn render(index: usize, app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElement {
+/// 菜单项：图标 + 文案 + 唯一 id + 点击行为。
+fn menu_row(
+    icon: IconName,
+    label: impl Into<SharedString>,
+    id: String,
+    danger: bool,
+    cx: &mut Context<DiscordApp>,
+    handler: impl Fn(&mut DiscordApp, &mut Window, &mut Context<DiscordApp>) + 'static,
+) -> impl IntoElement {
+    div()
+        .h(px(30.))
+        .px_2()
+        .flex()
+        .items_center()
+        .gap_2()
+        .rounded(px(4.))
+        .text_size(px(13.))
+        .text_color(if danger {
+            rgb(palette::danger())
+        } else {
+            rgb(palette::text_secondary())
+        })
+        .hover(move |el| {
+            el.bg(rgb(palette::bg_channel_hover()))
+                .text_color(if danger {
+                    rgb(palette::danger())
+                } else {
+                    rgb(palette::text_primary())
+                })
+        })
+        .child(ico(icon, Size::XSmall))
+        .child(label.into())
+        .id(id)
+        .on_click(cx.listener(move |this, _, window, cx| handler(this, window, cx)))
+}
+
+/// 操作项集合；`index` 是当前会话里的消息下标。
+fn menu_items(index: usize, app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElement {
     let pinned = app
         .current_messages()
         .get(index)
         .map(|m| m.pinned)
         .unwrap_or(false);
+    let author = app
+        .current_messages()
+        .get(index)
+        .map(|m| m.author)
+        .unwrap_or("");
 
-    let pin_id = format!("msg-menu-pin-{index}");
-    let copy_id = format!("msg-menu-copy-{index}");
-    let delete_id = format!("msg-menu-delete-{index}");
+    v_flex()
+        .gap(px(2.))
+        .child(menu_row(
+            IconName::FaceSlightlySmiling,
+            "添加回应",
+            format!("msg-menu-react-{index}"),
+            false,
+            cx,
+            move |this, _, cx| {
+                this.toggle_emoji_picker(Some(index));
+                this.close_message_menu();
+                cx.notify();
+            },
+        ))
+        .child(menu_row(
+            IconName::Reply,
+            "回复",
+            format!("msg-menu-reply-{index}"),
+            false,
+            cx,
+            move |this, _, cx| {
+                this.toggle_reply(author);
+                this.close_message_menu();
+                cx.notify();
+            },
+        ))
+        .child(menu_row(
+            IconName::Forward,
+            "转发消息",
+            format!("msg-menu-forward-{index}"),
+            false,
+            cx,
+            move |this, window, cx| this.open_forward(index, window, cx),
+        ))
+        .child(div().h(px(1.)).my(px(2.)).bg(rgb(palette::bg_divider())))
+        .when(app.is_mine(index), |el| {
+            el.child(menu_row(
+                IconName::SquarePen,
+                "编辑消息",
+                format!("msg-menu-edit-{index}"),
+                false,
+                cx,
+                move |this, window, cx| this.start_edit(index, window, cx),
+            ))
+        })
+        .child(menu_row(
+            if pinned {
+                IconName::PinOff
+            } else {
+                IconName::Pin
+            },
+            if pinned { "取消置顶" } else { "置顶消息" },
+            format!("msg-menu-pin-{index}"),
+            false,
+            cx,
+            move |this, _, cx| this.toggle_pin(index, cx),
+        ))
+        .child(menu_row(
+            IconName::Copy,
+            "复制文本",
+            format!("msg-menu-copy-{index}"),
+            false,
+            cx,
+            move |this, _, cx| this.copy_message(index, cx),
+        ))
+        .child(div().h(px(1.)).my(px(2.)).bg(rgb(palette::bg_divider())))
+        .child(menu_row(
+            IconName::Trash,
+            "删除消息",
+            format!("msg-menu-delete-{index}"),
+            true,
+            cx,
+            move |this, _, cx| this.delete_message(index, cx),
+        ))
+}
 
-    let edit_id = format!("msg-menu-edit-{index}");
-
+/// 行内菜单：由消息工具栏的省略号按钮触发，贴在消息右上角。
+pub fn render(index: usize, app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElement {
     v_flex()
         .absolute()
         .right(px(12.))
         .top(px(8.))
-        .w(px(160.))
+        .w(px(176.))
         .p_1()
-        .gap(px(2.))
         .rounded(px(6.))
-        .bg(rgb(palette::BG_FOOTER))
+        .bg(rgb(palette::bg_footer()))
         .border_1()
-        .border_color(rgb(palette::BORDER_DEFAULT))
+        .border_color(rgb(palette::border_default()))
         .shadow_lg()
-        .when(app.is_mine(index), |el| {
-            el.child(
-                div()
-                    .h(px(30.))
-                    .px_2()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .rounded(px(4.))
-                    .text_size(px(13.))
-                    .text_color(rgb(palette::TEXT_SECONDARY))
-                    .hover(|el| {
-                        el.bg(rgb(palette::BG_CHANNEL_HOVER))
-                            .text_color(rgb(palette::TEXT_PRIMARY))
-                    })
-                    .child(ico(IconName::SquarePen, Size::XSmall))
-                    .child("编辑消息")
-                    .id(edit_id)
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.start_edit(index, window, cx);
-                    })),
-            )
-        })
-        .child(
-            div()
-                .h(px(30.))
-                .px_2()
-                .flex()
-                .items_center()
-                .gap_2()
-                .rounded(px(4.))
-                .text_size(px(13.))
-                .text_color(rgb(palette::TEXT_SECONDARY))
-                .hover(|el| {
-                    el.bg(rgb(palette::BG_CHANNEL_HOVER))
-                        .text_color(rgb(palette::TEXT_PRIMARY))
-                })
-                .child(ico(
-                    if pinned {
-                        IconName::PinOff
-                    } else {
-                        IconName::Pin
-                    },
-                    Size::XSmall,
-                ))
-                .child(if pinned { "取消置顶" } else { "置顶消息" })
-                .id(pin_id)
-                .on_click(cx.listener(move |this, _, _, cx| this.toggle_pin(index, cx))),
+        .child(menu_items(index, app, cx))
+}
+
+/// 光标浮层：右键消息触发，带透明遮罩，点外部或再次右键即关闭。
+pub fn render_floating(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
+    let (Some(index), Some((x, y))) = (app.menu_message, app.menu_message_point) else {
+        return div().into_any_element();
+    };
+
+    // 靠近窗口右/下边缘时往回收，避免菜单被裁掉。
+    let left = (x - 8.).min(1264.);
+    let top = (y - 8.).min(768.);
+
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .id("msg-menu-backdrop")
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.close_message_menu();
+            cx.notify();
+        }))
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener(|this, _, _, cx| {
+                this.close_message_menu();
+                cx.notify();
+            }),
         )
         .child(
-            div()
-                .h(px(30.))
-                .px_2()
-                .flex()
-                .items_center()
-                .gap_2()
-                .rounded(px(4.))
-                .text_size(px(13.))
-                .text_color(rgb(palette::TEXT_SECONDARY))
-                .hover(|el| {
-                    el.bg(rgb(palette::BG_CHANNEL_HOVER))
-                        .text_color(rgb(palette::TEXT_PRIMARY))
-                })
-                .child(ico(IconName::Copy, Size::XSmall))
-                .child("复制文本")
-                .id(copy_id)
-                .on_click(cx.listener(move |this, _, _, cx| this.copy_message(index, cx))),
+            v_flex()
+                .absolute()
+                .left(px(left))
+                .top(px(top))
+                .w(px(176.))
+                .p_1()
+                .rounded(px(6.))
+                .bg(rgb(palette::bg_footer()))
+                .border_1()
+                .border_color(rgb(palette::border_default()))
+                .shadow_lg()
+                .child(menu_items(index, app, cx)),
         )
-        .child(div().h(px(1.)).my(px(2.)).bg(rgb(palette::BG_DIVIDER)))
-        .child(
-            div()
-                .h(px(30.))
-                .px_2()
-                .flex()
-                .items_center()
-                .gap_2()
-                .rounded(px(4.))
-                .text_size(px(13.))
-                .text_color(rgb(palette::DANGER))
-                .hover(|el| {
-                    el.bg(rgb(palette::BG_CHANNEL_HOVER))
-                        .text_color(rgb(palette::DANGER))
-                })
-                .child(ico(IconName::Trash, Size::XSmall))
-                .child("删除消息")
-                .id(delete_id)
-                .on_click(cx.listener(move |this, _, _, cx| this.delete_message(index, cx))),
-        )
+        .into_any_element()
 }

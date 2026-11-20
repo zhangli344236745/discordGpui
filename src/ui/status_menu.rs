@@ -26,9 +26,9 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
         .p_1()
         .gap(px(2.))
         .rounded(px(8.))
-        .bg(rgb(palette::BG_FOOTER))
+        .bg(rgb(palette::bg_footer()))
         .border_1()
-        .border_color(rgb(palette::BORDER_DEFAULT))
+        .border_color(rgb(palette::border_default()))
         .shadow_lg();
 
     for (status, icon) in STATUSES {
@@ -47,17 +47,17 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                 .gap_2()
                 .rounded(px(4.))
                 .bg(if active {
-                    rgb(palette::BG_CHANNEL_SELECTED)
+                    rgb(palette::bg_channel_selected())
                 } else {
-                    rgb(palette::BG_FOOTER)
+                    rgb(palette::bg_footer())
                 })
                 .text_size(px(13.))
                 .text_color(if active {
-                    rgb(palette::TEXT_PRIMARY)
+                    rgb(palette::text_primary())
                 } else {
-                    rgb(palette::TEXT_SECONDARY)
+                    rgb(palette::text_secondary())
                 })
-                .hover(|el| el.bg(rgb(palette::BG_CHANNEL_HOVER)))
+                .hover(|el| el.bg(rgb(palette::bg_channel_hover())))
                 .child(ico(*icon, Size::Small).text_color(rgb(color)))
                 .child(label)
                 .when(active, |el| {

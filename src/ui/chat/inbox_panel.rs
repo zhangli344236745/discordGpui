@@ -40,17 +40,17 @@ fn notification_row(
         .gap_3()
         .rounded(px(6.))
         .bg(if unread {
-            rgb(palette::BG_RAIL)
+            rgb(palette::bg_rail())
         } else {
-            rgb(palette::BG_SIDEBAR)
+            rgb(palette::bg_sidebar())
         })
         .border_1()
         .border_color(if unread {
-            rgb(palette::BORDER_DEFAULT)
+            rgb(palette::border_default())
         } else {
-            rgb(palette::BG_DIVIDER)
+            rgb(palette::bg_divider())
         })
-        .hover(|el| el.bg(rgb(palette::BG_CHANNEL_HOVER)))
+        .hover(|el| el.bg(rgb(palette::bg_channel_hover())))
         .id(format!("inbox-item-{index}"))
         .on_click(cx.listener(move |this, _, window, cx| {
             this.open_notification(index, window, cx);
@@ -73,13 +73,13 @@ fn notification_row(
                                 .text_color(rgb(notification.color))
                                 .child(kind_label),
                         )
-                        .child(ico(icon, Size::XSmall).text_color(rgb(palette::TEXT_DIM)))
+                        .child(ico(icon, Size::XSmall).text_color(rgb(palette::text_dim())))
                         .child(
                             div()
                                 .flex_1()
                                 .text_right()
                                 .text_size(px(10.))
-                                .text_color(rgb(palette::TEXT_DIM))
+                                .text_color(rgb(palette::text_dim()))
                                 .child(notification.time),
                         ),
                 )
@@ -93,9 +93,9 @@ fn notification_row(
                             FontWeight::MEDIUM
                         })
                         .text_color(if unread {
-                            rgb(palette::TEXT_PRIMARY)
+                            rgb(palette::text_primary())
                         } else {
-                            rgb(palette::TEXT_SECONDARY)
+                            rgb(palette::text_secondary())
                         })
                         .child(notification.title.clone()),
                 )
@@ -103,7 +103,7 @@ fn notification_row(
                     div()
                         .text_size(px(11.))
                         .line_height(px(16.))
-                        .text_color(rgb(palette::TEXT_DIM))
+                        .text_color(rgb(palette::text_dim()))
                         .child(notification.body.clone()),
                 ),
         )
@@ -114,7 +114,7 @@ fn notification_row(
                     .h(px(8.))
                     .mt_1()
                     .rounded_full()
-                    .bg(rgb(palette::DANGER)),
+                    .bg(rgb(palette::danger())),
             )
         })
 }
@@ -131,7 +131,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
         .items_center()
         .justify_between()
         .border_b_1()
-        .border_color(rgb(palette::BG_HEADER_BORDER))
+        .border_color(rgb(palette::bg_header_border()))
         .child(
             v_flex()
                 .gap_0()
@@ -139,13 +139,13 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                     div()
                         .text_size(px(15.))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(palette::TEXT_PRIMARY))
+                        .text_color(rgb(palette::text_primary()))
                         .child("收件箱"),
                 )
                 .child(
                     div()
                         .text_size(px(10.))
-                        .text_color(rgb(palette::TEXT_DIM))
+                        .text_color(rgb(palette::text_dim()))
                         .child(format!("{} 未读", unread_count)),
                 ),
         )
@@ -159,10 +159,10 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                         .py_1()
                         .rounded(px(4.))
                         .text_size(px(11.))
-                        .text_color(rgb(palette::TEXT_SECONDARY))
+                        .text_color(rgb(palette::text_secondary()))
                         .hover(|el| {
-                            el.bg(rgb(palette::BG_CHANNEL_HOVER))
-                                .text_color(rgb(palette::TEXT_PRIMARY))
+                            el.bg(rgb(palette::bg_channel_hover()))
+                                .text_color(rgb(palette::text_primary()))
                         })
                         .child("全部已读")
                         .id("inbox-mark-all")
@@ -178,10 +178,10 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                         .items_center()
                         .justify_center()
                         .rounded(px(4.))
-                        .text_color(rgb(palette::TEXT_SECONDARY))
+                        .text_color(rgb(palette::text_secondary()))
                         .hover(|el| {
-                            el.bg(rgb(palette::BG_TOOLBAR_HOVER))
-                                .text_color(rgb(palette::TEXT_PRIMARY))
+                            el.bg(rgb(palette::bg_toolbar_hover()))
+                                .text_color(rgb(palette::text_primary()))
                         })
                         .child(ico(IconName::X, Size::Small))
                         .id("inbox-close")
@@ -206,7 +206,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                 .items_center()
                 .justify_center()
                 .gap_3()
-                .text_color(rgb(palette::TEXT_MUTED))
+                .text_color(rgb(palette::text_muted()))
                 .child(ico(IconName::Inbox, Size::Large))
                 .child(
                     div()
@@ -234,9 +234,9 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
         .w(px(360.))
         .flex()
         .flex_col()
-        .bg(rgb(palette::BG_SIDEBAR))
+        .bg(rgb(palette::bg_sidebar()))
         .border_l_1()
-        .border_color(rgb(palette::BORDER_DEFAULT))
+        .border_color(rgb(palette::border_default()))
         .shadow_lg()
         .child(header)
         .child(body)

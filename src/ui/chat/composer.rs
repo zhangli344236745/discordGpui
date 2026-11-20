@@ -5,7 +5,7 @@ use crate::data::Attachment;
 use crate::ui::theme::palette;
 use crate::ui::{
     avatar,
-    chat::{attachment_picker, emoji_picker},
+    chat::{attachment_picker, emoji_picker, sticker_picker},
     ico,
 };
 
@@ -24,9 +24,9 @@ fn attachment_chip(attachment: &Attachment, cx: &mut Context<DiscordApp>) -> imp
         .gap_2()
         .p_2()
         .rounded(px(8.))
-        .bg(rgb(palette::BG_SIDEBAR))
+        .bg(rgb(palette::bg_sidebar()))
         .border_1()
-        .border_color(rgb(palette::BORDER_DEFAULT))
+        .border_color(rgb(palette::border_default()))
         .child(
             div()
                 .w(px(32.))
@@ -35,11 +35,11 @@ fn attachment_chip(attachment: &Attachment, cx: &mut Context<DiscordApp>) -> imp
                 .items_center()
                 .justify_center()
                 .rounded(px(6.))
-                .bg(rgb(palette::BG_COMPOSER))
+                .bg(rgb(palette::bg_composer()))
                 .text_color(if is_image {
-                    rgb(palette::ACCENT)
+                    rgb(palette::accent())
                 } else {
-                    rgb(palette::TEXT_SECONDARY)
+                    rgb(palette::text_secondary())
                 })
                 .child(ico(
                     if is_image {
@@ -59,13 +59,13 @@ fn attachment_chip(attachment: &Attachment, cx: &mut Context<DiscordApp>) -> imp
                     div()
                         .truncate()
                         .text_size(px(12.5))
-                        .text_color(rgb(palette::TEXT_PRIMARY))
+                        .text_color(rgb(palette::text_primary()))
                         .child(name),
                 )
                 .child(
                     div()
                         .text_size(px(11.))
-                        .text_color(rgb(palette::TEXT_DIM))
+                        .text_color(rgb(palette::text_dim()))
                         .child(format!("{size} · 待发送")),
                 ),
         )
@@ -77,10 +77,10 @@ fn attachment_chip(attachment: &Attachment, cx: &mut Context<DiscordApp>) -> imp
                 .items_center()
                 .justify_center()
                 .rounded(px(4.))
-                .text_color(rgb(palette::TEXT_SECONDARY))
+                .text_color(rgb(palette::text_secondary()))
                 .hover(|el| {
-                    el.bg(rgb(palette::BG_TOOLBAR_HOVER))
-                        .text_color(rgb(palette::TEXT_PRIMARY))
+                    el.bg(rgb(palette::bg_toolbar_hover()))
+                        .text_color(rgb(palette::text_primary()))
                 })
                 .child(ico(IconName::X, Size::XSmall))
                 .id("composer-clear-attachment")
@@ -103,7 +103,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
         h_flex()
             .min_h(px(44.))
             .rounded(px(8.))
-            .bg(rgb(palette::BG_COMPOSER))
+            .bg(rgb(palette::bg_composer()))
             .items_center()
             .px_2()
             .gap_2()
@@ -116,12 +116,12 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                     .justify_center()
                     .rounded_full()
                     .bg(if app.show_attachment_picker {
-                        rgb(palette::TEXT_PRIMARY)
+                        rgb(palette::text_primary())
                     } else {
-                        rgb(palette::TEXT_SECONDARY)
+                        rgb(palette::text_secondary())
                     })
-                    .hover(|el| el.bg(rgb(palette::TEXT_PRIMARY)))
-                    .text_color(rgb(palette::BG_COMPOSER))
+                    .hover(|el| el.bg(rgb(palette::text_primary())))
+                    .text_color(rgb(palette::bg_composer()))
                     .child(ico(IconName::Plus, Size::XSmall))
                     .id("composer-attach")
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -129,8 +129,47 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                     })),
             )
             .child(<Input as Sizable>::with_size(Input::new(&app.composer), Size::Large).flex_1())
-            .child(ico(IconName::Gift, Size::Small).text_color(rgb(palette::TEXT_SECONDARY)))
-            .child(ico(IconName::Sticker, Size::Small).text_color(rgb(palette::TEXT_SECONDARY)))
+            // 礼物按钮直达「礼物」贴纸包，贴纸按钮打开当前包。
+            .child(
+                div()
+                    .w(px(26.))
+                    .h(px(26.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(4.))
+                    .text_color(if app.show_sticker_picker && app.sticker_pack == "礼物" {
+                        rgb(palette::accent())
+                    } else {
+                        rgb(palette::text_secondary())
+                    })
+                    .hover(|el| el.bg(rgb(palette::bg_toolbar_hover())))
+                    .child(ico(IconName::Gift, Size::Small))
+                    .id("composer-gift")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.toggle_sticker_picker(Some("礼物"), cx);
+                    })),
+            )
+            .child(
+                div()
+                    .w(px(26.))
+                    .h(px(26.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(4.))
+                    .text_color(if app.show_sticker_picker {
+                        rgb(palette::text_primary())
+                    } else {
+                        rgb(palette::text_secondary())
+                    })
+                    .hover(|el| el.bg(rgb(palette::bg_toolbar_hover())))
+                    .child(ico(IconName::Sticker, Size::Small))
+                    .id("composer-sticker")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.toggle_sticker_picker(None, cx);
+                    })),
+            )
             .child(
                 div()
                     .w(px(28.))
@@ -140,11 +179,11 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                     .justify_center()
                     .rounded(px(4.))
                     .text_color(if app.emoji_picker_open && app.emoji_target.is_none() {
-                        rgb(palette::TEXT_PRIMARY)
+                        rgb(palette::text_primary())
                     } else {
-                        rgb(palette::TEXT_SECONDARY)
+                        rgb(palette::text_secondary())
                     })
-                    .hover(|el| el.bg(rgb(palette::BG_TOOLBAR_HOVER)))
+                    .hover(|el| el.bg(rgb(palette::bg_toolbar_hover())))
                     .child(ico(IconName::FaceSlightlySmiling, Size::Small))
                     .id("composer-emoji")
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -160,7 +199,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                     .items_center()
                     .justify_center()
                     .rounded(px(4.))
-                    .bg(rgb(palette::ACCENT))
+                    .bg(rgb(palette::accent()))
                     .text_color(rgb(palette::WHITE))
                     .child(ico(IconName::Send, Size::Small))
                     .id("composer-send")
@@ -177,9 +216,9 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                 .px_3()
                 .gap_2()
                 .rounded_t(px(8.))
-                .bg(rgb(palette::BG_SIDEBAR))
+                .bg(rgb(palette::bg_sidebar()))
                 .text_size(px(12.))
-                .text_color(rgb(palette::TEXT_SECONDARY))
+                .text_color(rgb(palette::text_secondary()))
                 .child(
                     div()
                         .child(ico(IconName::Reply, Size::XSmall))
@@ -190,7 +229,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                         .flex_1()
                         .flex()
                         .justify_end()
-                        .hover(|el| el.text_color(rgb(palette::TEXT_PRIMARY)))
+                        .hover(|el| el.text_color(rgb(palette::text_primary())))
                         .child("取消")
                         .id("composer-cancel-reply")
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -209,6 +248,10 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
 
     if app.show_attachment_picker {
         wrapper = wrapper.child(attachment_picker::render(app, cx));
+    }
+
+    if app.show_sticker_picker {
+        wrapper = wrapper.child(sticker_picker::render(app, cx));
     }
 
     if !app.mention_candidates.is_empty() {
@@ -240,7 +283,7 @@ fn mention_overlay(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoE
                 .gap_2()
                 .rounded(px(4.))
                 .items_center()
-                .hover(|el| el.bg(rgb(palette::BG_CHANNEL_HOVER)))
+                .hover(|el| el.bg(rgb(palette::bg_channel_hover())))
                 .id(format!("mention-option-{index}"))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.apply_mention(name, window, cx);
@@ -254,13 +297,13 @@ fn mention_overlay(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoE
                                 .truncate()
                                 .text_size(px(13.))
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(rgb(palette::TEXT_PRIMARY))
+                                .text_color(rgb(palette::text_primary()))
                                 .child(name),
                         )
                         .child(
                             div()
                                 .text_size(px(10.))
-                                .text_color(rgb(palette::TEXT_DIM))
+                                .text_color(rgb(palette::text_dim()))
                                 .child(role),
                         ),
                 ),
@@ -273,9 +316,9 @@ fn mention_overlay(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoE
         .right(px(12.))
         .bottom(px(76.))
         .rounded(px(8.))
-        .bg(rgb(palette::BG_SIDEBAR))
+        .bg(rgb(palette::bg_sidebar()))
         .border_1()
-        .border_color(rgb(palette::BORDER_DEFAULT))
+        .border_color(rgb(palette::border_default()))
         .shadow_lg()
         .child(
             div()
@@ -284,7 +327,7 @@ fn mention_overlay(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoE
                 .pb_1()
                 .text_size(px(10.))
                 .font_weight(FontWeight::BOLD)
-                .text_color(rgb(palette::TEXT_MUTED))
+                .text_color(rgb(palette::text_muted()))
                 .child(if prefix.is_empty() {
                     "选择一个成员".to_string()
                 } else {
