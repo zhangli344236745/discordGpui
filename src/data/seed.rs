@@ -2,7 +2,8 @@ use std::collections::HashMap;
 
 use super::models::{
     Attachment, Category, Channel, ChatThread, DiscoverServer, DmConversation, Friend,
-    FriendRequest, Gif, HelpArticle, Member, Message, ReadReceipt, Server, Sticker, ThreadReply,
+    FriendRequest, Gif, HelpArticle, Member, Message, MyProfile, ReadReceipt, Server, Sticker,
+    ThreadReply,
 };
 
 /// 前端模拟服务器数据。
@@ -784,6 +785,22 @@ pub fn seed_help_articles() -> Vec<HelpArticle> {
             ],
         ),
         HelpArticle::new(
+            "account",
+            "设置",
+            "账户资料与头像",
+            "显示名称、用户名、邮箱与「关于我」都能改，头像颜色点一下就换。",
+            &[
+                "设置 → 账户顶部是资料预览：头像、显示名称、用户名、「关于我」与当前在线状态，改完立刻同步到这里。",
+                "下面依次是显示名称、用户名、邮箱与「关于我」四个输入框。显示名称与用户名必填，留空保存会提示失败；邮箱与简介可以留空。",
+                "头像颜色是 8 个色块，点一下立即生效，不需要点保存。改完点「保存改动」会同步到底部用户栏，「重置」则丢弃这次编辑。",
+            ],
+            &[
+                "显示名称会显示在侧栏底部用户栏与资料预览里",
+                "已经发出的消息不会跟着改名，仍保留当时的署名",
+                "资料只存在内存里，重启应用恢复为 Riven",
+            ],
+        ),
+        HelpArticle::new(
             "shortcuts",
             "设置",
             "快捷键与隐私",
@@ -800,4 +817,15 @@ pub fn seed_help_articles() -> Vec<HelpArticle> {
             ],
         ),
     ]
+}
+
+/// 当前用户的初始资料（账户页可改，重启后恢复这份）。
+pub fn seed_me() -> MyProfile {
+    MyProfile::new(
+        "Riven",
+        "riven#0001",
+        "riven@example.com",
+        "专注界面与交互，喜欢把细节打磨到顺滑。",
+        0x5865f2,
+    )
 }

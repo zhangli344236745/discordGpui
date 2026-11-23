@@ -697,3 +697,40 @@ impl HelpArticle {
             || self.tips.iter().any(|t| t.to_lowercase().contains(query))
     }
 }
+
+/// 当前登录用户（本地演示资料）：账户页可编辑，底部用户栏与资料预览共用。
+#[derive(Clone)]
+pub struct MyProfile {
+    pub display_name: String,
+    pub username: String,
+    pub email: String,
+    pub bio: String,
+    pub color: u32,
+}
+
+impl MyProfile {
+    pub fn new(
+        display_name: impl Into<String>,
+        username: impl Into<String>,
+        email: impl Into<String>,
+        bio: impl Into<String>,
+        color: u32,
+    ) -> Self {
+        Self {
+            display_name: display_name.into(),
+            username: username.into(),
+            email: email.into(),
+            bio: bio.into(),
+            color,
+        }
+    }
+
+    /// 头像上的首字：取显示名第一个字符，空名退化为 'R'。
+    pub fn initial(&self) -> char {
+        self.display_name
+            .chars()
+            .next()
+            .and_then(|c| c.to_uppercase().next())
+            .unwrap_or('R')
+    }
+}

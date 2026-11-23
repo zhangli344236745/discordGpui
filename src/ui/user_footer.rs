@@ -26,8 +26,8 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                 .rounded(px(4.))
                 .hover(|el| el.bg(rgb(palette::bg_toolbar_hover())))
                 .child(avatar_status(
-                    'R',
-                    palette::accent(),
+                    app.me.initial(),
+                    app.me.color,
                     px(32.),
                     Some(app.my_status.color()),
                 ))
@@ -41,7 +41,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                                 .text_size(px(13.))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(rgb(palette::text_primary()))
-                                .child("Riven"),
+                                .child(app.me.display_name.clone()),
                         )
                         .child(
                             div()
@@ -111,8 +111,8 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                 .hover(|el| el.bg(rgb(palette::bg_toolbar_hover())))
                 .child(ico(IconName::Settings, Size::Small))
                 .id("sidebar-open-settings")
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.open_settings();
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.open_settings(window, cx);
                     cx.notify();
                 })),
         )

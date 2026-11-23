@@ -2,13 +2,19 @@
 
 use gpui_kit::*;
 use gpui_kit::assets::IconName;
-use gpui_kit::component::{h_flex, v_flex, Size};
+use gpui_kit::component::input::Input;
+use gpui_kit::component::{h_flex, v_flex, Size, Sizable};
 use gpui_kit::prelude::FluentBuilder as _;
 
 use crate::app::{DiscordApp, SettingsSection, ThemeChoice};
 use crate::ui::{avatar, toggle_row};
 use crate::ui::ico;
 use crate::ui::theme::palette;
+
+/// 可选的头像颜色（与服务器图标色板同一套取值）。
+const AVATAR_COLORS: [u32; 8] = [
+    0x5865f2, 0xeb459e, 0x57f287, 0xfaa61c, 0xf23f43, 0x00a8fc, 0x9b59b6, 0x1abc9c,
+];
 
 /// 分类内容分发。各页面函数统一返回 Div，避免分支类型不一致。
 pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
@@ -118,6 +124,7 @@ fn small_button(
             handler(this, window, cx);
             cx.notify();
         }))
+
 }
 
 /// 音量行：进度条 + 加减按钮，每次调整 5%。
@@ -186,38 +193,146 @@ fn volume_row(
 // 各分类页面
 // ---------------------------------------------------------------------------
 
-fn account(app: &DiscordApp, _cx: &mut Context<DiscordApp>) -> Div {
-    let mut page = shell("账户", "管理你的个人信息与资料展示。");
-    page = page.child(group("个人资料")).child(
-        v_flex()
+fn account(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
+    // 头像颜色：与服务器图标色板同源的一套固定取值。
+    let mut swatches = h_flex().gap_2();
+    for (index, value) in AVATAR_COLORS.iter().enumerate() {
+        let selected = *value == app.me.color;
+        let picked = *value;
+        swatches = swatches.child(
+            div()
+                .w(px(28.))
+                .h(px(28.))
+                .rounded_full()
+                .bg(rgb(picked))
+                .border_2()
+                .border_color(if selected {
+                    rgb(palette::text_primary())
+                } else {
+                    rgb(palette::bg_sidebar())
+                })
+                .hover(|el| el.border_color(rgb(palette::text_secondary())))
+                .id(format!("account-color-{index}"))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.set_avatar_color(picked, cx);
+                })),
+        );
+    }
+
+    let mut page = shell("账户", "管理你的个人信息与资料展示，改动保存后立刻反映到侧栏用户栏。");
+    page = page.child(group("资料预览")).child(
+        h_flex()
             .w_full()
+            .gap(px(16.))
             .items_center()
-            .gap(px(8.))
             .px(px(16.))
-            .py(px(24.))
+            .py(px(20.))
             .rounded(px(8.))
             .bg(rgb(palette::bg_sidebar()))
-            .child(avatar('R', palette::accent(), px(72.), false))
+            .child(avatar(app.me.initial(), app.me.color, px(72.), false))
             .child(
-                div()
-                    .text_size(px(20.))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(rgb(palette::text_primary()))
-                    .child("Riven"),
-            )
-            .child(
-                div()
-                    .text_size(px(12.))
-                    .text_color(rgb(palette::text_muted()))
-                    .child(format!("当前状态：{}", app.my_status.label())),
+                v_flex()
+                    .min_w_0()
+                    .gap(px(3.))
+                    .child(
+                        div()
+                            .text_size(px(20.))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(rgb(palette::text_primary()))
+                            .child(app.me.display_name.clone()),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(rgb(palette::text_muted()))
+                            .child(app.me.username.clone()),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.5))
+                            .text_color(rgb(palette::text_secondary()))
+                            .child(if app.me.bio.is_empty() {
+                                "还没有填写「关于我」".to_string()
+                            } else {
+                                app.me.bio.clone()
+                            }),
+                    )
+                    .child(
+                        h_flex()
+                            .gap(px(6.))
+                            .items_center()
+                            .text_size(px(11.))
+                            .text_color(rgb(palette::text_muted()))
+                            .child(
+                                div()
+                                    .w(px(8.))
+                                    .h(px(8.))
+                                    .rounded_full()
+                                    .bg(rgb(app.my_status.color())),
+                            )
+                            .child(app.my_status.label()),
+                    ),
             ),
     );
+
     page = page
+        .child(group("头像颜色"))
+        .child(swatches)
         .child(group("账户信息"))
-        .child(info_row("用户名", "riven#0001"))
-        .child(info_row("邮箱", "riven@example.com"))
-        .child(info_row("手机号", "已绑定"));
-    page
+        .child(form_field(
+            "显示名称",
+            "显示在消息、用户栏与资料卡上；留空会保存失败",
+            <Input as Sizable>::with_size(Input::new(&app.account_name_input), Size::Small).w_full(),
+        ))
+        .child(form_field(
+            "用户名",
+            "全局唯一，好友可以通过用户名找到你",
+            <Input as Sizable>::with_size(Input::new(&app.account_username_input), Size::Small)
+                .w_full(),
+        ))
+        .child(form_field(
+            "邮箱",
+            "用于登录与通知，不会公开展示",
+            <Input as Sizable>::with_size(Input::new(&app.account_email_input), Size::Small)
+                .w_full(),
+        ))
+        .child(form_field(
+            "关于我",
+            "一句话介绍，显示在资料卡上",
+            <Input as Sizable>::with_size(Input::new(&app.account_bio_input), Size::Small).w_full(),
+        ))
+        .child(info_row("手机号", "已绑定 · 不可修改（演示）"));
+
+    let mut actions = h_flex().w_full().gap_2().items_center();
+    actions = actions.child(action_button(
+        "保存改动",
+        true,
+        "account-save",
+        Box::new(|this, _, cx| this.save_account(cx)),
+        cx,
+    ));
+    actions = actions.child(action_button(
+        "重置",
+        false,
+        "account-reset",
+        Box::new(|this, window, cx| this.reset_account_form(window, cx)),
+        cx,
+    ));
+    if let Some(notice) = app.account_notice {
+        actions = actions.child(
+            div()
+                .text_size(px(12.))
+                .text_color(if notice == "已保存" {
+                    rgb(palette::success())
+                } else {
+                    rgb(palette::text_muted())
+                })
+                .child(notice),
+        );
+    }
+
+    page.child(actions)
+        .child(note_row("资料只保存在内存里，重启应用会恢复初始值。"))
 }
 
 fn privacy(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
@@ -490,4 +605,73 @@ fn language() -> Div {
     }
     page = page.child(note_row("更多语言将在后续版本加入。"));
     page
+}
+
+/// 带标题与说明的输入行。
+fn form_field(label: &'static str, hint: &'static str, input: impl IntoElement) -> Div {
+    v_flex()
+        .w_full()
+        .gap(px(6.))
+        .child(
+            div()
+                .text_size(px(12.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(palette::text_secondary()))
+                .child(label),
+        )
+        .child(
+            div()
+                .w_full()
+                .rounded(px(6.))
+                .bg(rgb(palette::bg_composer()))
+                .child(input),
+        )
+        .child(
+            div()
+                .text_size(px(11.))
+                .text_color(rgb(palette::text_muted()))
+                .child(hint),
+        )
+}
+
+/// 表单动作按钮：主按钮用品牌色。
+fn action_button(
+    label: &'static str,
+    primary: bool,
+    id: &'static str,
+    handler: Box<ClickHandler>,
+    cx: &mut Context<DiscordApp>,
+) -> Stateful<Div> {
+    div()
+        .h(px(34.))
+        .px_4()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(4.))
+        .text_size(px(13.))
+        .font_weight(FontWeight::SEMIBOLD)
+        .bg(rgb(if primary {
+            palette::accent()
+        } else {
+            palette::bg_channel_hover()
+        }))
+        .text_color(rgb(if primary {
+            palette::WHITE
+        } else {
+            palette::text_primary()
+        }))
+        .hover(|el| {
+            el.bg(rgb(if primary {
+                palette::accent_hover()
+            } else {
+                palette::bg_toolbar_hover()
+            }))
+        })
+        .child(label)
+        .id(id)
+        .on_click(cx.listener(move |this, _, window, cx| {
+            handler(this, window, cx);
+            cx.notify();
+        }))
 }

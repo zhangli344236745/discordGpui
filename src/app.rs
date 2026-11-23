@@ -7,11 +7,11 @@ use gpui_kit::prelude::FluentBuilder as _;
 
 use crate::data::{
     seed_discover_servers, seed_dm_conversations, seed_dm_messages, seed_friend_requests,
-    gif_categories, help_categories, seed_friends, seed_gifs, seed_help_articles, seed_members,
-    seed_messages, seed_servers,
+    gif_categories, help_categories, seed_friends, seed_gifs, seed_help_articles, seed_me,
+    seed_members, seed_messages, seed_servers,
     seed_stickers, seed_threads, sticker_packs, Attachment, Category, Channel, ChannelKind,
     ChatThread, DiscoverServer,     DmConversation, EditRevision, ForwardOrigin, ForwardTarget, Friend, FriendRequest,
-    FriendTab, Gif, HelpArticle, Member,
+    FriendTab, Gif, HelpArticle, Member, MyProfile,
     MemberGroup, Message, Notification, NotificationKind, NotificationTarget, Reaction, ReadReceipt,
     ReplyRef, SearchHit, Server, Sticker, ThreadReply, UserStatus, VoiceParticipant,
 };
@@ -201,6 +201,15 @@ pub struct DiscordApp {
 
     pub(crate) my_status: UserStatus,
     pub(crate) show_status_menu: bool,
+
+    // 当前用户资料：账户页可编辑，底部用户栏与设置页预览共用。
+    pub(crate) me: MyProfile,
+    pub(crate) account_name_input: Entity<InputState>,
+    pub(crate) account_username_input: Entity<InputState>,
+    pub(crate) account_email_input: Entity<InputState>,
+    pub(crate) account_bio_input: Entity<InputState>,
+    /// 账户页的保存结果提示（打开设置 / 再次保存时刷新）。
+    pub(crate) account_notice: Option<&'static str>,
     /// 正在编辑的消息索引；编辑输入复用独立 InputState。
     pub(crate) editing_message: Option<usize>,
     pub(crate) editor: Entity<InputState>,
@@ -534,6 +543,14 @@ impl DiscordApp {
         let invite_input = cx.new(|cx| InputState::new(window, cx).placeholder("邀请链接"));
         let category_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("输入分类名称"));
+        let account_name_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("显示名称"));
+        let account_username_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("用户名#0001"));
+        let account_email_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("邮箱地址"));
+        let account_bio_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("一句话介绍自己"));
         let server_name_edit =
             cx.new(|cx| InputState::new(window, cx).placeholder("服务器名称"));
         let server_desc_edit =
@@ -752,6 +769,12 @@ impl DiscordApp {
             voice_channel: None,
             my_status: UserStatus::Online,
             show_status_menu: false,
+            me: seed_me(),
+            account_name_input,
+            account_username_input,
+            account_email_input,
+            account_bio_input,
+            account_notice: None,
             editing_message: None,
             show_settings: false,
             settings_section: SettingsSection::Account,
@@ -4275,8 +4298,9 @@ impl DiscordApp {
 
     // -----------------------------------------------------------------------
 
-    /// 打开设置页（覆盖主界面），同时关闭其他浮层。
-    pub(crate) fn open_settings(&mut self) {
+    /// 打开设置页（覆盖主界面），同时关闭其他浮层并把资料写回账户表单。
+    pub(crate) fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.sync_account_form(window, cx);
         self.show_settings = true;
         self.show_server_settings = false;
         self.show_voice_room = false;
@@ -4305,6 +4329,59 @@ impl DiscordApp {
     /// 关闭设置页返回主界面。
     pub(crate) fn close_settings(&mut self) {
         self.show_settings = false;
+    }
+
+    /// 把 `me` 写回账户表单（打开设置时调用，丢弃上次未保存的编辑）。
+    pub(crate) fn sync_account_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let me = self.me.clone();
+        self.account_name_input
+            .update(cx, |input, cx| input.set_value(me.display_name.clone(), window, cx));
+        self.account_username_input
+            .update(cx, |input, cx| input.set_value(me.username.clone(), window, cx));
+        self.account_email_input
+            .update(cx, |input, cx| input.set_value(me.email.clone(), window, cx));
+        self.account_bio_input
+            .update(cx, |input, cx| input.set_value(me.bio.clone(), window, cx));
+        self.account_notice = None;
+    }
+
+    /// 保存账户改动：显示名与用户名为必填，邮箱、简介允许留空。
+    pub(crate) fn save_account(&mut self, cx: &mut Context<Self>) {
+        let name = self.account_name_input.read(cx).value().trim().to_string();
+        let username = self
+            .account_username_input
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
+        let email = self.account_email_input.read(cx).value().trim().to_string();
+        let bio = self.account_bio_input.read(cx).value().trim().to_string();
+
+        if name.is_empty() || username.is_empty() {
+            self.account_notice = Some("显示名称与用户名不能为空");
+            cx.notify();
+            return;
+        }
+
+        self.me.display_name = name;
+        self.me.username = username;
+        self.me.email = email;
+        self.me.bio = bio;
+        self.account_notice = Some("已保存");
+        cx.notify();
+    }
+
+    /// 放弃未保存的编辑，把表单恢复成当前资料。
+    pub(crate) fn reset_account_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.sync_account_form(window, cx);
+        cx.notify();
+    }
+
+    /// 换头像颜色：立即生效，不需要点保存。
+    pub(crate) fn set_avatar_color(&mut self, color: u32, cx: &mut Context<Self>) {
+        self.me.color = color;
+        self.account_notice = Some("头像颜色已更新");
+        cx.notify();
     }
 
     /// 切换设置页左侧分类。
