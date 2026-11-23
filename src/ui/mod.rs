@@ -5,8 +5,10 @@ pub mod channel_sidebar;
 pub mod chat;
 pub mod create_dialog;
 pub mod discover;
+pub mod dm_call_panel;
 pub mod dm_sidebar;
 pub mod friends;
+pub mod help_center;
 pub mod invite_dialog;
 pub mod member_list;
 pub mod member_menu;
@@ -25,4 +27,7 @@ pub mod voice_status;
 pub mod widgets;
 
 pub use theme::ico;
-pub use widgets::{avatar, avatar_status, unread_badge};
+pub use widgets::{
+    avatar, avatar_status, close_button, danger_icon_button, draft_badge, filter_chip, icon_button,
+    section_label, toggle_row, unread_badge,
+};

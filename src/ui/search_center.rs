@@ -44,51 +44,55 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                 .text_color(rgb(palette::text_dim()))
                 .child("跨频道与私信查找历史消息"),
         )
-        .child(
-            div()
-                .w(px(28.))
-                .h(px(28.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(4.))
-                .text_color(rgb(palette::text_secondary()))
-                .hover(|el| {
-                    el.bg(rgb(palette::bg_toolbar_hover()))
-                        .text_color(rgb(palette::text_primary()))
-                })
-                .child(ico(IconName::X, Size::Small))
-                .id("search-center-close")
-                .on_click(cx.listener(|this, _, _, cx| this.close_search_center(cx))),
-        );
+        .child(crate::ui::close_button(
+            "search-center-close",
+            Box::new(|this, _, cx| this.close_search_center(cx)),
+            cx,
+        ));
 
     // 搜索框 + 范围 chips。
     let mut chips = h_flex().gap_2().flex_wrap();
     for (scope, label) in SCOPES {
         let active = app.search_scope == scope;
-        chips = chips.child(
+        chips = chips.child(crate::ui::filter_chip(
+            label,
+            active,
+            format!("search-scope-{label}"),
+            Box::new(move |this, _, cx| this.set_search_scope(scope, cx)),
+            cx,
+        ));
+    }
+
+    // 已应用的高级过滤条件：点标签即从搜索词里移除该条件并重跑。
+    let mut filter_row = div();
+    let filter_chips = app.search_filters.chips();
+    if !filter_chips.is_empty() {
+        let mut row = h_flex().gap_2().flex_wrap().items_center();
+        row = row.child(
             div()
-                .px_3()
-                .h(px(26.))
-                .flex()
-                .items_center()
-                .rounded_full()
-                .text_size(px(12.))
-                .bg(if active {
-                    rgb(palette::accent())
-                } else {
-                    rgb(palette::bg_sidebar())
-                })
-                .text_color(if active {
-                    rgb(palette::WHITE)
-                } else {
-                    rgb(palette::text_secondary())
-                })
-                .hover(|el| el.bg(rgb(palette::bg_toolbar_hover())))
-                .child(label)
-                .id(format!("search-scope-{label}"))
-                .on_click(cx.listener(move |this, _, _, cx| this.set_search_scope(scope, cx))),
+                .text_size(px(10.5))
+                .text_color(rgb(palette::text_muted()))
+                .child("已应用"),
         );
+        for (index, chip) in filter_chips.iter().enumerate() {
+            let token = chip.clone();
+            row = row.child(
+                div()
+                    .px_2()
+                    .py_0p5()
+                    .rounded(px(4.))
+                    .bg(rgb(palette::bg_channel_hover()))
+                    .text_size(px(10.5))
+                    .text_color(rgb(palette::text_link()))
+                    .hover(|el| el.underline())
+                    .child(chip.clone())
+                    .id(format!("search-filter-{index}"))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.remove_search_filter(&token, window, cx);
+                    })),
+            );
+        }
+        filter_row = row;
     }
 
     let search_bar = v_flex()
@@ -120,7 +124,8 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                     )
                 }),
         )
-        .child(chips);
+        .child(chips)
+        .child(filter_row);
 
     let mut body = v_flex()
         .flex_1()
@@ -159,6 +164,26 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                         .text_size(px(12.5))
                         .text_color(rgb(palette::text_muted()))
                         .child("会同时匹配消息正文与发送者昵称"),
+                )
+                .child(
+                    v_flex()
+                        .mt_1()
+                        .gap_0p5()
+                        .items_center()
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(rgb(palette::text_dim()))
+                                .child("高级过滤：from:作者  has:属性  after:today  before:today"),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(10.5))
+                                .text_color(rgb(palette::text_dim()))
+                                .child(
+                                    "has 可用 image / file / sticker / gif / link / reaction / edited / mention / pinned",
+                                ),
+                        ),
                 ),
         );
     } else if app.search_results.is_empty() {
@@ -179,7 +204,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                     div()
                         .text_size(px(12.))
                         .text_color(rgb(palette::text_dim()))
-                        .child("换个关键词，或把范围切到「全部」再试一次"),
+                        .child("换个关键词、去掉已应用的过滤条件，或把范围切到「全部」"),
                 ),
         );
     } else {
@@ -240,7 +265,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                                     .text_size(px(13.))
                                     .line_height(px(19.))
                                     .text_color(rgb(palette::text_message()))
-                                    .child(highlight(&hit.text, &query)),
+                                    .child(highlight(&hit.text, &app.search_filters.text)),
                             ),
                     )
                     .child(

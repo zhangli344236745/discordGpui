@@ -1,11 +1,30 @@
-use gpui_kit::prelude::FluentBuilder as _;
-use gpui_kit::{div, px, rgb, Div, FontWeight, ParentElement as _, Pixels, Styled as _};
+//! 公共 UI 组件库：各页面复用的原子控件与行组件。
+//! 只负责渲染与事件转发，不持有业务状态；交互回调由调用方传入。
 
+use gpui_kit::*;
+use gpui_kit::assets::IconName;
+use gpui_kit::component::{h_flex, v_flex, Size};
+use gpui_kit::prelude::FluentBuilder as _;
+
+use super::ico;
 use super::theme::palette;
+use crate::app::DiscordApp;
+
+/// 业务点击回调：忽略鼠标事件细节，只把 view / window / cx 交给调用方。
+pub type ClickHandler = dyn Fn(&mut DiscordApp, &mut Window, &mut Context<DiscordApp>) + 'static;
 
 /// 圆形头像，可选在线状态小圆点（默认绿色）。
 pub fn avatar(letter: char, color: u32, size: Pixels, online: bool) -> Div {
-    avatar_status(letter, color, size, if online { Some(palette::online()) } else { None })
+    avatar_status(
+        letter,
+        color,
+        size,
+        if online {
+            Some(palette::online())
+        } else {
+            None
+        },
+    )
 }
 
 /// 圆形头像，状态点颜色可自定义（用于在线/闲置/勿扰/隐身）。
@@ -39,6 +58,18 @@ pub fn avatar_status(letter: char, color: u32, size: Pixels, status_color: Optio
         })
 }
 
+/// 会话草稿标记：侧栏里提示该会话有未发送内容。
+pub fn draft_badge() -> Div {
+    div()
+        .px_1()
+        .rounded(px(3.))
+        .bg(rgb(palette::bg_toolbar_hover()))
+        .text_color(rgb(palette::accent()))
+        .text_size(px(9.))
+        .font_weight(FontWeight::MEDIUM)
+        .child("草稿")
+}
+
 /// 频道未读消息徽标。
 pub fn unread_badge(count: usize) -> Div {
     div()
@@ -54,4 +85,194 @@ pub fn unread_badge(count: usize) -> Div {
         .items_center()
         .justify_center()
         .child(count.to_string())
+}
+
+/// 分组小标题：侧栏 / 设置页通用的加粗小字，padding 交给调用方外层容器。
+pub fn section_label(text: impl Into<SharedString>) -> Div {
+    div()
+        .text_size(px(11.))
+        .font_weight(FontWeight::BOLD)
+        .text_color(rgb(palette::text_muted()))
+        .child(text.into())
+}
+
+/// 幽灵图标按钮：24×24 / 圆角 4 / 默认次要色、active 时主要色 / hover 工具栏底色。
+/// 返回 Stateful<Div>，调用方可继续 .when(...) 追加徽标等子元素。
+pub fn icon_button(
+    icon: IconName,
+    icon_size: Size,
+    side: Pixels,
+    id: impl Into<ElementId>,
+    active: bool,
+    handler: Box<ClickHandler>,
+    cx: &mut Context<DiscordApp>,
+) -> Stateful<Div> {
+    div()
+        .w(side)
+        .h(side)
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(4.))
+        .text_color(if active {
+            rgb(palette::text_primary())
+        } else {
+            rgb(palette::text_secondary())
+        })
+        .hover(|el| {
+            el.bg(rgb(palette::bg_toolbar_hover()))
+                .text_color(rgb(palette::text_primary()))
+        })
+        .child(ico(icon, icon_size))
+        .id(id)
+        .on_click(cx.listener(move |this, _, window, cx| {
+            handler(this, window, cx);
+            cx.notify();
+        }))
+}
+
+/// 危险操作图标按钮：hover 变 danger 底色 + 白字（拒绝请求、拉黑、移除等）。
+pub fn danger_icon_button(
+    icon: IconName,
+    icon_size: Size,
+    side: Pixels,
+    id: impl Into<ElementId>,
+    handler: Box<ClickHandler>,
+    cx: &mut Context<DiscordApp>,
+) -> Stateful<Div> {
+    div()
+        .w(side)
+        .h(side)
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(4.))
+        .text_color(rgb(palette::text_dim()))
+        .hover(|el| el.bg(rgb(palette::danger())).text_color(rgb(palette::WHITE)))
+        .child(ico(icon, icon_size))
+        .id(id)
+        .on_click(cx.listener(move |this, _, window, cx| {
+            handler(this, window, cx);
+            cx.notify();
+        }))
+}
+
+/// X 关闭按钮：弹层 / 浮层右上角通用（28×28 幽灵按钮）。
+pub fn close_button(
+    id: impl Into<ElementId>,
+    handler: Box<ClickHandler>,
+    cx: &mut Context<DiscordApp>,
+) -> Stateful<Div> {
+    div()
+        .w(px(28.))
+        .h(px(28.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(4.))
+        .text_color(rgb(palette::text_muted()))
+        .hover(|el| el.bg(rgb(palette::bg_toolbar_hover())))
+        .child(ico(IconName::X, Size::Small))
+        .id(id)
+        .on_click(cx.listener(move |this, _, window, cx| {
+            handler(this, window, cx);
+            cx.notify();
+        }))
+}
+
+/// 一行开关：左侧标题 + 描述、右侧拨动条，点击整行生效（设置页通用）。
+pub fn toggle_row(
+    label: impl Into<SharedString>,
+    desc: impl Into<SharedString>,
+    on: bool,
+    id: impl Into<ElementId>,
+    handler: Box<ClickHandler>,
+    cx: &mut Context<DiscordApp>,
+) -> Stateful<Div> {
+    let mut track = h_flex()
+        .w(px(40.))
+        .h(px(22.))
+        .flex_shrink_0()
+        .items_center()
+        .px(px(2.))
+        .rounded_full()
+        .bg(if on {
+            rgb(palette::accent())
+        } else {
+            rgb(palette::bg_toolbar_hover())
+        });
+    if on {
+        track = track.justify_end();
+    }
+    let knob = div()
+        .w(px(18.))
+        .h(px(18.))
+        .rounded_full()
+        .bg(rgb(palette::WHITE));
+
+    h_flex()
+        .w_full()
+        .items_center()
+        .justify_between()
+        .px(px(16.))
+        .py(px(12.))
+        .rounded(px(8.))
+        .bg(rgb(palette::bg_sidebar()))
+        .child(
+            v_flex()
+                .gap(px(4.))
+                .min_w_0()
+                .child(
+                    div()
+                        .text_size(px(14.))
+                        .text_color(rgb(palette::text_primary()))
+                        .child(label.into()),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(rgb(palette::text_muted()))
+                        .child(desc.into()),
+                ),
+        )
+        .child(track.child(knob))
+        .id(id)
+        .on_click(cx.listener(move |this, _, window, cx| {
+            handler(this, window, cx);
+            cx.notify();
+        }))
+}
+
+/// 文字胶囊筛选按钮：搜索 / 探索页的分类切换（选中强调色，未选中次要底色）。
+pub fn filter_chip(
+    label: impl Into<SharedString>,
+    active: bool,
+    id: impl Into<ElementId>,
+    handler: Box<ClickHandler>,
+    cx: &mut Context<DiscordApp>,
+) -> Stateful<Div> {
+    div()
+        .px_3()
+        .h(px(26.))
+        .flex()
+        .items_center()
+        .rounded_full()
+        .text_size(px(12.))
+        .bg(if active {
+            rgb(palette::accent())
+        } else {
+            rgb(palette::bg_sidebar())
+        })
+        .text_color(if active {
+            rgb(palette::WHITE)
+        } else {
+            rgb(palette::text_secondary())
+        })
+        .hover(|el| el.bg(rgb(palette::bg_toolbar_hover())))
+        .child(label.into())
+        .id(id)
+        .on_click(cx.listener(move |this, _, window, cx| {
+            handler(this, window, cx);
+            cx.notify();
+        }))
 }

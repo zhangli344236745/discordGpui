@@ -54,11 +54,7 @@ fn menu_items(index: usize, app: &DiscordApp, cx: &mut Context<DiscordApp>) -> i
         .get(index)
         .map(|m| m.pinned)
         .unwrap_or(false);
-    let author = app
-        .current_messages()
-        .get(index)
-        .map(|m| m.author)
-        .unwrap_or("");
+    let thread_count = app.thread_count(index);
 
     v_flex()
         .gap(px(2.))
@@ -81,9 +77,23 @@ fn menu_items(index: usize, app: &DiscordApp, cx: &mut Context<DiscordApp>) -> i
             false,
             cx,
             move |this, _, cx| {
-                this.toggle_reply(author);
+                this.toggle_reply_at(index, cx);
                 this.close_message_menu();
-                cx.notify();
+            },
+        ))
+        .child(menu_row(
+            if thread_count > 0 {
+                IconName::MessageSquare
+            } else {
+                IconName::MessageSquarePlus
+            },
+            if thread_count > 0 { "查看话题" } else { "创建话题" },
+            format!("msg-menu-thread-{index}"),
+            false,
+            cx,
+            move |this, window, cx| {
+                this.close_message_menu();
+                this.toggle_thread(index, window, cx);
             },
         ))
         .child(menu_row(
@@ -105,6 +115,21 @@ fn menu_items(index: usize, app: &DiscordApp, cx: &mut Context<DiscordApp>) -> i
                 move |this, window, cx| this.start_edit(index, window, cx),
             ))
         })
+        .when(
+            app.current_messages()
+                .get(index)
+                .is_some_and(|message| message.is_edited()),
+            |el| {
+                el.child(menu_row(
+                    IconName::Clock,
+                    "编辑历史",
+                    format!("msg-menu-history-{index}"),
+                    false,
+                    cx,
+                    move |this, _, cx| this.open_edit_history_from_menu(index, cx),
+                ))
+            },
+        )
         .child(menu_row(
             if pinned {
                 IconName::PinOff

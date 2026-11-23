@@ -124,26 +124,14 @@ where
                                         .child(title),
                                 ),
                         )
-                        .child(
-                            div()
-                                .w(px(28.))
-                                .h(px(28.))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded(px(4.))
-                                .text_color(rgb(palette::text_muted()))
-                                .hover(|el| el.bg(rgb(palette::bg_toolbar_hover())))
-                                .child(ico(IconName::X, Size::Small))
-                                .id(format!("{id_prefix}-close"))
-                                .on_click(cx.listener({
-                                    let cancel = cancel.clone();
-                                    move |this, _, window, cx| {
-                                        (*cancel)(this, window, cx);
-                                        cx.notify();
-                                    }
-                                })),
-                        ),
+                        .child(crate::ui::close_button(
+                            format!("{id_prefix}-close"),
+                            {
+                                let cancel = cancel.clone();
+                                Box::new(move |this, window, cx| (*cancel)(this, window, cx))
+                            },
+                            cx,
+                        )),
                 )
                 .child(
                     div()

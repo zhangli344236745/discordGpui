@@ -5,7 +5,7 @@ use crate::data::Attachment;
 use crate::ui::theme::palette;
 use crate::ui::{
     avatar,
-    chat::{attachment_picker, emoji_picker, sticker_picker},
+    chat::{attachment_picker, emoji_picker, gif_picker, sticker_picker},
     ico,
 };
 
@@ -150,6 +150,27 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                         this.toggle_sticker_picker(Some("礼物"), cx);
                     })),
             )
+            // GIF 按钮：打开带搜索与分类的 GIF 弹层。
+            .child(
+                div()
+                    .w(px(26.))
+                    .h(px(26.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(4.))
+                    .text_color(if app.show_gif_picker {
+                        rgb(palette::accent())
+                    } else {
+                        rgb(palette::text_secondary())
+                    })
+                    .hover(|el| el.bg(rgb(palette::bg_toolbar_hover())))
+                    .child(ico(IconName::ImagePlay, Size::Small))
+                    .id("composer-gif")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.toggle_gif_picker(cx);
+                    })),
+            )
             .child(
                 div()
                     .w(px(26.))
@@ -209,7 +230,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
             ),
     );
 
-    if let Some(author) = app.reply_to {
+    if let Some(reply) = app.reply_to.as_ref() {
         wrapper = wrapper.child(
             h_flex()
                 .h(px(30.))
@@ -222,7 +243,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                 .child(
                     div()
                         .child(ico(IconName::Reply, Size::XSmall))
-                        .child(format!("正在回复 {author}")),
+                        .child(format!("回复 @{author}：{excerpt}", author = reply.author, excerpt = reply.excerpt)),
                 )
                 .child(
                     div()
@@ -233,9 +254,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                         .child("取消")
                         .id("composer-cancel-reply")
                         .on_click(cx.listener(|this, _, _, cx| {
-                            if let Some(author) = this.reply_to {
-                                this.toggle_reply(author);
-                            }
+                            this.cancel_reply();
                             cx.notify();
                         })),
                 ),
@@ -252,6 +271,10 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
 
     if app.show_sticker_picker {
         wrapper = wrapper.child(sticker_picker::render(app, cx));
+    }
+
+    if app.show_gif_picker {
+        wrapper = wrapper.child(gif_picker::render(app, cx));
     }
 
     if !app.mention_candidates.is_empty() {

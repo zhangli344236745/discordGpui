@@ -2,7 +2,7 @@ use gpui_kit::*;
 
 use crate::app::{DiscordApp, ViewMode};
 use crate::ui::theme::palette;
-use crate::ui::{avatar, ico, unread_badge, user_footer};
+use crate::ui::{avatar, draft_badge, ico, unread_badge, user_footer};
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::input::Input;
@@ -18,6 +18,7 @@ fn conversation_row(
     unread: usize,
     preview: &'static str,
     selected: bool,
+    has_draft: bool,
 ) -> impl IntoElement {
     let click_friend = friend.to_string();
     let id = format!("dm-conversation-{friend}");
@@ -56,11 +57,17 @@ fn conversation_row(
                         .child(friend),
                 )
                 .child(
-                    div()
-                        .truncate()
-                        .text_size(px(11.))
-                        .text_color(rgb(palette::text_dim()))
-                        .child(preview),
+                    h_flex()
+                        .gap_1()
+                        .min_w_0()
+                        .child(
+                            div()
+                                .truncate()
+                                .text_size(px(11.))
+                                .text_color(rgb(palette::text_dim()))
+                                .child(preview),
+                        )
+                        .when(has_draft, |el| el.child(draft_badge())),
                 ),
         )
         .when(unread > 0, |el| el.child(unread_badge(unread)))
@@ -72,14 +79,7 @@ fn conversation_row(
 
 /// 分组标题。
 fn group_label(text: impl Into<SharedString>) -> Div {
-    div()
-        .px_4()
-        .pt_3()
-        .pb_1()
-        .text_size(px(11.))
-        .font_weight(FontWeight::BOLD)
-        .text_color(rgb(palette::text_muted()))
-        .child(text.into())
+    div().px_4().pt_3().pb_1().child(crate::ui::section_label(text))
 }
 
 /// 私信侧栏：好友入口、会话列表与用户控制条。
@@ -161,6 +161,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                 conversation.unread,
                 conversation.preview,
                 selected,
+                app.dm_has_draft(conversation.friend),
             ));
         }
         if matched_conv > 0 {
@@ -309,6 +310,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                 conversation.unread,
                 conversation.preview,
                 selected,
+                app.dm_has_draft(conversation.friend),
             ));
         }
     }

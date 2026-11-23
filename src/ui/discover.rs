@@ -56,25 +56,11 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                         )
                         .child(ico(IconName::Search, Size::XSmall).text_color(rgb(palette::text_dim()))),
                 )
-                .child(
-                    div()
-                        .w(px(28.))
-                        .h(px(28.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(4.))
-                        .text_color(rgb(palette::text_secondary()))
-                        .hover(|el| {
-                            el.bg(rgb(palette::bg_toolbar_hover()))
-                                .text_color(rgb(palette::text_primary()))
-                        })
-                        .child(ico(IconName::X, Size::Small))
-                        .id("discover-close")
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.close_discover(window, cx);
-                        })),
-                ),
+                .child(crate::ui::close_button(
+                    "discover-close",
+                    Box::new(|this, window, cx| this.close_discover(window, cx)),
+                    cx,
+                )),
         )
         .child(
             div()
@@ -113,32 +99,16 @@ fn content(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
         };
         let id = format!("discover-category-{index}");
 
-        chips = chips.child(
-            div()
-                .h(px(28.))
-                .px_3()
-                .flex()
-                .items_center()
-                .rounded_full()
-                .bg(if selected {
-                    rgb(palette::accent())
-                } else {
-                    rgb(palette::bg_sidebar())
-                })
-                .text_size(px(12.))
-                .text_color(if selected {
-                    rgb(palette::WHITE)
-                } else {
-                    rgb(palette::text_secondary())
-                })
-                .hover(|el| el.bg(rgb(palette::bg_channel_hover())))
-                .child(*label)
-                .id(id)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    let value = if *label == "全部" { None } else { Some(*label) };
-                    this.set_discover_category(value, cx);
-                })),
-        );
+        chips = chips.child(crate::ui::filter_chip(
+            *label,
+            selected,
+            id,
+            Box::new(move |this, _, cx| {
+                let value = if *label == "全部" { None } else { Some(*label) };
+                this.set_discover_category(value, cx);
+            }),
+            cx,
+        ));
     }
 
     let filtered = matches.len();

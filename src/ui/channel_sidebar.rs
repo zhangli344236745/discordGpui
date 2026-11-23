@@ -3,7 +3,7 @@ use gpui_kit::*;
 use crate::app::{DiscordApp, MenuAnchor};
 use crate::data::ChannelKind;
 use crate::ui::theme::palette;
-use crate::ui::{ico, unread_badge, user_footer};
+use crate::ui::{draft_badge, ico, unread_badge, user_footer};
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{h_flex, v_flex, Size};
@@ -140,6 +140,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                     IconName::Volume2
                 };
                 let unread = channel.unread;
+                let has_draft = !is_voice && app.channel_has_draft(&name);
                 let click_name = name.clone();
                 let menu_name = name.clone();
                 let server_index = app.active_server;
@@ -176,6 +177,9 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
 
                 if unread > 0 {
                     row = row.child(unread_badge(unread));
+                }
+                if has_draft {
+                    row = row.child(draft_badge());
                 }
 
                 channels = channels.child(

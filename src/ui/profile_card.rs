@@ -1,8 +1,8 @@
 use gpui_kit::*;
 
-use crate::app::DiscordApp;
+use crate::app::{CallMode, DiscordApp};
 use crate::ui::theme::palette;
-use crate::ui::{avatar, ico};
+use crate::ui::{avatar, ico, icon_button};
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{h_flex, v_flex, Size};
@@ -15,6 +15,12 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
         None => return div(),
     };
     let info = app.profile_info(target);
+    let call_target = info.name;
+    let call_mode = app
+        .dm_call
+        .as_ref()
+        .filter(|call| call.friend == call_target)
+        .map(|call| call.mode);
 
     div()
         .absolute()
@@ -120,6 +126,28 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                                     }
                                 })),
                         )
+                        .child(icon_button(
+                            IconName::Phone,
+                            Size::Small,
+                            px(34.),
+                            "profile-voice-call",
+                            call_mode == Some(CallMode::Voice),
+                            Box::new(move |this, _, cx| {
+                                this.start_dm_call(call_target.to_string(), CallMode::Voice, cx);
+                            }),
+                            cx,
+                        ))
+                        .child(icon_button(
+                            IconName::Video,
+                            Size::Small,
+                            px(34.),
+                            "profile-video-call",
+                            call_mode == Some(CallMode::Video),
+                            Box::new(move |this, _, cx| {
+                                this.start_dm_call(call_target.to_string(), CallMode::Video, cx);
+                            }),
+                            cx,
+                        ))
                         .child(
                             div()
                                 .w(px(34.))

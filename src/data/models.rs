@@ -60,6 +60,42 @@ impl Sticker {
     }
 }
 
+/// GIF：Demo 用色块 + emoji 字形模拟动图缩略图，按分类分组、按标签搜索。
+#[derive(Clone, Copy)]
+pub struct Gif {
+    pub title: &'static str,
+    pub emoji: &'static str,
+    pub color: u32,
+    pub category: &'static str,
+    /// 空格分隔的搜索关键词，搜索框按子串匹配标题或标签。
+    pub tags: &'static str,
+}
+
+impl Gif {
+    pub const fn new(
+        title: &'static str,
+        emoji: &'static str,
+        color: u32,
+        category: &'static str,
+        tags: &'static str,
+    ) -> Self {
+        Self {
+            title,
+            emoji,
+            color,
+            category,
+            tags,
+        }
+    }
+}
+
+/// 消息的一次历史版本：保存编辑前的正文与编辑时间。
+#[derive(Clone)]
+pub struct EditRevision {
+    pub text: String,
+    pub time: &'static str,
+}
+
 /// 转发来源：记录消息从哪个频道/私信转发而来，供正文上方的小字与点击跳转使用。
 #[derive(Clone)]
 pub struct ForwardOrigin {
@@ -144,6 +180,82 @@ impl ForwardTarget {
     }
 }
 
+/// 消息回复引用：作者 + 原消息摘要，点击可跳回原消息。
+#[derive(Clone)]
+pub struct ReplyRef {
+    pub author: &'static str,
+    pub excerpt: String,
+}
+
+/// 自己发出的消息的送达状态：已发送 → 已送达 → 已读。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum DeliveryStatus {
+    Sent,
+    Delivered,
+    Read,
+}
+
+/// 已读回执中的一位读者（Demo 用静态名与时间，不接后端）。
+#[derive(Clone, Copy)]
+pub struct ReadReceipt {
+    pub name: &'static str,
+    pub time: &'static str,
+    pub color: u32,
+}
+
+impl ReadReceipt {
+    pub const fn new(name: &'static str, time: &'static str, color: u32) -> Self {
+        Self { name, time, color }
+    }
+}
+
+/// 话题里的一条回复：复用消息的最小展示字段，不参与主消息列表。
+#[derive(Clone)]
+pub struct ThreadReply {
+    pub author: &'static str,
+    pub time: &'static str,
+    pub text: String,
+    pub color: Rgba,
+}
+
+impl ThreadReply {
+    pub fn new(
+        author: &'static str,
+        time: &'static str,
+        text: impl Into<String>,
+        color: u32,
+    ) -> Self {
+        Self {
+            author,
+            time,
+            text: text.into(),
+            color: rgb(color),
+        }
+    }
+}
+
+/// 挂在某条主消息上的话题：root_index 是它在当前会话消息列表里的下标。
+#[derive(Clone)]
+pub struct ChatThread {
+    pub root_index: usize,
+    pub title: String,
+    pub replies: Vec<ThreadReply>,
+}
+
+impl ChatThread {
+    pub fn new(
+        root_index: usize,
+        title: impl Into<String>,
+        replies: Vec<ThreadReply>,
+    ) -> Self {
+        Self {
+            root_index,
+            title: title.into(),
+            replies,
+        }
+    }
+}
+
 /// 聊天消息。
 #[derive(Clone)]
 pub struct Message {
@@ -157,8 +269,18 @@ pub struct Message {
     pub attachment: Option<Attachment>,
     /// 贴纸消息：正文通常为空，只渲染贴纸卡。
     pub sticker: Option<Sticker>,
+    /// GIF 消息：正文通常为空，只渲染 GIF 卡（Demo 为色块占位）。
+    pub gif: Option<Gif>,
+    /// 编辑历史：每次成功编辑前把旧正文存一份；非空即显示「已编辑」。
+    pub edit_history: Vec<EditRevision>,
     /// 转发来源；Some 时正文上方显示「转发自 …」。
     pub forwarded: Option<ForwardOrigin>,
+    /// 回复引用；Some 时正文上方显示「回复 @作者：摘要」。
+    pub reply_to: Option<ReplyRef>,
+    /// 自己发出的消息的送达状态；他人消息保持默认的「已发送」但不渲染。
+    pub delivery: DeliveryStatus,
+    /// 已读者列表，非空时状态行可点开详情。
+    pub readers: Vec<ReadReceipt>,
 }
 
 impl Message {
@@ -173,7 +295,12 @@ impl Message {
             pinned: false,
             attachment: None,
             sticker: None,
+            gif: None,
+            edit_history: Vec::new(),
             forwarded: None,
+            reply_to: None,
+            delivery: DeliveryStatus::Sent,
+            readers: Vec::new(),
         }
     }
 
@@ -202,6 +329,26 @@ impl Message {
         self
     }
 
+    /// 挂一个 GIF（消息正文可为空）。
+    pub fn gif(mut self, gif: Gif) -> Self {
+        self.gif = Some(gif);
+        self
+    }
+
+    /// 追加一个编辑前的历史版本。
+    pub fn revised(mut self, text: impl Into<String>, time: &'static str) -> Self {
+        self.edit_history.push(EditRevision {
+            text: text.into(),
+            time,
+        });
+        self
+    }
+
+    /// 是否编辑过（有历史版本即视为编辑过）。
+    pub fn is_edited(&self) -> bool {
+        !self.edit_history.is_empty()
+    }
+
     pub fn attachment(mut self, attachment: Attachment) -> Self {
         self.attachment = Some(attachment);
         self
@@ -210,6 +357,32 @@ impl Message {
     /// 标记为转发消息，并记录来源。
     pub fn forwarded(mut self, origin: ForwardOrigin) -> Self {
         self.forwarded = Some(origin);
+        self
+    }
+
+    /// 标记为回复消息，记录被回复作者与摘要。
+    pub fn replying_to(mut self, author: &'static str, excerpt: impl Into<String>) -> Self {
+        self.reply_to = Some(ReplyRef {
+            author,
+            excerpt: excerpt.into(),
+        });
+        self
+    }
+
+    /// 标记为已送达（尚未有人读）。
+    pub fn delivered(mut self) -> Self {
+        self.delivery = DeliveryStatus::Delivered;
+        self
+    }
+
+    /// 标记为已读并记录读者；空列表按「已送达」处理。
+    pub fn read_by(mut self, readers: Vec<ReadReceipt>) -> Self {
+        self.delivery = if readers.is_empty() {
+            DeliveryStatus::Delivered
+        } else {
+            DeliveryStatus::Read
+        };
+        self.readers = readers;
         self
     }
 }
@@ -480,4 +653,47 @@ pub struct Notification {
     pub time: &'static str,
     pub color: u32,
     pub target: NotificationTarget,
+}
+
+/// 帮助中心的一篇文档：分类 + 标题 + 摘要 + 正文段落 + 要点提示。
+#[derive(Clone, Copy)]
+pub struct HelpArticle {
+    pub id: &'static str,
+    pub category: &'static str,
+    pub title: &'static str,
+    pub summary: &'static str,
+    pub body: &'static [&'static str],
+    pub tips: &'static [&'static str],
+}
+
+impl HelpArticle {
+    pub const fn new(
+        id: &'static str,
+        category: &'static str,
+        title: &'static str,
+        summary: &'static str,
+        body: &'static [&'static str],
+        tips: &'static [&'static str],
+    ) -> Self {
+        Self {
+            id,
+            category,
+            title,
+            summary,
+            body,
+            tips,
+        }
+    }
+
+    /// 搜索匹配：标题、摘要、正文与要点都参与（query 已转小写）。
+    pub fn matches(&self, query: &str) -> bool {
+        if query.is_empty() {
+            return true;
+        }
+        self.title.to_lowercase().contains(query)
+            || self.summary.to_lowercase().contains(query)
+            || self.category.to_lowercase().contains(query)
+            || self.body.iter().any(|p| p.to_lowercase().contains(query))
+            || self.tips.iter().any(|t| t.to_lowercase().contains(query))
+    }
 }

@@ -7,15 +7,19 @@ use gpui_kit::prelude::FluentBuilder as _;
 
 use crate::data::{
     seed_discover_servers, seed_dm_conversations, seed_dm_messages, seed_friend_requests,
-    seed_friends, seed_members, seed_messages, seed_servers, seed_stickers, sticker_packs, Attachment,
-    Category, Channel, ChannelKind, DiscoverServer, DmConversation, ForwardOrigin, ForwardTarget,
-    Friend, FriendRequest, FriendTab, Member, MemberGroup, Message, Notification, NotificationKind,
-    NotificationTarget, Reaction, SearchHit, Server, Sticker, UserStatus, VoiceParticipant,
+    gif_categories, help_categories, seed_friends, seed_gifs, seed_help_articles, seed_members,
+    seed_messages, seed_servers,
+    seed_stickers, seed_threads, sticker_packs, Attachment, Category, Channel, ChannelKind,
+    ChatThread, DiscoverServer,     DmConversation, EditRevision, ForwardOrigin, ForwardTarget, Friend, FriendRequest,
+    FriendTab, Gif, HelpArticle, Member,
+    MemberGroup, Message, Notification, NotificationKind, NotificationTarget, Reaction, ReadReceipt,
+    ReplyRef, SearchHit, Server, Sticker, ThreadReply, UserStatus, VoiceParticipant,
 };
 use crate::ui::theme::palette;
 use crate::ui::{
-    category_dialog, category_menu, channel_menu, channel_sidebar, chat, create_dialog, dm_sidebar,
-    discover, friends, invite_dialog, member_list, profile_card, server_menu, server_rail,
+    category_dialog, category_menu, channel_menu, channel_sidebar, chat, create_dialog, dm_call_panel,
+    dm_sidebar, discover, friends, help_center, invite_dialog, member_list, profile_card,
+    server_menu, server_rail,
     member_menu, search_center, server_settings, settings, status_menu, topic_dialog, voice_room,
     voice_status,
 };
@@ -28,6 +32,36 @@ pub(crate) enum ViewMode {
     Friends,
     /// 探索页：整屏展示可加入的公开服务器。
     Discover,
+}
+
+/// 私信通话类型：语音或视频（视频默认开摄像头，语音默认关）。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CallMode {
+    Voice,
+    Video,
+}
+
+impl CallMode {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            CallMode::Voice => "语音通话",
+            CallMode::Video => "视频通话",
+        }
+    }
+}
+
+/// 一条进行中的私信通话。跨会话/视图保持，直到挂断或改为连接服务器语音。
+#[derive(Clone)]
+pub(crate) struct DmCall {
+    pub(crate) friend: String,
+    pub(crate) color: u32,
+    pub(crate) online: bool,
+    pub(crate) mode: CallMode,
+    /// false 表示仍在呼叫对方，true 表示已接通（Demo 用「模拟接通」按钮推进）。
+    pub(crate) connected: bool,
+    pub(crate) mic_on: bool,
+    pub(crate) camera_on: bool,
+    pub(crate) screen_sharing: bool,
 }
 
 /// 频道操作菜单的锚点：鼠标右键位置或标题栏铃铛入口。
@@ -149,7 +183,10 @@ pub struct DiscordApp {
     pub(crate) emoji_picker_open: bool,
     /// Some(index) 表示给当前会话第 index 条消息加回应，None 表示插入输入框草稿。
     pub(crate) emoji_target: Option<usize>,
-    pub(crate) reply_to: Option<&'static str>,
+    /// 回复草稿：被回复作者 + 原消息摘要（发出后写入新消息的 reply_to）。
+    pub(crate) reply_to: Option<ReplyRef>,
+    /// 点击回复引用后高亮的原消息下标（切会话即清除）。
+    pub(crate) reply_highlight: Option<usize>,
     /// @提及自动补全：当前正在输入的 @前缀 与匹配到的候选（基础名）。
     pub(crate) mention_prefix: Option<String>,
     pub(crate) mention_candidates: Vec<&'static str>,
@@ -223,6 +260,14 @@ pub struct DiscordApp {
     pub(crate) sticker_pack: &'static str,
     pub(crate) show_sticker_picker: bool,
 
+    // GIF 弹层：全部 GIF + 分类顺序 + 当前分类 + 搜索词 + 显隐。
+    pub(crate) gifs: Vec<Gif>,
+    pub(crate) gif_categories: Vec<&'static str>,
+    pub(crate) gif_category: &'static str,
+    pub(crate) gif_query: String,
+    pub(crate) show_gif_picker: bool,
+    pub(crate) gif_search: Entity<InputState>,
+
     // 服务器设置页：整屏覆盖主界面，与用户设置页互斥。
     pub(crate) show_server_settings: bool,
     pub(crate) server_settings_section: ServerSettingsSection,
@@ -237,6 +282,9 @@ pub struct DiscordApp {
     // 语音房间面板：连接语音时展示参与者与本地设备状态。
     pub(crate) show_voice_room: bool,
     pub(crate) voice_participants: Vec<VoiceParticipant>,
+
+    // 私信通话：Some 即显示悬浮通话面板，跨会话与设置页保持。
+    pub(crate) dm_call: Option<DmCall>,
 
     // 探索页：公开服务器候选、搜索框与分类筛选。
     pub(crate) discover_servers: Vec<DiscoverServer>,
@@ -254,6 +302,19 @@ pub struct DiscordApp {
     pub(crate) search_center_query: String,
     pub(crate) search_scope: SearchScope,
     pub(crate) search_results: Vec<SearchHit>,
+    /// 当前搜索的高级过滤条件（由 search_center_query 解析而来）。
+    pub(crate) search_filters: SearchFilters,
+
+    // 帮助中心：整屏浮层，左侧分类 + 搜索 + 文档列表 / 详情。
+    pub(crate) show_help_center: bool,
+    pub(crate) help_input: Entity<InputState>,
+    pub(crate) help_query: String,
+    /// None 表示「全部」分类。
+    pub(crate) help_category: Option<&'static str>,
+    /// 当前打开的文档 id；None 时显示列表。
+    pub(crate) help_article: Option<&'static str>,
+    pub(crate) help_articles: Vec<HelpArticle>,
+    pub(crate) help_categories: Vec<&'static str>,
 
     // 消息转发：源消息下标 + 弹层显隐 + 目标搜索 + 成功提示。
     pub(crate) forward_source: Option<usize>,
@@ -262,6 +323,43 @@ pub struct DiscordApp {
     pub(crate) forward_query: String,
     /// 转发成功后的顶栏提示文案，切换会话即清除。
     pub(crate) forward_notice: Option<String>,
+
+    // 附件预览：点击消息里的附件卡打开大图/文件详情弹层。
+    pub(crate) attachment_preview: Option<Attachment>,
+
+    // 已读回执详情浮层：(消息下标, 点击坐标 x, y)。
+    pub(crate) read_receipts: Option<(usize, f32, f32)>,
+
+    // 编辑历史浮层：(消息下标, 光标 x, 光标 y)。
+    pub(crate) edit_history: Option<(usize, f32, f32)>,
+
+    // 话题：按会话键保存，thread_root 为当前打开话题在原消息列表里的下标。
+    pub(crate) threads: HashMap<String, Vec<ChatThread>>,
+    pub(crate) show_thread: bool,
+    pub(crate) thread_root: Option<usize>,
+    pub(crate) thread_input: Entity<InputState>,
+
+    // 快速切换器：Ctrl/⌘+K 打开，搜索频道/私信并回车跳转。
+    pub(crate) show_quick_switcher: bool,
+    pub(crate) quick_search: Entity<InputState>,
+    pub(crate) quick_query: String,
+    /// 当前高亮的目标下标（上下键移动）。
+    pub(crate) quick_selected: usize,
+    /// 顶层键盘监听所需的焦点句柄，启动后聚焦，使 Ctrl/⌘+K 与 Esc 可捕获。
+    pub(crate) root_focus: FocusHandle,
+
+    // 会话草稿：按会话键保存未发送文本与附件，切走再切回自动恢复。
+    /// 键为 session_key（频道「服务器/频道」、私信「dm:好友」）。
+    pub(crate) drafts: HashMap<String, MessageDraft>,
+    /// 输入框当前归属的会话键；切换时据此把内容存回旧会话。
+    pub(crate) current_session: String,
+}
+
+/// 单个会话的未发送消息草稿（文本 + 可选附件）。
+#[derive(Clone)]
+pub(crate) struct MessageDraft {
+    pub(crate) text: String,
+    pub(crate) attachment: Option<Attachment>,
 }
 
 /// 资料卡展示用的用户信息，由 app 从 friends / members 聚合而来。
@@ -279,8 +377,143 @@ fn base_name(display: &'static str) -> &'static str {
 }
 
 /// 搜索命中判定：正文或作者名包含关键词（调用方已把 query 转小写）。
-fn hit_matches(message: &Message, query: &str) -> bool {
-    message.text.to_lowercase().contains(query) || message.author.to_lowercase().contains(query)
+/// 搜索中心的高级过滤器：从查询串解析 `from:` / `has:` / `before:` / `after:`，剩余为普通关键词。
+#[derive(Default, Clone)]
+pub(crate) struct SearchFilters {
+    /// 普通关键词（小写）；为空表示只按过滤条件匹配。
+    pub text: String,
+    /// 作者名片段，任一命中即可。
+    pub from: Vec<String>,
+    /// 消息属性：link / image / file / attachment / sticker / gif / reaction / edited / mention / pinned。
+    pub has: Vec<String>,
+    pub before: Option<String>,
+    pub after: Option<String>,
+}
+
+impl SearchFilters {
+    pub fn parse(raw: &str) -> Self {
+        let mut filters = Self::default();
+        let mut words = Vec::new();
+        for token in raw.split_whitespace() {
+            if let Some(value) = token.strip_prefix("from:") {
+                if !value.is_empty() {
+                    filters.from.push(value.to_lowercase());
+                }
+            } else if let Some(value) = token.strip_prefix("has:") {
+                if !value.is_empty() {
+                    filters.has.push(value.to_lowercase());
+                }
+            } else if let Some(value) = token.strip_prefix("before:") {
+                if !value.is_empty() {
+                    filters.before = Some(value.to_lowercase());
+                }
+            } else if let Some(value) = token.strip_prefix("after:") {
+                if !value.is_empty() {
+                    filters.after = Some(value.to_lowercase());
+                }
+            } else {
+                words.push(token);
+            }
+        }
+        filters.text = words.join(" ").to_lowercase();
+        filters
+    }
+
+    /// 是否没有任何约束（空关键词且无过滤条件）。
+    pub fn is_empty(&self) -> bool {
+        self.text.is_empty()
+            && self.from.is_empty()
+            && self.has.is_empty()
+            && self.before.is_none()
+            && self.after.is_none()
+    }
+
+    /// UI 展示用的已应用条件标签。
+    pub fn chips(&self) -> Vec<String> {
+        let mut chips = Vec::new();
+        for value in &self.from {
+            chips.push(format!("from:{value}"));
+        }
+        for value in &self.has {
+            chips.push(format!("has:{value}"));
+        }
+        if let Some(value) = &self.before {
+            chips.push(format!("before:{value}"));
+        }
+        if let Some(value) = &self.after {
+            chips.push(format!("after:{value}"));
+        }
+        chips
+    }
+
+    /// 同时满足关键词、作者、属性与时间条件才算命中。
+    pub fn matches(&self, message: &Message) -> bool {
+        if !self.text.is_empty() && !message.text.to_lowercase().contains(&self.text) {
+            return false;
+        }
+        if !self.from.is_empty()
+            && !self
+                .from
+                .iter()
+                .any(|name| message.author.to_lowercase().contains(name))
+        {
+            return false;
+        }
+        // 多个 has: 是 AND 关系。
+        for feature in &self.has {
+            let ok = match feature.as_str() {
+                "link" => message.text.contains("http") || message.text.contains("链接"),
+                "image" => message
+                    .attachment
+                    .as_ref()
+                    .is_some_and(|attachment| attachment.is_image()),
+                "file" => message
+                    .attachment
+                    .as_ref()
+                    .is_some_and(|attachment| !attachment.is_image()),
+                "attachment" => message.attachment.is_some(),
+                "sticker" => message.sticker.is_some(),
+                "gif" => message.gif.is_some(),
+                "reaction" => !message.reactions.is_empty(),
+                "edited" => message.is_edited(),
+                "mention" => message.text.contains('@'),
+                "pinned" => message.pinned,
+                _ => false,
+            };
+            if !ok {
+                return false;
+            }
+        }
+        // 时间基于种子数据的前缀：今天/刚刚 > 昨天 > 更早。
+        let rank = if message.time.starts_with("刚刚") || message.time.starts_with("今天") {
+            2
+        } else if message.time.starts_with("昨天") {
+            1
+        } else {
+            0
+        };
+        if let Some(value) = &self.after {
+            let min = match value.as_str() {
+                "today" => 2,
+                "yesterday" => 1,
+                _ => i32::MIN,
+            };
+            if rank < min {
+                return false;
+            }
+        }
+        if let Some(value) = &self.before {
+            let max = match value.as_str() {
+                "today" => 2,
+                "yesterday" => 1,
+                _ => i32::MAX,
+            };
+            if rank >= max {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 impl DiscordApp {
@@ -308,9 +541,16 @@ impl DiscordApp {
         let discover_search =
             cx.new(|cx| InputState::new(window, cx).placeholder("搜索服务器或关键词"));
         let search_center_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("搜索所有频道与私信"));
+            cx.new(|cx| InputState::new(window, cx).placeholder("搜索消息，支持 from: / has: / after:"));
+        let help_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("搜索帮助主题，例如 话题 / 快捷键"));
         let forward_search =
             cx.new(|cx| InputState::new(window, cx).placeholder("搜索频道或私信"));
+        let quick_search =
+            cx.new(|cx| InputState::new(window, cx).placeholder("跳转到频道或私信…"));
+        let gif_search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索 GIF 标签…"));
+        let thread_input = cx.new(|cx| InputState::new(window, cx).placeholder("回复话题…"));
+        let root_focus = cx.focus_handle();
 
         cx.subscribe_in(&composer, window, |this, _, event: &InputEvent, window, cx| {
             match event {
@@ -386,6 +626,19 @@ impl DiscordApp {
         })
         .detach();
 
+        cx.subscribe_in(&help_input, window, |this, _, event: &InputEvent, _, cx| {
+            if matches!(event, InputEvent::Change) {
+                this.help_query = this.help_input.read(cx).value().to_string();
+                // 搜索时把列表拉回全分类，避免结果被当前分类挡住。
+                if !this.help_query.trim().is_empty() {
+                    this.help_category = None;
+                }
+                this.help_article = None;
+                cx.notify();
+            }
+        })
+        .detach();
+
         cx.subscribe_in(&discover_search, window, |this, _, event: &InputEvent, _, cx| {
             if matches!(event, InputEvent::Change) {
                 this.discover_filter = this.discover_search.read(cx).value().to_string();
@@ -398,6 +651,42 @@ impl DiscordApp {
             if matches!(event, InputEvent::Change) {
                 this.forward_query = this.forward_search.read(cx).value().to_string();
                 cx.notify();
+            }
+        })
+        .detach();
+
+        cx.subscribe_in(&quick_search, window, |this, _, event: &InputEvent, window, cx| {
+            match event {
+                InputEvent::Change => {
+                    this.quick_query = this.quick_search.read(cx).value().to_string();
+                    this.quick_selected = 0;
+                    cx.notify();
+                }
+                InputEvent::PressEnter { secondary: false, .. } => {
+                    this.activate_quick_selection(window, cx);
+                }
+                _ => {}
+            }
+        })
+        .detach();
+
+        cx.subscribe_in(&gif_search, window, |this, _, event: &InputEvent, window, cx| {
+            match event {
+                InputEvent::Change => {
+                    this.gif_query = this.gif_search.read(cx).value().to_string();
+                    cx.notify();
+                }
+                InputEvent::PressEnter { secondary: false, .. } => {
+                    this.send_first_gif(window, cx);
+                }
+                _ => {}
+            }
+        })
+        .detach();
+
+        cx.subscribe_in(&thread_input, window, |this, _, event: &InputEvent, window, cx| {
+            if matches!(event, InputEvent::PressEnter { secondary: false, .. }) {
+                this.send_thread_reply(window, cx);
             }
         })
         .detach();
@@ -424,7 +713,7 @@ impl DiscordApp {
         })
         .detach();
 
-        Self {
+        let mut this = Self {
             view_mode: ViewMode::Server,
             servers: seed_servers(),
             active_server: 0,
@@ -453,6 +742,7 @@ impl DiscordApp {
             emoji_picker_open: false,
             emoji_target: None,
             reply_to: None,
+            reply_highlight: None,
             mention_prefix: None,
             mention_candidates: Vec::new(),
             profile_target: None,
@@ -500,6 +790,12 @@ impl DiscordApp {
             sticker_pack: sticker_packs().first().copied().unwrap_or("日常"),
             sticker_packs: sticker_packs(),
             show_sticker_picker: false,
+            gifs: seed_gifs(),
+            gif_categories: gif_categories(),
+            gif_category: "热门",
+            gif_query: String::new(),
+            show_gif_picker: false,
+            gif_search,
             show_server_settings: false,
             server_settings_section: ServerSettingsSection::Overview,
             server_name_edit,
@@ -511,6 +807,7 @@ impl DiscordApp {
             invite_copied: false,
             show_voice_room: false,
             voice_participants: Vec::new(),
+            dm_call: None,
             discover_servers: seed_discover_servers(),
             discover_search,
             discover_filter: String::new(),
@@ -521,12 +818,38 @@ impl DiscordApp {
             search_center_query: String::new(),
             search_scope: SearchScope::CurrentServer,
             search_results: Vec::new(),
+            search_filters: SearchFilters::default(),
+            show_help_center: false,
+            help_input,
+            help_query: String::new(),
+            help_category: None,
+            help_article: None,
+            help_articles: seed_help_articles(),
+            help_categories: help_categories(),
             forward_source: None,
             show_forward: false,
             forward_search,
             forward_query: String::new(),
             forward_notice: None,
-        }
+            attachment_preview: None,
+            read_receipts: None,
+            edit_history: None,
+            threads: seed_threads(),
+            show_thread: false,
+            thread_root: None,
+            thread_input,
+            show_quick_switcher: false,
+            quick_search,
+            quick_query: String::new(),
+            quick_selected: 0,
+            root_focus,
+            drafts: HashMap::new(),
+            current_session: String::new(),
+        };
+        // 让输入框在首个会话就归属正确的键，默认频道草稿也能被保存。
+        this.current_session = this.session_key();
+        window.focus(&this.root_focus, cx);
+        this
     }
 
     // -----------------------------------------------------------------------
@@ -539,6 +862,63 @@ impl DiscordApp {
             "{}/{}",
             self.servers[self.active_server].name, self.active_channel
         )
+    }
+
+    /// 输入框内容归属的会话键：频道「服务器/频道」、私信「dm:好友」，其他视图为空（不保留草稿）。
+    fn session_key(&self) -> String {
+        match self.view_mode {
+            ViewMode::Server => self.active_key(),
+            ViewMode::DirectMessage => format!("dm:{}", self.active_dm.as_deref().unwrap_or("")),
+            ViewMode::Friends | ViewMode::Discover => String::new(),
+        }
+    }
+
+    /// 切换会话前调用：把输入框现有文本与待发附件存入旧会话（current_session 尚未更新）。
+    /// 内容为空则删除该会话草稿，避免侧栏出现空草稿标记。
+    fn save_draft(&mut self, cx: &mut Context<Self>) {
+        let key = self.current_session.clone();
+        if key.is_empty() {
+            return;
+        }
+        let text = self.composer.read(cx).value().trim().to_string();
+        let attachment = self.attachment_draft.take();
+        if text.is_empty() && attachment.is_none() {
+            self.drafts.remove(&key);
+        } else {
+            self.drafts
+                .insert(key, MessageDraft { text, attachment });
+        }
+    }
+
+    /// 切换会话后调用：更新归属键并恢复该会话草稿。
+    fn load_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let key = self.session_key();
+        self.current_session = key.clone();
+        let draft = if key.is_empty() {
+            None
+        } else {
+            self.drafts.get(&key).cloned()
+        };
+        let text = draft.as_ref().map(|d| d.text.clone()).unwrap_or_default();
+        self.attachment_draft = draft.and_then(|d| d.attachment);
+        // set_value 不发 Change 事件，不会触发 @提及刷新，这里静默恢复即可。
+        self.composer
+            .update(cx, |input, cx| input.set_value(text, window, cx));
+    }
+
+    /// 侧栏草稿标记判定：指定会话键是否存在非空草稿。
+    pub(crate) fn has_draft(&self, key: &str) -> bool {
+        !key.is_empty() && self.drafts.contains_key(key)
+    }
+
+    /// 当前服务器某频道是否有草稿。
+    pub(crate) fn channel_has_draft(&self, name: &str) -> bool {
+        self.has_draft(&format!("{}/{}", self.servers[self.active_server].name, name))
+    }
+
+    /// 某好友私信是否有草稿。
+    pub(crate) fn dm_has_draft(&self, friend: &str) -> bool {
+        self.has_draft(&format!("dm:{friend}"))
     }
 
     /// 当前服务器的借用引用，供视图读取名称/徽标。
@@ -836,6 +1216,7 @@ impl DiscordApp {
         self.show_inbox = !self.show_inbox;
         if self.show_inbox {
             self.show_pins = false;
+            self.close_thread(); self.close_read_receipts(); self.close_edit_history();
             self.show_status_menu = false;
         }
         cx.notify();
@@ -1054,15 +1435,19 @@ impl DiscordApp {
 
     /// 会话切换后的公共重置逻辑。
     fn reset_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // 先把输入框内容存回旧会话（current_session 仍是旧键），再重置。
+        self.save_draft(cx);
         self.clear_search(window, cx);
         self.clear_dm_search(window, cx);
         self.emoji_picker_open = false;
         self.emoji_target = None;
         self.reply_to = None;
+        self.reply_highlight = None;
         self.mention_prefix = None;
         self.mention_candidates.clear();
         self.profile_target = None;
         self.close_message_menu();
+        self.close_thread(); self.close_read_receipts(); self.close_edit_history();
         self.show_pins = false;
         self.show_inbox = false;
         self.show_status_menu = false;
@@ -1081,9 +1466,11 @@ impl DiscordApp {
         self.attachment_draft = None;
         self.show_attachment_picker = false;
         self.show_sticker_picker = false;
+        self.show_gif_picker = false;
         self.show_search_center = false;
         self.close_forward();
         self.forward_notice = None;
+        self.attachment_preview = None;
         self.member_menu = None;
         self.cancel_edit();
 
@@ -1099,6 +1486,8 @@ impl DiscordApp {
         self.composer.update(cx, |input, cx| {
             input.set_placeholder(placeholder, window, cx);
         });
+        // 恢复目标会话草稿（含待发附件），并更新 current_session 为新键。
+        self.load_draft(window, cx);
 
         self.scroll_handle.scroll_to_bottom();
         cx.notify();
@@ -1253,6 +1642,64 @@ impl DiscordApp {
                 self.servers[self.active_server].categories[ci].channels[chi].unread
             })
             .unwrap_or(0)
+    }
+
+    /// 当前会话的未读数（频道 / 私信通用），用于未读分隔线与跳转浮标。
+    pub(crate) fn current_unread_count(&self) -> usize {
+        match self.view_mode {
+            ViewMode::Server => self.channel_unread_of(&self.active_channel),
+            ViewMode::DirectMessage => self
+                .active_dm
+                .as_ref()
+                .and_then(|name| {
+                    self.dm_conversations
+                        .iter()
+                        .find(|c| &c.friend == name)
+                        .map(|c| c.unread)
+                })
+                .unwrap_or(0),
+            ViewMode::Friends | ViewMode::Discover => 0,
+        }
+    }
+
+    /// 未读分隔线插入位置：`Some((消息下标, 未读数))`，未读数超过消息条数时不插。
+    pub(crate) fn unread_divider(&self) -> Option<(usize, usize)> {
+        let unread = self.current_unread_count();
+        let total = self.current_messages().len();
+        if unread == 0 || unread >= total {
+            return None;
+        }
+        Some((total - unread, unread))
+    }
+
+    /// 跳到最新：滚到底部并把当前会话标记为已读（分隔线与浮标随之消失）。
+    pub(crate) fn jump_to_latest(&mut self, cx: &mut Context<Self>) {
+        self.scroll_handle.scroll_to_bottom();
+        self.mark_current_read();
+        cx.notify();
+    }
+
+    /// 清除当前会话的未读计数，不依赖右键菜单状态。
+    fn mark_current_read(&mut self) {
+        match self.view_mode {
+            ViewMode::Server => {
+                if let Some((ci, chi)) = self.channel_position(&self.active_channel) {
+                    self.servers[self.active_server].categories[ci].channels[chi].unread = 0;
+                }
+            }
+            ViewMode::DirectMessage => {
+                if let Some(name) = self.active_dm.as_ref() {
+                    if let Some(conversation) = self
+                        .dm_conversations
+                        .iter_mut()
+                        .find(|c| &c.friend == name)
+                    {
+                        conversation.unread = 0;
+                    }
+                }
+            }
+            ViewMode::Friends | ViewMode::Discover => {}
+        }
     }
 
     /// 打开频道操作菜单，并收起其它浮层，避免叠层。
@@ -1746,14 +2193,20 @@ impl DiscordApp {
 
         self.composer
             .update(cx, |input, cx| input.set_value("", window, cx));
+        // 已发送的文本不再算草稿，清掉侧栏可能的草稿标记。
+        let sent_session = self.current_session.clone();
+        self.drafts.remove(&sent_session);
         let mut message = Message::new("你", "刚刚", text, palette::accent());
         if let Some(attachment) = self.attachment_draft.take() {
             message = message.attachment(attachment);
         }
+        // 把回复引用写进新消息，再清空草稿状态。
+        if let Some(reply) = self.reply_to.take() {
+            message = message.replying_to(reply.author, reply.excerpt);
+        }
         if let Some(messages) = self.current_messages_mut() {
             messages.push(message);
         }
-        self.reply_to = None;
         self.mention_prefix = None;
         self.mention_candidates.clear();
         self.show_attachment_picker = false;
@@ -1774,8 +2227,10 @@ impl DiscordApp {
         let same = self.show_sticker_picker && pack.is_none_or(|name| name == self.sticker_pack);
         if same {
             self.show_sticker_picker = false;
+            self.show_gif_picker = false;
         } else {
             self.show_sticker_picker = true;
+            self.show_gif_picker = false;
             if let Some(name) = pack {
                 self.sticker_pack = name;
             }
@@ -1795,14 +2250,110 @@ impl DiscordApp {
         cx.notify();
     }
 
-    /// 关闭贴纸弹层。
+    /// 关闭贴纸弹层（同时收起 GIF 弹层）。
     pub(crate) fn close_sticker_picker(&mut self) {
         self.show_sticker_picker = false;
+        self.show_gif_picker = false;
     }
 
     /// 切换贴纸包。
     pub(crate) fn set_sticker_pack(&mut self, pack: &'static str, cx: &mut Context<Self>) {
         self.sticker_pack = pack;
+        cx.notify();
+    }
+
+    // ------------------------------- GIF 弹层 -------------------------------
+
+    /// 打开 / 关闭 GIF 搜索弹层；打开时收起其他浮层，避免叠层。
+    pub(crate) fn toggle_gif_picker(&mut self, cx: &mut Context<Self>) {
+        self.show_gif_picker = !self.show_gif_picker;
+        if self.show_gif_picker {
+            self.show_sticker_picker = false;
+            self.emoji_picker_open = false;
+            self.emoji_target = None;
+            self.show_attachment_picker = false;
+            self.show_status_menu = false;
+            self.channel_menu = None;
+            self.category_menu = None;
+            self.member_menu = None;
+            self.show_server_menu = false;
+            self.profile_target = None;
+            self.close_message_menu();
+            self.show_pins = false;
+            self.show_inbox = false;
+        }
+        cx.notify();
+    }
+
+    /// 关闭 GIF 弹层（保留搜索词，下次打开可继续用）。
+    pub(crate) fn close_gif_picker(&mut self) {
+        self.show_gif_picker = false;
+    }
+
+    /// 切换 GIF 分类：清空搜索词，回到该分类的完整列表。
+    pub(crate) fn set_gif_category(
+        &mut self,
+        category: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.gif_category = category;
+        self.gif_query.clear();
+        self.gif_search
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        cx.notify();
+    }
+
+    /// 当前可见 GIF：有搜索词时跨分类匹配标题 / 标签 / 分类，否则按当前分类过滤。
+    pub(crate) fn visible_gifs(&self) -> Vec<Gif> {
+        let query = self.gif_query.trim().to_lowercase();
+        self.gifs
+            .iter()
+            .copied()
+            .filter(|gif| {
+                if query.is_empty() {
+                    gif.category == self.gif_category
+                } else {
+                    gif.title.to_lowercase().contains(&query)
+                        || gif.tags.to_lowercase().contains(&query)
+                        || gif.category.to_lowercase().contains(&query)
+                }
+            })
+            .collect()
+    }
+
+    /// 搜索框 Enter：发送第一个匹配结果。
+    pub(crate) fn send_first_gif(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(gif) = self.visible_gifs().first().copied() {
+            self.send_gif(gif, window, cx);
+        }
+    }
+
+    /// 点击 GIF 即发送：生成一条只有 GIF 的消息并滚到底部。
+    pub(crate) fn send_gif(
+        &mut self,
+        gif: Gif,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.view_mode == ViewMode::Friends {
+            return;
+        }
+        self.show_gif_picker = false;
+        self.gif_query.clear();
+        self.gif_search
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        let mut message = Message::new("你", "刚刚", "", palette::accent()).gif(gif);
+        if let Some(reply) = self.reply_to.take() {
+            message = message.replying_to(reply.author, reply.excerpt);
+        }
+        if let Some(messages) = self.current_messages_mut() {
+            messages.push(message);
+        }
+        self.mention_prefix = None;
+        self.mention_candidates.clear();
+        self.scroll_handle.scroll_to_bottom();
+        self.composer.update(cx, |input, cx| input.focus(window, cx));
         cx.notify();
     }
 
@@ -1817,11 +2368,14 @@ impl DiscordApp {
             return;
         }
         self.show_sticker_picker = false;
-        let message = Message::new("你", "刚刚", "", palette::accent()).sticker(sticker);
+        self.show_gif_picker = false;
+        let mut message = Message::new("你", "刚刚", "", palette::accent()).sticker(sticker);
+        if let Some(reply) = self.reply_to.take() {
+            message = message.replying_to(reply.author, reply.excerpt);
+        }
         if let Some(messages) = self.current_messages_mut() {
             messages.push(message);
         }
-        self.reply_to = None;
         self.mention_prefix = None;
         self.mention_candidates.clear();
         self.scroll_handle.scroll_to_bottom();
@@ -1835,6 +2389,7 @@ impl DiscordApp {
             self.emoji_picker_open = false;
             self.emoji_target = None;
             self.show_sticker_picker = false;
+            self.show_gif_picker = false;
             self.show_status_menu = false;
             self.channel_menu = None;
             self.category_menu = None;
@@ -1863,6 +2418,265 @@ impl DiscordApp {
     /// 取消待发送附件。
     pub(crate) fn clear_attachment(&mut self, cx: &mut Context<Self>) {
         self.attachment_draft = None;
+        cx.notify();
+    }
+
+    /// 打开附件预览弹层；同时收起其他浮层，避免叠层。
+    pub(crate) fn open_attachment_preview(
+        &mut self,
+        attachment: Attachment,
+        cx: &mut Context<Self>,
+    ) {
+        self.attachment_preview = Some(attachment);
+        self.show_forward = false;
+        self.show_pins = false;
+        self.show_inbox = false;
+        self.profile_target = None;
+        self.show_status_menu = false;
+        self.show_server_menu = false;
+        self.close_message_menu();
+        cx.notify();
+    }
+
+    /// 关闭附件预览弹层。
+    pub(crate) fn close_attachment_preview(&mut self, cx: &mut Context<Self>) {
+        self.attachment_preview = None;
+        cx.notify();
+    }
+
+    /// 演示「下载」：把文件名复制到剪贴板，弹层关闭。
+    pub(crate) fn copy_attachment_name(&mut self, cx: &mut Context<Self>) {
+        if let Some(attachment) = &self.attachment_preview {
+            cx.write_to_clipboard(ClipboardItem::new_string(attachment.name.clone()));
+        }
+        self.attachment_preview = None;
+        cx.notify();
+    }
+
+    // -----------------------------------------------------------------------
+    // 快捷键与快速切换器
+    // -----------------------------------------------------------------------
+
+    /// 所有键盘快捷键的唯一入口，由顶层 Render 注册的全局 key 监听器调用。
+    pub(crate) fn handle_shortcut(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let key = event.keystroke.key.as_str();
+        let modifiers = event.keystroke.modifiers;
+
+        if key == "k" && (modifiers.control || modifiers.platform) {
+            if self.show_quick_switcher {
+                self.close_quick_switcher();
+            } else {
+                self.open_quick_switcher(window, cx);
+            }
+            cx.notify();
+            return;
+        }
+
+        if key == "escape" {
+            self.close_top_overlay(window, cx);
+            return;
+        }
+
+        if self.show_quick_switcher {
+            match key {
+                "down" => self.move_quick_selection(1, cx),
+                "up" => self.move_quick_selection(-1, cx),
+                _ => {}
+            }
+        }
+    }
+
+    /// 打开快速切换器：清空搜索、收起所有浮层与整屏页，聚焦搜索框。
+    pub(crate) fn open_quick_switcher(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.show_quick_switcher = true;
+        self.quick_query.clear();
+        self.quick_selected = 0;
+        self.quick_search.update(cx, |input, cx| {
+            input.set_value("", window, cx);
+            input.focus(window, cx);
+        });
+        self.show_forward = false;
+        self.attachment_preview = None;
+        self.show_pins = false;
+        self.show_inbox = false;
+        self.show_settings = false;
+        self.show_server_settings = false;
+        self.show_search_center = false;
+        self.show_help_center = false;
+        self.show_sticker_picker = false;
+        self.show_gif_picker = false;
+        self.show_attachment_picker = false;
+        self.emoji_picker_open = false;
+        self.show_status_menu = false;
+        self.show_server_menu = false;
+        self.show_create_server = false;
+        self.show_create_channel = false;
+        self.show_invite = false;
+        self.show_edit_topic = false;
+        self.show_rename_category = false;
+        self.show_create_category = false;
+        self.show_voice_room = false;
+        self.channel_menu = None;
+        self.category_menu = None;
+        self.member_menu = None;
+        self.profile_target = None;
+        self.close_message_menu();
+        self.cancel_edit();
+        cx.notify();
+    }
+
+    /// 关闭快速切换器。
+    pub(crate) fn close_quick_switcher(&mut self) {
+        self.show_quick_switcher = false;
+        self.quick_query.clear();
+        self.quick_selected = 0;
+    }
+
+    /// 快速切换器候选：与转发弹层共用目标集合，按自己的搜索词过滤。
+    pub(crate) fn quick_targets(&self) -> Vec<ForwardTarget> {
+        let query = self.quick_query.trim().to_lowercase();
+        self.forward_targets()
+            .into_iter()
+            .filter(|target| {
+                query.is_empty()
+                    || target.channel.to_lowercase().contains(&query)
+                    || target.server.to_lowercase().contains(&query)
+            })
+            .collect()
+    }
+
+    /// 上下键移动高亮项，首尾循环。
+    pub(crate) fn move_quick_selection(&mut self, delta: i32, cx: &mut Context<Self>) {
+        let len = self.quick_targets().len();
+        self.quick_selected = if len == 0 {
+            0
+        } else {
+            (self.quick_selected as i32 + delta).rem_euclid(len as i32) as usize
+        };
+        cx.notify();
+    }
+
+    /// 点击某个候选行：先设为高亮项，再走与回车相同的跳转逻辑。
+    pub(crate) fn activate_quick_at(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.quick_selected = index;
+        self.activate_quick_selection(window, cx);
+    }
+
+    /// 回车跳转到高亮目标：私信走 open_dm，频道直接写 active_* 后重置会话。
+    pub(crate) fn activate_quick_selection(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let target = self.quick_targets().get(self.quick_selected).cloned();
+        self.close_quick_switcher();
+        let Some(target) = target else {
+            cx.notify();
+            return;
+        };
+        if target.is_dm {
+            self.open_dm(target.channel, window, cx);
+            return;
+        }
+        if let Some(index) = self
+            .servers
+            .iter()
+            .position(|server| server.name == target.server)
+        {
+            self.view_mode = ViewMode::Server;
+            self.active_server = index;
+            self.active_channel = target.channel;
+            self.reset_session(window, cx);
+        } else {
+            cx.notify();
+        }
+    }
+
+    /// Esc：按「最上层优先」顺序关闭当前浮层 / 整屏页，不误伤底层状态。
+    fn close_top_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editing_message.is_some() {
+            self.cancel_edit();
+        } else if self.show_quick_switcher {
+            self.close_quick_switcher();
+        } else if self.show_help_center {
+            // 帮助中心先在详情 → 列表退一层，再整体关闭。
+            if self.help_article.is_some() {
+                self.close_help_article(cx);
+            } else {
+                self.close_help_center(cx);
+            }
+        } else if self.attachment_preview.is_some() {
+            self.attachment_preview = None;
+        } else if self.show_forward {
+            self.close_forward();
+        } else if self.show_search_center {
+            self.show_search_center = false;
+        } else if self.show_thread {
+            self.close_thread(); self.close_read_receipts(); self.close_edit_history();
+        } else if self.show_server_settings {
+            self.close_server_settings(cx);
+        } else if self.show_settings {
+            self.close_settings();
+        } else if self.show_invite {
+            self.show_invite = false;
+        } else if self.show_create_server {
+            self.show_create_server = false;
+        } else if self.show_create_channel {
+            self.show_create_channel = false;
+        } else if self.show_edit_topic {
+            self.close_topic_editor();
+        } else if self.show_rename_category || self.show_create_category {
+            self.show_rename_category = false;
+            self.show_create_category = false;
+        } else if self.channel_menu.is_some() {
+            self.channel_menu = None;
+        } else if self.category_menu.is_some() {
+            self.category_menu = None;
+        } else if self.member_menu.is_some() {
+            self.member_menu = None;
+        } else if self.menu_message.is_some() {
+            self.close_message_menu();
+        } else if self.edit_history.is_some() {
+            self.close_edit_history();
+        } else if self.read_receipts.is_some() {
+            self.close_read_receipts();
+        } else if self.show_pins {
+            self.show_pins = false;
+        } else if self.show_inbox {
+            self.show_inbox = false;
+        } else if self.show_status_menu {
+            self.show_status_menu = false;
+        } else if self.show_gif_picker {
+            self.close_gif_picker();
+        } else if self.show_sticker_picker {
+            self.close_sticker_picker();
+        } else if self.emoji_picker_open {
+            self.emoji_picker_open = false;
+            self.emoji_target = None;
+        } else if self.show_attachment_picker {
+            self.show_attachment_picker = false;
+        } else if self.profile_target.is_some() {
+            self.profile_target = None;
+        } else if self.show_voice_room {
+            self.show_voice_room = false;
+        } else if self.view_mode == ViewMode::Discover {
+            self.close_discover(window, cx);
+            return;
+        }
         cx.notify();
     }
 
@@ -1898,6 +2712,7 @@ impl DiscordApp {
             self.emoji_target = target;
             self.show_attachment_picker = false;
             self.show_sticker_picker = false;
+            self.show_gif_picker = false;
         }
     }
 
@@ -1941,13 +2756,55 @@ impl DiscordApp {
         cx.notify();
     }
 
-    /// 设置/取消回复目标。
-    pub(crate) fn toggle_reply(&mut self, author: &'static str) {
-        if self.reply_to == Some(author) {
-            self.reply_to = None;
-        } else {
-            self.reply_to = Some(author);
+    /// 设置/取消对某条消息的回复：摘要取该消息正文前 60 字（贴纸/附件退化为文案）。
+    pub(crate) fn toggle_reply_at(&mut self, index: usize, cx: &mut Context<Self>) {
+        let target = self.current_messages().get(index).map(|m| {
+            let excerpt = if !m.text.trim().is_empty() {
+                let text = m.text.trim();
+                let short: String = text.chars().take(60).collect();
+                if text.chars().count() > 60 { format!("{short}…") } else { short }
+            } else if m.sticker.is_some() {
+                "[贴纸]".to_string()
+            } else if m.attachment.is_some() {
+                "[附件]".to_string()
+            } else {
+                "[空消息]".to_string()
+            };
+            ReplyRef { author: m.author, excerpt }
+        });
+        let is_same = target.as_ref().is_some_and(|t| {
+            self.reply_to.as_ref().is_some_and(|cur| cur.author == t.author && cur.excerpt == t.excerpt)
+        });
+        self.reply_to = if is_same { None } else { target };
+        cx.notify();
+    }
+
+    /// 取消回复（输入条「取消」按钮）。
+    pub(crate) fn cancel_reply(&mut self) {
+        self.reply_to = None;
+    }
+
+    /// 点击消息里的回复引用：按摘要反查原消息，滚动过去并高亮。
+    pub(crate) fn jump_to_reply(&mut self, excerpt: &str, cx: &mut Context<Self>) {
+        let target = self.current_messages().iter().position(|m| {
+            let text = m.text.trim();
+            text.starts_with(excerpt.trim_end_matches('…'))
+        });
+        if let Some(index) = target {
+            // 滚动容器的 item 下标要算上顶栏提示与未读分隔线。
+            let mut item = index;
+            if self.forward_notice.is_some() {
+                item += 1;
+            }
+            if let Some((at, _)) = self.unread_divider() {
+                if at <= index {
+                    item += 1;
+                }
+            }
+            self.scroll_handle.scroll_to_item(item);
+            self.reply_highlight = Some(index);
         }
+        cx.notify();
     }
 
     // -----------------------------------------------------------------------
@@ -2021,11 +2878,43 @@ impl DiscordApp {
         cx.notify();
     }
 
-    /// 删除当前会话的第 index 条消息。
+    /// 删除当前会话的第 index 条消息；同时迁移该会话里话题的根消息下标。
     pub(crate) fn delete_message(&mut self, index: usize, cx: &mut Context<Self>) {
-        if let Some(messages) = self.current_messages_mut() {
-            if index < messages.len() {
+        let key = self.session_key();
+        let removed = self
+            .current_messages_mut()
+            .is_some_and(|messages| index < messages.len());
+        if removed {
+            if let Some(messages) = self.current_messages_mut() {
                 messages.remove(index);
+            }
+            if let Some(list) = self.threads.get_mut(&key) {
+                list.retain(|thread| thread.root_index != index);
+                for thread in list.iter_mut() {
+                    if thread.root_index > index {
+                        thread.root_index -= 1;
+                    }
+                }
+            }
+            match self.thread_root {
+                Some(root) if root == index => self.close_thread(),
+                Some(root) if root > index => self.thread_root = Some(root - 1),
+                _ => {}
+            }
+            // 回执与编辑历史浮层记录的都是消息下标，删除后同样要迁移或关闭。
+            if let Some((at, x, y)) = self.read_receipts {
+                if at == index {
+                    self.close_read_receipts();
+                } else if at > index {
+                    self.read_receipts = Some((at - 1, x, y));
+                }
+            }
+            if let Some((at, x, y)) = self.edit_history {
+                if at == index {
+                    self.close_edit_history();
+                } else if at > index {
+                    self.edit_history = Some((at - 1, x, y));
+                }
             }
         }
         self.close_message_menu();
@@ -2041,6 +2930,195 @@ impl DiscordApp {
         {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
+        cx.notify();
+    }
+
+    // -----------------------------------------------------------------------
+    // 话题（Thread）
+    // -----------------------------------------------------------------------
+
+    /// 某条主消息上的话题回复数，没有话题时为 0。
+    pub(crate) fn thread_count(&self, index: usize) -> usize {
+        self.threads
+            .get(&self.session_key())
+            .and_then(|list| list.iter().find(|thread| thread.root_index == index))
+            .map(|thread| thread.replies.len())
+            .unwrap_or(0)
+    }
+
+    /// 当前打开话题的克隆数据（面板只读渲染用）。
+    pub(crate) fn current_thread(&self) -> Option<ChatThread> {
+        if !self.show_thread {
+            return None;
+        }
+        let root = self.thread_root?;
+        self.threads
+            .get(&self.session_key())?
+            .iter()
+            .find(|thread| thread.root_index == root)
+            .cloned()
+    }
+
+    /// 当前话题所依附的原消息（面板顶部展示上下文）。
+    pub(crate) fn thread_root_message(&self) -> Option<Message> {
+        self.thread_root
+            .and_then(|index| self.current_messages().get(index).cloned())
+    }
+
+    /// 打开或查看某条消息的话题；同消息再次点击即关闭。已有话题不会重建。
+    pub(crate) fn toggle_thread(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if index >= self.current_messages().len() {
+            return;
+        }
+        if self.show_thread && self.thread_root == Some(index) {
+            self.close_thread(); self.close_read_receipts(); self.close_edit_history();
+            cx.notify();
+            return;
+        }
+
+        let key = self.session_key();
+        let title = self
+            .current_messages()
+            .get(index)
+            .map(|message| {
+                let text = message.text.trim();
+                if text.is_empty() {
+                    "新话题".to_string()
+                } else {
+                    let short: String = text.chars().take(16).collect();
+                    if text.chars().count() > 16 {
+                        format!("{short}…")
+                    } else {
+                        short
+                    }
+                }
+            })
+            .unwrap_or_else(|| "新话题".to_string());
+        let list = self.threads.entry(key).or_default();
+        if !list.iter().any(|thread| thread.root_index == index) {
+            list.push(ChatThread::new(index, title, Vec::new()));
+        }
+
+        self.show_thread = true;
+        self.thread_root = Some(index);
+        self.show_pins = false;
+        self.show_inbox = false;
+        self.profile_target = None;
+        self.close_message_menu();
+        self.thread_input.update(cx, |input, cx| {
+            input.set_value("", window, cx);
+            input.focus(window, cx);
+        });
+        cx.notify();
+    }
+
+    /// 关闭话题面板（不清空已保存的话题内容）。
+    pub(crate) fn close_thread(&mut self) {
+        self.show_thread = false;
+        self.thread_root = None;
+    }
+
+    // -----------------------------------------------------------------------
+    // 已读回执详情
+    // -----------------------------------------------------------------------
+
+    /// 打开某条消息的已读详情；坐标来自消息状态行的鼠标按下事件。
+    pub(crate) fn open_read_receipts(
+        &mut self,
+        index: usize,
+        x: f32,
+        y: f32,
+        cx: &mut Context<Self>,
+    ) {
+        self.read_receipts = Some((index, x, y));
+        self.close_message_menu();
+        self.close_edit_history();
+        self.profile_target = None;
+        cx.notify();
+    }
+
+    /// 关闭已读详情浮层（不改消息数据）。
+    pub(crate) fn close_read_receipts(&mut self) {
+        self.read_receipts = None;
+    }
+
+    /// 打开编辑历史浮层（光标锚点），与回执 / 消息菜单互斥。
+    pub(crate) fn open_edit_history(
+        &mut self,
+        index: usize,
+        x: f32,
+        y: f32,
+        cx: &mut Context<Self>,
+    ) {
+        if !self
+            .current_messages()
+            .get(index)
+            .is_some_and(|message| message.is_edited())
+        {
+            return;
+        }
+        self.close_message_menu();
+        self.close_read_receipts();
+        self.edit_history = Some((index, x, y));
+        cx.notify();
+    }
+
+    /// 从消息菜单打开编辑历史：右键用光标位置，行内菜单用默认位置。
+    pub(crate) fn open_edit_history_from_menu(&mut self, index: usize, cx: &mut Context<Self>) {
+        let (x, y) = self.menu_message_point.unwrap_or((620., 360.));
+        self.close_message_menu();
+        self.open_edit_history(index, x, y, cx);
+    }
+
+    /// 关闭编辑历史浮层。
+    pub(crate) fn close_edit_history(&mut self) {
+        self.edit_history = None;
+    }
+
+    /// 当前编辑历史：返回消息下标与历史版本列表（旧 → 新）。
+    pub(crate) fn edit_history_detail(&self) -> Option<(usize, Vec<EditRevision>)> {
+        let (index, _, _) = self.edit_history?;
+        let revisions = self.current_messages().get(index)?.edit_history.clone();
+        Some((index, revisions))
+    }
+
+    /// 当前回执详情：返回消息下标与读者列表，读者为空时不展示浮层。
+    pub(crate) fn read_receipts_detail(&self) -> Option<(usize, Vec<ReadReceipt>)> {
+        let (index, _, _) = self.read_receipts?;
+        let message = self.current_messages().get(index).cloned()?;
+        if message.readers.is_empty() {
+            return None;
+        }
+        Some((index, message.readers))
+    }
+
+    /// 在当前话题里发送一条回复（Enter 触发，纯前端内存数据）。
+    pub(crate) fn send_thread_reply(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let text = self.thread_input.read(cx).value().trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        let Some(root) = self.thread_root else {
+            return;
+        };
+        let key = self.session_key();
+        let Some(thread) = self
+            .threads
+            .get_mut(&key)
+            .and_then(|list| list.iter_mut().find(|thread| thread.root_index == root))
+        else {
+            return;
+        };
+        thread
+            .replies
+            .push(ThreadReply::new("你", "刚刚", text, palette::accent()));
+        self.thread_input
+            .update(cx, |input, cx| input.set_value("", window, cx));
         cx.notify();
     }
 
@@ -2091,6 +3169,8 @@ impl DiscordApp {
             message.text.chars().take(80).collect::<String>()
         } else if let Some(sticker) = message.sticker {
             format!("[贴纸] {}", sticker.label)
+        } else if let Some(gif) = message.gif {
+            format!("[GIF] {}", gif.title)
         } else if let Some(attachment) = &message.attachment {
             format!("[附件] {}", attachment.name)
         } else {
@@ -2168,6 +3248,8 @@ impl DiscordApp {
         message.color = source.color;
         message.attachment = source.attachment.clone();
         message.sticker = source.sticker;
+        message.gif = source.gif;
+        message.reply_to = source.reply_to;
 
         let same_session = match self.view_mode {
             ViewMode::DirectMessage => {
@@ -2242,6 +3324,7 @@ impl DiscordApp {
         self.show_pins = !self.show_pins;
         if self.show_pins {
             self.show_inbox = false;
+            self.close_thread(); self.close_read_receipts(); self.close_edit_history();
         }
         self.profile_target = None;
         self.close_message_menu();
@@ -2321,7 +3404,15 @@ impl DiscordApp {
         let text = self.editor.read(cx).value().trim().to_string();
         if !text.is_empty() {
             if let Some(message) = self.current_messages_mut().and_then(|m| m.get_mut(index)) {
-                message.text = text;
+                if message.text != text {
+                    // 编辑前先留存旧正文，供消息旁的「已编辑」历史浮层查看。
+                    let previous = message.text.clone();
+                    message.edit_history.push(EditRevision {
+                        text: previous,
+                        time: "刚刚",
+                    });
+                    message.text = text;
+                }
             }
         }
         self.cancel_edit();
@@ -2445,6 +3536,7 @@ impl DiscordApp {
             self.voice_participants.clear();
             self.show_voice_room = false;
         } else {
+            self.dm_call = None;
             self.voice_channel = Some((server_index, channel));
             self.voice_participants = self.seed_voice_participants();
         }
@@ -2482,6 +3574,93 @@ impl DiscordApp {
     /// 关闭语音房间面板。
     pub(crate) fn close_voice_room(&mut self, cx: &mut Context<Self>) {
         self.show_voice_room = false;
+        cx.notify();
+    }
+
+    // -----------------------------------------------------------------------
+    // 私信语音 / 视频通话
+    // -----------------------------------------------------------------------
+
+    /// 发起私信通话；与服务器语音频道互斥（同一时间只能在一个通话里）。
+    pub(crate) fn start_dm_call(&mut self, friend: String, mode: CallMode, cx: &mut Context<Self>) {
+        let base = friend.trim();
+        if base.is_empty() {
+            return;
+        }
+        let base = base.to_string();
+        let (color, online) = self
+            .friends
+            .iter()
+            .find(|f| f.name == base)
+            .map(|f| (f.color, f.online))
+            .or_else(|| {
+                self.members
+                    .iter()
+                    .find(|m| base_name(m.name) == base)
+                    .map(|m| (m.color, m.online))
+            })
+            .unwrap_or((palette::accent(), false));
+
+        self.leave_voice();
+        self.dm_call = Some(DmCall {
+            friend: base,
+            color,
+            online,
+            mode,
+            connected: false,
+            mic_on: self.mic_on,
+            camera_on: mode == CallMode::Video,
+            screen_sharing: false,
+        });
+        self.close_profile();
+        self.close_quick_switcher();
+        self.show_inbox = false;
+        self.show_pins = false;
+        self.close_message_menu();
+        cx.notify();
+    }
+
+    /// Demo：把「正在呼叫」推进为「已接通」。
+    pub(crate) fn connect_dm_call(&mut self, cx: &mut Context<Self>) {
+        if let Some(call) = self.dm_call.as_mut() {
+            call.connected = true;
+        }
+        cx.notify();
+    }
+
+    /// 挂断私信通话（面板由 `dm_call.is_some()` 决定是否渲染）。
+    pub(crate) fn end_dm_call(&mut self, cx: &mut Context<Self>) {
+        self.dm_call = None;
+        cx.notify();
+    }
+
+    /// 通话内麦克风开关，与底部用户栏的 `mic_on` 互不覆盖。
+    pub(crate) fn toggle_dm_call_mic(&mut self, cx: &mut Context<Self>) {
+        if let Some(call) = self.dm_call.as_mut() {
+            call.mic_on = !call.mic_on;
+        }
+        cx.notify();
+    }
+
+    /// 通话内摄像头开关；关摄像头时同时停止屏幕分享，避免两个画面同时开着。
+    pub(crate) fn toggle_dm_call_camera(&mut self, cx: &mut Context<Self>) {
+        if let Some(call) = self.dm_call.as_mut() {
+            call.camera_on = !call.camera_on;
+            if !call.camera_on {
+                call.screen_sharing = false;
+            }
+        }
+        cx.notify();
+    }
+
+    /// 通话内屏幕分享开关；开分享时自动开摄像头，让预览区有画面。
+    pub(crate) fn toggle_dm_call_screen(&mut self, cx: &mut Context<Self>) {
+        if let Some(call) = self.dm_call.as_mut() {
+            call.screen_sharing = !call.screen_sharing;
+            if call.screen_sharing {
+                call.camera_on = true;
+            }
+        }
         cx.notify();
     }
 
@@ -2646,6 +3825,7 @@ impl DiscordApp {
         self.show_search_center = true;
         self.show_pins = false;
         self.show_inbox = false;
+        self.close_thread(); self.close_read_receipts(); self.close_edit_history();
         self.show_status_menu = false;
         self.show_attachment_picker = false;
         self.close_sticker_picker();
@@ -2668,6 +3848,107 @@ impl DiscordApp {
         cx.notify();
     }
 
+    /// 打开帮助中心：清空搜索、回到「全部」分类列表。
+    pub(crate) fn open_help_center(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.help_input
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.help_query.clear();
+        self.help_category = None;
+        self.help_article = None;
+        self.show_help_center = true;
+        self.show_quick_switcher = false;
+        self.show_pins = false;
+        self.show_inbox = false;
+        self.show_status_menu = false;
+        self.profile_target = None;
+        self.close_message_menu();
+        cx.notify();
+    }
+
+    /// 关闭帮助中心（详情页一并复位）。
+    pub(crate) fn close_help_center(&mut self, cx: &mut Context<Self>) {
+        self.show_help_center = false;
+        self.help_article = None;
+        cx.notify();
+    }
+
+    /// 标题栏 ? 按钮：开着就关，关着就开。
+    pub(crate) fn toggle_help_center(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.show_help_center {
+            self.close_help_center(cx);
+        } else {
+            self.open_help_center(window, cx);
+        }
+    }
+
+    /// 切换帮助分类（None = 全部），并回到列表。
+    pub(crate) fn set_help_category(
+        &mut self,
+        category: Option<&'static str>,
+        cx: &mut Context<Self>,
+    ) {
+        self.help_category = category;
+        self.help_article = None;
+        cx.notify();
+    }
+
+    /// 打开某篇帮助文档。
+    pub(crate) fn open_help_article(&mut self, id: &'static str, cx: &mut Context<Self>) {
+        self.help_article = Some(id);
+        cx.notify();
+    }
+
+    /// 从文档详情退回列表。
+    pub(crate) fn close_help_article(&mut self, cx: &mut Context<Self>) {
+        self.help_article = None;
+        cx.notify();
+    }
+
+    /// 当前分类 + 关键词过滤后的帮助文档。
+    pub(crate) fn help_matches(&self) -> Vec<HelpArticle> {
+        let query = self.help_query.trim().to_lowercase();
+        self.help_articles
+            .iter()
+            .copied()
+            .filter(|article| self.help_category.is_none_or(|c| article.category == c))
+            .filter(|article| article.matches(&query))
+            .collect()
+    }
+
+    /// 按 id 取一篇帮助文档（详情页渲染用）。
+    pub(crate) fn help_article_ref(&self, id: &str) -> Option<HelpArticle> {
+        self.help_articles.iter().copied().find(|a| a.id == id)
+    }
+
+    /// 某分类下的文档数量（分类导航右侧计数，None 为全部）。
+    pub(crate) fn help_category_count(&self, category: Option<&'static str>) -> usize {
+        self.help_articles
+            .iter()
+            .filter(|a| category.is_none_or(|c| a.category == c))
+            .count()
+    }
+
+    /// 从搜索词里移除一个高级过滤 token（搜索栏「已应用」标签点击）。
+    pub(crate) fn remove_search_filter(
+        &mut self,
+        token: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let lowered = token.to_lowercase();
+        let next = self
+            .search_center_query
+            .split_whitespace()
+            .filter(|part| part.to_lowercase() != lowered)
+            .collect::<Vec<_>>()
+            .join(" ");
+        self.search_center_query = next.clone();
+        self.search_center_input
+            .update(cx, |input, cx| input.set_value(&next, window, cx));
+        self.run_search();
+        cx.notify();
+    }
+
     /// 切换搜索范围并立即重跑。
     pub(crate) fn set_search_scope(&mut self, scope: SearchScope, cx: &mut Context<Self>) {
         if self.search_scope == scope {
@@ -2678,11 +3959,12 @@ impl DiscordApp {
         cx.notify();
     }
 
-    /// 按当前关键词与范围重算结果；关键词为空时结果直接清空。
+    /// 按当前关键词、高级过滤条件与范围重算结果；无任何约束时结果直接清空。
     fn run_search(&mut self) {
-        let query = self.search_center_query.trim().to_lowercase();
+        let filters = SearchFilters::parse(&self.search_center_query);
+        self.search_filters = filters.clone();
         self.search_results.clear();
-        if query.is_empty() {
+        if filters.is_empty() {
             return;
         }
 
@@ -2710,7 +3992,7 @@ impl DiscordApp {
                             continue;
                         };
                         for message in messages {
-                            if !hit_matches(message, &query) {
+                            if !filters.matches(message) {
                                 continue;
                             }
                             hits.push(SearchHit {
@@ -2734,7 +4016,7 @@ impl DiscordApp {
                     continue;
                 };
                 for message in messages {
-                    if !hit_matches(message, &query) {
+                    if !filters.matches(message) {
                         continue;
                     }
                     hits.push(SearchHit {
@@ -2787,6 +4069,8 @@ impl DiscordApp {
         self.view_mode = ViewMode::Discover;
         self.show_voice_room = false;
         self.show_search_center = false;
+        self.show_help_center = false;
+        self.close_thread(); self.close_read_receipts(); self.close_edit_history();
         self.member_menu = None;
         self.discover_category = None;
         self.discover_filter.clear();
@@ -2866,6 +4150,8 @@ impl DiscordApp {
         self.show_server_settings = true;
         self.show_voice_room = false;
         self.show_search_center = false;
+        self.show_help_center = false;
+        self.close_thread(); self.close_read_receipts(); self.close_edit_history();
         self.member_menu = None;
         self.server_settings_section = ServerSettingsSection::Overview;
         self.invite_copied = false;
@@ -2995,6 +4281,8 @@ impl DiscordApp {
         self.show_server_settings = false;
         self.show_voice_room = false;
         self.show_search_center = false;
+        self.show_help_center = false;
+        self.close_thread(); self.close_read_receipts(); self.close_edit_history();
         self.show_status_menu = false;
         self.profile_target = None;
         self.close_message_menu();
@@ -3136,6 +4424,11 @@ impl DiscordApp {
     fn render_main(&mut self, cx: &mut Context<Self>) -> Div {
         let view_mode = self.view_mode;
 
+        // 话题面板只在服务器 / 私信聊天区有意义，探索页不渲染。
+        let show_thread = self.show_thread
+            && self.thread_root.is_some()
+            && matches!(view_mode, ViewMode::Server | ViewMode::DirectMessage);
+
         // 探索页是独立整屏页面：只保留服务器栏，其余区域由 discover 自行组织。
         if view_mode == ViewMode::Discover {
             return div()
@@ -3149,6 +4442,9 @@ impl DiscordApp {
                 .child(discover::render(self, cx))
                 .when(self.show_voice_room && self.voice_channel.is_some(), |el| {
                     el.child(voice_room::render(self, cx))
+                })
+                .when(self.show_quick_switcher, |el| {
+                    el.child(chat::quick_switcher::render(self, cx))
                 })
                 .child(voice_status::render(self, cx));
         }
@@ -3200,6 +4496,9 @@ impl DiscordApp {
             .when(self.show_pins && view_mode != ViewMode::Friends, |el| {
                 el.child(chat::pinned_panel::render(self, cx))
             })
+            .when(show_thread, |el| {
+                el.child(chat::thread_panel::render(self, cx))
+            })
             .when(self.show_inbox, |el| {
                 el.child(chat::inbox_panel::render(self, cx))
             })
@@ -3208,6 +4507,12 @@ impl DiscordApp {
             })
             .when(self.menu_message_point.is_some(), |el| {
                 el.child(chat::message_menu::render_floating(self, cx))
+            })
+            .when(self.read_receipts.is_some(), |el| {
+                el.child(chat::read_receipts::render_floating(self, cx))
+            })
+            .when(self.edit_history.is_some(), |el| {
+                el.child(chat::edit_history::render_floating(self, cx))
             })
             .when(self.channel_menu.is_some(), |el| {
                 el.child(channel_menu::render(self, cx))
@@ -3239,8 +4544,17 @@ impl DiscordApp {
             .when(self.show_forward, |el| {
                 el.child(chat::forward_dialog::render(self, cx))
             })
+            .when(self.attachment_preview.is_some(), |el| {
+                el.child(chat::attachment_preview::render(self, cx))
+            })
             .when(self.show_voice_room && self.voice_channel.is_some(), |el| {
                 el.child(voice_room::render(self, cx))
+            })
+            .when(self.show_help_center, |el| {
+                el.child(help_center::render(self, cx))
+            })
+            .when(self.show_quick_switcher, |el| {
+                el.child(chat::quick_switcher::render(self, cx))
             })
             .child(voice_status::render(self, cx))
     }
@@ -3248,12 +4562,29 @@ impl DiscordApp {
 
 impl Render for DiscordApp {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.show_server_settings {
+        // 键盘入口挂在元素树的根上（window.on_key_event 只能在 paint 阶段调用，Render 里会 panic）。
+        // 根元素持有焦点，输入框聚焦时按键也会从焦点元素冒泡到这里。
+        let content: AnyElement = if self.show_server_settings {
             server_settings::render(self, cx).into_any_element()
         } else if self.show_settings {
             settings::render(self, cx).into_any_element()
         } else {
             self.render_main(cx).into_any_element()
-        }
+        };
+
+        let root_focus = self.root_focus.clone();
+        div()
+            .size_full()
+            .relative()
+            .id("app-key-root")
+            .track_focus(&root_focus)
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                this.handle_shortcut(event, window, cx);
+            }))
+            .child(content)
+            // 通话浮窗挂在根层：切频道、开设置/探索页时仍保持可见。
+            .when(self.dm_call.is_some(), |el| {
+                el.child(dm_call_panel::render(self, cx))
+            })
     }
 }

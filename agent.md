@@ -26,7 +26,7 @@ src/
 └── ui/
     ├── mod.rs                # 声明子模块，re-export ico / avatar / unread_badge
     ├── theme.rs              # 色板常量 palette + ico() 图标工具
-    ├── widgets.rs            # 可复用无状态组件：avatar / unread_badge
+    ├── widgets.rs            # 公共组件库：avatar / 徽标 / 分组标题 / 图标按钮 / 开关行 / 筛选 chip
     ├── server_rail.rs        # 服务器栏视图（含私信主页入口、探索入口）
     ├── discover.rs           # 探索页（整屏：搜索 + 分类筛选 + 公开服务器卡片 + 加入）
     ├── settings/             # 用户设置页（全屏覆盖主界面）
@@ -46,8 +46,10 @@ src/
     ├── invite_dialog.rs      # 邀请好友弹层（展示邀请链接，提交即复制到剪贴板）
     ├── create_dialog.rs      # 新建服务器 / 新建频道居中模态（通用 dialog 骨架，可复用）
     ├── topic_dialog.rs       # 频道主题编辑弹层（复用 create_dialog::dialog）
+    ├── dm_call_panel.rs      # 私信语音/视频通话浮窗（呼叫中/已接通、设备控制、挂断，挂根层跨视图保持）
     ├── dm_sidebar.rs         # 私信侧栏（真实搜索框 + 好友入口 + 会话列表 + 发起对话）
     ├── friends.rs            # 好友页（在线/待处理/全部/已屏蔽/添加好友 五个标签，点击发起私信）
+    ├── help_center.rs        # 帮助中心浮层（标题栏 ? 打开：左侧分类导航 + 关键词搜索 + 文档列表 / 详情）
     ├── user_footer.rs        # 侧栏底部用户控制条（频道栏/私信栏共用）
     ├── member_list.rs        # 成员栏视图（按角色分组 + 折叠 + 点击成员弹资料卡 + 右键上下文菜单）
     ├── member_menu.rs        # 成员上下文菜单（资料卡/私信/提及/复制名/屏蔽，光标锚点 + 透明遮罩）
@@ -56,16 +58,22 @@ src/
     ├── voice_room.rs         # 语音房间面板（参与者/静音/移出/本机麦克风/断开）
     ├── search_center.rs      # 搜索中心（接管聊天主区域：范围 chips + 跨频道/私信结果 + 命中高亮 + 跳转）
     └── chat/
-        ├── mod.rs            # 声明 attachment_picker / composer / emoji_picker / header / inbox_panel / messages / message_menu / pinned_panel
+        ├── mod.rs            # 声明 attachment_picker / attachment_preview / composer / edit_history / emoji_picker / forward_dialog / gif_picker / header / inbox_panel / messages / message_menu / pinned_panel / quick_switcher / read_receipts / sticker_picker / thread_panel
         ├── header.rs         # 聊天标题栏（频道/私信自适应）、就地过滤输入框 + 放大镜进搜索中心、置顶/收件箱开关（带未读角标）
         ├── messages.rs       # 消息列表、搜索过滤、表情回应、附件卡片、消息工具栏、作者点击
         ├── composer.rs       # 输入框、待发附件条、回复提示条、发送按钮、@提及补全浮层
         ├── attachment_picker.rs # 附件选择弹层（模拟文件清单，选中后成为待发附件）
+        ├── attachment_preview.rs # 附件预览弹层（点击消息附件卡打开放大详情）
         ├── emoji_picker.rs   # 表情选择器弹层
         ├── message_menu.rs   # 消息操作菜单（行内省略号入口 + 右键光标浮层，共用一份操作项）
         ├── forward_dialog.rs # 转发消息弹层（搜索目标频道/私信，点击即转发）
+        ├── edit_history.rs   # 编辑历史浮层（光标锚点卡片，倒序列出编辑前的正文与版本时间）
+        ├── gif_picker.rs     # GIF 搜索弹层（搜索框 + 分类标签 + GIF 网格，点击即发送）
         ├── sticker_picker.rs # 贴纸弹层（包标签 + 贴纸网格，点击即发送）
+        ├── thread_panel.rs   # 话题面板（原消息上下文 + 回复列表 + 独立输入条，覆盖聊天区右侧）
         ├── pinned_panel.rs   # 置顶消息面板（绝对定位，覆盖聊天区右侧）
+        ├── quick_switcher.rs # 快速切换器（Ctrl/⌘+K 搜索频道/私信并跳转）
+        ├── read_receipts.rs  # 已读回执详情浮层（光标锚点卡片，列出读者与时间）
         └── inbox_panel.rs    # 收件箱/通知中心（绝对定位，聚合提及/未读/私信/好友请求）
 ```
 
@@ -137,7 +145,7 @@ use gpui_kit::assets::IconName;
 | `.id()` `.on_click()` | `InteractiveElement` / `StatefulInteractiveElement` | `use gpui_kit::*;` 已包含 |
 | `.flex_1()` `.h_full()` 等布局 | `Styled` | 同上 |
 
-> **实践结论**：视图模块统一用 `use gpui_kit::*;` 打底，再按需从 `component` 根显式导入 `h_flex` / `v_flex` / `Size` / `Sizable` / `Input` 等。`widgets.rs` 这种不写 `use gpui_kit::*` 的模块，必须自己补 `Styled` + `ParentElement` + `FluentBuilder`。
+> **实践结论**：视图模块统一用 `use gpui_kit::*;` 打底，再按需从 `component` 根显式导入 `h_flex` / `v_flex` / `Size` / `Sizable` / `Input` 等。公共组件库 `widgets.rs` 同样用 `use gpui_kit::*;` 打底，再显式导入 `assets::IconName` / `component::{h_flex,v_flex,Size}` / `prelude::FluentBuilder`，不要手写零散 trait 导入（会漏 `hover` 等方法）。
 
 ### 3.3 图标尺寸必须走 UFCS
 
@@ -209,12 +217,20 @@ gpui_kit::application()
 
 - **颜色**：一律使用 `ui/theme.rs::palette` 的 token，通过 `rgb(palette::xxx())` 使用（**带括号**，它们是随主题切换的函数而不是常量）。禁止在视图里写裸 `0xRRGGBB`。新增颜色先在 `palette` 的 `tokens!` 表里补一对「深色 => 浅色」。
 - **纯白 `palette::WHITE`**：唯一保留的常量，只允许用在「彩色底上的文字/图标」（徽标字、按钮图标、开关滑块），不要拿它当背景色。
-- **公共组件**：头像、徽标、图标等可复用片段放 `ui/widgets.rs`；只服务单一视图的片段留在该视图模块内作为私有辅助函数。
+- **公共组件**：头像、徽标、分组标题、图标按钮、开关行、筛选 chip 等可复用片段放 `ui/widgets.rs` 并由 `ui/mod.rs` 导出；只服务单一视图、或形态异构（如好友页图标 tab、成员行、模态标题栏）的片段留在该视图模块内作为私有辅助函数，不要为复用而过度泛化。
 - **模型构造**：用 `Message::new(...).grouped().reaction(...)` 这类 builder 风格；新增字段时保持构造函数向后兼容。
 - **状态字段**：`DiscordApp` 的字段一律 `pub(crate)`；外部读取通过字段，修改通过方法。
 - **消息索引键**：统一为 `format!("{}/{}", server_name, channel_name)`，只在 `active_key()` 里生成，不要在别处拼字符串。
 - **注释**：模块顶部用一行中文注释说明职责；复杂 API 约定可就近写简短注释，但不要逐行解释代码。
 - **格式化**：保持 rustfmt 风格（4 空格、链式调用每行一个方法）。
+
+### 公共组件库约定（`ui/widgets.rs`）
+
+- 公共组件只做渲染与事件转发，不持有业务状态；交互回调统一是 `ClickHandler = dyn Fn(&mut DiscordApp, &mut Window, &mut Context<DiscordApp>) + 'static`，调用方传 `Box::new(|this, window, cx| ...)`，组件内部用 `cx.listener(move |this, _, window, cx| { handler(...); cx.notify(); })` 包装。
+- 现有 6 类交互/展示组件：`icon_button(icon, icon_size, side, id, active, handler, cx)`（幽灵按钮，`active` 只切主要/次要文字色，返回 `Stateful<Div>` 可继续 `.when()` 挂徽标）、`danger_icon_button`（危险操作，hover 变 danger + 白字）、`close_button`（弹层右上角 X，28×28）、`toggle_row`（设置页开关行）、`filter_chip`（搜索/探索页文字胶囊）、`section_label`（分组小标题，11px 加粗 muted；padding 交给调用方外层包装）。纯展示组件：`avatar` / `avatar_status` / `unread_badge` / `draft_badge`。
+- `icon_button` 有 `side: Pixels` 参数覆盖 18/24/28 等尺寸；**不能**表达的颜色语义（如通知按钮的 `text_message`/`danger` 双色）保留视图内联实现，别硬塞进公共组件。
+- 接入时若回调闭包不使用 window/cx，用 `|this, _, _|` 避免 unused 警告；`impl Into<ElementId>` 参数上调用方**直接传字符串字面量**（不要写 `"xxx".into()`，多 impl Trait 参数会导致 E0283 类型歧义）。
+- 抽取边界：只抽形态同构、≥2 处复用的片段。好友页图标 tab（带 badge 与方块圆角）、通用标题栏（左侧内容异构）、成员/参与者行、server_settings 表单卡属于高风险过度泛化，保持各自私有实现。
 
 ### 弹层 / 浮层组件约定
 
@@ -307,6 +323,94 @@ gpui_kit::application()
 - 邀请：链接由 `app.invite_code()`（已 `pub(crate)`）+ `discord.gg/` 拼出，`copy_server_invite` 写剪贴板并把 `invite_copied` 置真（按钮变「已复制」）。「打开邀请弹层」走 `open_invite`，该弹层挂在主界面上，因此 `open_invite` 会顺带关掉服务器设置页。
 - 打开用户设置页（`open_settings`）会关闭服务器设置页；切换分类时 `invite_copied` 复位。
 
+### 快捷键与快速切换器约定
+
+- **全局按键只能挂在元素上**：`window.on_key_event` 有 `debug_assert_paint`，在 `Render::render` 里调用会启动即 panic（已踩过）。正确做法是在 `Render::render` 返回的根 `div()` 上 `.id("app-key-root").track_focus(&self.root_focus).on_key_down(cx.listener(...))`，并在 `DiscordApp::new` 末尾 `window.focus(&this.root_focus, cx)` 让根持有焦点；输入框聚焦时按键会冒泡到根，一样能收到。
+- 唯一入口 `app::handle_shortcut(event, window, cx)`：`Ctrl/⌘+K`（`modifiers.control || modifiers.platform` + `key == "k"`）开/关快速切换器；`key == "escape"` 调 `close_top_overlay`；切换器打开时 `"up"/"down"` 调 `move_quick_selection(±1)`。特殊键名是小写（`escape`、`down`、`up`），不是 `Escape` / `ArrowDown`。
+- `close_top_overlay` 按「最上层优先」依次关：行内编辑 → 快速切换器 → 附件预览 → 转发 → 搜索中心 → 服务器设置 → 用户设置 → 邀请/新建/主题/分类弹层 → 频道/分类/成员/消息菜单 → 置顶/收件箱 → 状态/贴纸/表情/附件/资料卡/语音房间 → 探索页；只关一层，不误伤底层状态。
+- 快速切换器状态：`show_quick_switcher` / `quick_search` / `quick_query` / `quick_selected`。打开时清空搜索、聚焦输入框并收起所有浮层与整屏页；`quick_targets()` 复用 `forward_targets()` 的候选集合，按 `quick_query` 过滤。
+- `InputState` 订阅里 `Change` 更新 query 并把高亮归零，`PressEnter { secondary: false }` 调 `activate_quick_selection`；上下键循环移动；点击行走 `activate_quick_at(index, ...)` 后与回车共用跳转逻辑。跳转：私信 `open_dm`，频道按服务器名定位后写 `active_server` / `active_channel` 并 `reset_session`。
+- 视图 `ui/chat/quick_switcher.rs`：遮罩 `quick-switcher-backdrop`，顶部 128 居中宽 520 卡片 = 搜索框 + `max_h 360` 候选列表（44 高行、彩色圆标、名称 + 归属、高亮行右侧「↵ 跳转」）+ 底部「↑ ↓ 选择 / Enter 跳转 / Esc 关闭 / N 个会话」。标题栏搜索框右侧的 `⌘K` chip 是无键盘用户的等价入口。
+
+### 回复引用约定
+
+- 数据：`data::ReplyRef { author: &'static str, excerpt: String }`，`Message.reply_to: Option<ReplyRef>` + `.replying_to(author, excerpt)` builder，`new()` 默认 None。摘要取原消息正文前 60 字，超过加「…」；贴纸/附件/空消息退化为 `[贴纸]/[附件]/[空消息]`。
+- 状态：`app.reply_to: Option<ReplyRef>`（回复草稿）、`reply_highlight: Option<usize>`（点击引用后高亮的原消息下标）。`toggle_reply_at(index, cx)` 从当前会话取摘要并支持再次点同一消息取消；输入条「取消」走 `cancel_reply()`；所有清 `reply_to = None` 的地方（reset/send/贴纸发送）也要清 `reply_highlight`。
+- 发送文本 `send_message` 与发送贴纸 `send_sticker` 都用 `self.reply_to.take()` 把引用写入新消息后清空；转发 `forward_message` 克隆 `source.reply_to` 一并带走。
+- 视图：`ui/chat/messages.rs::reply_quote_row`（正文上方、转发来源行之后）渲染「回复 @作者：摘要」，左侧竖线 + 链接色可点击，点击走 `app.jump_to_reply(excerpt, cx)`；后者按摘要前缀反查原消息 index，`scroll_handle.scroll_to_item(item)` 滚动过去（item 需算上 forward_notice 与未读分隔线的偏移），并置 `reply_highlight`。消息行 `.when(app.reply_highlight == Some(index), ...)` 用 `bg_reaction_mine()` 高亮，切会话即消失。
+- 输入条 `composer.rs` 用 `app.reply_to.as_ref()` 读引用，显示「回复 @作者：摘要」。
+
+### 话题（Thread）约定
+
+- 数据：`data::ThreadReply { author, time, text, color }`（构造 `ThreadReply::new`）与 `data::ChatThread { root_index, title, replies }`（构造 `ChatThread::new`）。话题存在 app 的 `threads: HashMap<String, Vec<ChatThread>>`，键统一走 `session_key()`；`root_index` 是话题挂在**当前会话主消息列表**里的下标，不跨会话复用。
+- 演示数据 `seed_threads()` 预置两条：频道 `开发者社区/闲聊` 的第 3 条、私信 `dm:Nova` 的第 1 条；用户可从任意消息新建话题，标题取原消息前 16 字，超出加「…」。
+- 状态只有 `show_thread` / `thread_root` / `thread_input`（独立 `InputState`，Enter 订阅调用 `send_thread_reply`）。打开统一走 `toggle_thread(index, window, cx)`：同消息再次点击关闭，已有话题不重建，打开时清空回复输入并聚焦，同时关置顶/收件箱/菜单/资料卡。关闭走 `close_thread()`，不清空已保存的回复。
+- 读取统一走 app 方法：`thread_count(index)`（消息徽标与菜单文案）、`current_thread()`（克隆面板数据）、`thread_root_message()`（面板顶部原消息）。视图不直接读 `threads` 字典。
+- 发送回复 `send_thread_reply(window, cx)` 把文本包装成 `ThreadReply::new("你", "刚刚", text, palette::accent())` 追加到话题，清空输入。Demo 不把话题回复写回主消息列表，也不参与搜索/未读/转发。
+- 面板 `ui/chat/thread_panel.rs`：绝对定位右侧 360 宽（与置顶面板同层），48 头部（使用公共 `close_button`）+ 可滚动原消息卡/`N 条回复` 分隔线/回复行 + 底部独立输入条（公共 `icon_button` 发送）。只在 `Server` / `DirectMessage` 视图挂载。
+- 入口三处：消息工具栏 `msg-thread-{index}`（`thread_count > 0` 文案为「话题」否则「开话题」）、消息下方 `msg-thread-badge-{index}`（仅已有话题）、消息菜单 `msg-menu-thread-{index}`（「创建话题 / 查看话题」）。所有入口都调 `toggle_thread`，不在视图里改状态。
+- 生命周期：`reset_session` / `close_top_overlay`（Esc）/ `toggle_pins` / `toggle_inbox` / `open_search_center` / `open_discover` / `open_settings` / `open_server_settings` 都会 `close_thread()`；`delete_message` 必须清理被删根消息的话题，并把同会话其余话题的 `root_index` 前移，当前打开的根被删时关闭面板。
+
+### 送达状态与已读回执约定
+
+- 数据：`data::DeliveryStatus { Sent, Delivered, Read }` 与 `data::ReadReceipt { name, time, color }`（`ReadReceipt::new` 为 const）。`Message` 新增 `delivery` 与 `readers`，`Message::new` 默认 `Sent`；builder `.delivered()` 标记已送达，`.read_by(readers)` 按读者是否为空自动落到 `Read` 或 `Delivered`。新发出的消息保持默认 `Sent`，Demo 不模拟后续状态推进。
+- 视图只在 `message.author == "你"` 时渲染状态行：`messages.rs::delivery_row` 用 `Check`（已发送）/ `CheckCheck`（已送达、已读），已读且 `readers` 非空时显示「已读 N 人」并可点；其余状态只读。状态行挂在正文/回应/话题徽标之后、工具栏之前。
+- 点击已读状态走 `on_mouse_down(MouseButton::Left)` 而不是 `on_click`，因为需要 `MouseDownEvent.position` 作为浮层锚点；调用 `open_read_receipts(index, x, y, cx)`，同时关消息菜单与资料卡。
+- 浮层 `ui/chat/read_receipts.rs` 复用消息右键菜单的「全屏透明遮罩 + 绝对定位卡片」骨架：左/上取点击坐标并分别 clamp 到 1230 / 700，宽 260，头部用公共 `close_button`，主体 `max_h(240)` 可滚动，每行是头像 + 名字 + 时间。点遮罩、右键或 X 都调用 `close_read_receipts`。
+- app 状态只有一个 `read_receipts: Option<(index, x, y)>`；详情读取统一走 `read_receipts_detail() -> Option<(index, Vec<ReadReceipt>)>`，读者为空则不渲染。Esc 在消息菜单之后、置顶面板之前关闭该浮层。
+- 生命周期：所有关闭话题的路径（切会话 / Esc / 置顶 / 收件箱 / 搜索中心 / 探索 / 设置 / 服务器设置）同时关闭回执浮层；`delete_message` 迁移下标，删除的是被查看消息则直接关闭浮层，避免索引串位。
+
+### 私信语音 / 视频通话约定
+
+- 数据：`app::CallMode { Voice, Video }` 与 `app::DmCall { friend, color, online, mode, connected, mic_on, camera_on, screen_sharing }`。状态只有一个字段 `dm_call: Option<DmCall>`，Some 即渲染浮窗，None 即无通话；不额外加 `show_*` 布尔。
+- 发起统一走 `start_dm_call(friend: String, mode, cx)`：自动关闭资料卡/快速切换器/收件箱/置顶/消息菜单，并先 `leave_voice()` 保证与服务器语音频道互斥；反向在 `toggle_voice` 加入频道时清空 `dm_call`。颜色与在线状态从 friends / members 聚合，未知联系人回退 `palette::accent()`。
+- Demo 用两态：`connected=false` 显示「正在呼叫 @friend」+「模拟接通 / 取消」；`connect_dm_call(cx)` 推进到 `connected=true` 后显示设备控制栏。设备操作只有 `toggle_dm_call_mic/camera/screen(cx)`：关摄像头会同时停屏幕分享，开屏幕分享会自动开摄像头，避免两个画面语义打架。挂断统一 `end_dm_call(cx)`。
+- 视图 `ui/dm_call_panel.rs` 挂在**根 Render 层**（`Render::render` 的 `app-key-root` 下），因此切频道、切私信、打开用户/服务器设置、进入探索页都不会消失；只有挂断或改连服务器语音才关闭。浮窗绝对定位 `right:24 / bottom:72`，宽 320，不遮挡左侧语音状态条。
+- 预览区是明确标注的占位：呼叫中显示对方头像，接通后按 `screen_sharing > camera_on > 摄像头关闭` 三态切换；不采集真实麦克风/摄像头/屏幕，文案里不能写成真的音视频。
+- 入口两处：DM 标题栏 `chat-dm-voice-call` / `chat-dm-video-call`（仅 `is_dm()` 时渲染，按 `dm_call_mode` 高亮），资料卡 `profile-voice-call` / `profile-video-call`（对任意资料卡目标都可发起）。全部复用公共 `icon_button`，不在回调里直接改 app 字段。
+- 设置页「快捷键」列表要跟随新增交互更新：`Ctrl/⌘+K`、`↑/↓`、`Esc`、话题与通话相关入口需要在列表里可见。
+
+### 会话草稿约定
+
+- 数据：app 层 `drafts: HashMap<String, MessageDraft>` 按会话键存未发送内容，`MessageDraft { text: String, attachment: Option<Attachment> }`（定义在本文件，不放 data 层，因为含 UI 附件状态）。`current_session: String` 记录输入框当前归属的会话键。
+- 会话键统一由 `session_key()` 生成：频道走 `active_key()`（`服务器/频道`），私信是 `dm:好友`，好友页 / 探索页返回空串（不保留草稿，输入框也被清空）。
+- **切换时序很关键**：所有切会话入口都是先改 `active_*` / `view_mode` 再调 `reset_session`，所以 `reset_session` 开头调 `save_draft(cx)` 时用 `current_session`（还是旧键）存回旧会话；结尾在 placeholder 更新后调 `load_draft(window, cx)` 算出新键、更新 `current_session`、恢复新会话草稿。`set_value` 不触发 `InputEvent::Change`，不会误触发 @提及刷新。
+- `new()` 末尾必须 `this.current_session = this.session_key()`，否则默认频道第一次输入的草稿会因为空键丢失。
+- `send_message` 成功后 `set_value("")` 并 `drafts.remove(&current_session)`，避免已发内容残留草稿标记。
+- 侧栏标记：`ui/widgets.rs::draft_badge()`（强调色小胶囊「草稿」）由 `ui/mod.rs` 导出；频道侧栏在 `name` 被 move 进 `.child(name)` **之前**先算 `has_draft = !is_voice && app.channel_has_draft(&name)`，避免 E0382；私信侧栏 `conversation_row` 多一个 `has_draft: bool` 参数，两处调用都传 `app.dm_has_draft(conversation.friend)`。判定统一走 app 的 `has_draft(key) / channel_has_draft(name) / dm_has_draft(friend)`，视图不直接读草稿字典。
+- 空草稿（文本 trim 后为空且无附件）在 `save_draft` 里直接 remove 对应键，不留空标记。
+
+### 未读分隔线与跳到最新约定
+
+- 未读数的数据源是现有模型：`Channel.unread` 与 `DmConversation.unread`，**不**新增状态、不做持久化。切换会话时 `reset_session` 只滚到底部、不清未读，这样分隔线才可见。
+- app 层三个方法：`current_unread_count()` 按 `ViewMode` 取当前频道/私信的未读数；`unread_divider() -> Option<(usize, usize)>` 给出 `(插入下标, 未读数)`，当未读为 0 或 ≥ 消息条数时不插入；`jump_to_latest(cx)` 先 `scroll_handle.scroll_to_bottom()` 再 `mark_current_read()`（私有方法，分别清 `Channel.unread` / `DmConversation.unread`）。
+- 视图 `ui/chat/messages.rs`：渲染循环前一次性取 `divider`，命中下标时在消息行之前插 `unread_divider_row`（两侧红细线 + 居中 danger 胶囊「N 条新消息」，胶囊可点跳转），并把 `last_author` 清空避免跨分隔线分组；列表底部另有 `jump_latest_pill`（`absolute bottom 40 / right 20`，强调色胶囊 + `ArrowDown` + 「N 条新消息 · 跳到最新」），用 `.when(unread > 0, ...)` 挂载。
+- 两个入口都只调 `app::jump_to_latest`，跳转后未读归零，分隔线与浮标同时消失；消息搜索过滤时分隔线仍按原消息下标插入，过滤掉前面的消息不会错位。
+
+### 附件预览约定
+
+- 入口：消息附件卡整卡点击。卡片函数签名是 `messages.rs::attachment_card(attachment, index, cx) -> impl IntoElement`——**必须**返回 `impl IntoElement`，因为 `.id()` 会把 `Div` 变成 `Stateful<Div>`，写死 `Div` 会报 E0308。
+- 状态只有 `app.attachment_preview: Option<Attachment>`；`open_attachment_preview(attachment, cx)` 会顺带收起转发/置顶/收件箱/资料卡/状态/服务器菜单与消息菜单，`close_attachment_preview(cx)` 由遮罩、X、底部按钮共用，`reset_session` 也会清掉。
+- 视图 `ui/chat/attachment_preview.rs` 是独立组件：遮罩 `attachment-preview-backdrop`（rgba 0x000000cc）+ 宽 560 卡片（52 头部 / 320 预览区 / 56 底部）。图片与文件共用布局，只换图标（`Image` / `FileText`）与文案；预览区是占位色块，不读磁盘。
+- 图标放大用 `Size::Size(px(72.))`（`Size` 有 `Size(Pixels)` 变体，不用自己给 `Icon` 加样式）。
+- 底部按钮复制文件名到剪贴板模拟「下载」：`copy_attachment_name(cx)`，复制后关闭弹层。没有真实文件与下载行为，README/规范里不要写成真的下载。
+
+### 消息编辑历史约定
+- 数据：`data::EditRevision { text: String, time: &'static str }`，`Message.edit_history: Vec<EditRevision>` + `.revised(text, time)` builder + `is_edited()`（非空即编辑过）；种子数据给两条自有消息预置历史。
+- 写入：`commit_edit` 只在正文**确实变化**时把旧正文 push 到 `edit_history`（time 为「刚刚」）再覆盖；内容未变则不产生版本。
+- 状态：`app.edit_history: Option<(index, x, y)>`（光标锚点）；`open_edit_history` 校验该消息有历史后打开，并与消息菜单 / 已读回执互斥；`open_edit_history_from_menu` 兼容右键（光标位置）与行内菜单（默认位置）。
+- `edit_history_detail()` 返回**克隆**的 `Vec<EditRevision>`：`current_messages()` 产生临时值，不能返回引用（E0515）。切会话 / 关回执等清理路径已顺带 `close_edit_history()`；Esc 在回执之后关闭；`delete_message` 会迁移或关闭下标。
+- 视图 `ui/chat/edit_history.rs` 复用回执的光标锚点骨架：倒序展示版本（最新在上）、每版显示「版本 N + 时间 + 正文」、底部注明「仅展示历史版本，不提供回滚」。
+- 入口两个：`messages.rs` 作者行时间戳旁的「（已编辑）」小字（左键按下取 `event.position` 打开），以及 `message_menu.rs` 仅对有历史消息显示的「编辑历史」菜单项（`IconName::Clock`）。
+
+### GIF 搜索面板约定
+- 数据：`data::Gif { title, emoji, color, category, tags }`（Demo 用色块 + emoji 字形模拟动图），`Message.gif: Option<Gif>` + `.gif(gif)` builder；`seed_gifs()` 20 个分四类（热门 / 反应 / 搞怪 / 动物），`gif_categories()` 给出标签顺序。
+- 入口：输入框右侧 GIF 按钮（`composer-gif`，`IconName::ImagePlay`）走 `toggle_gif_picker(cx)`；再点一次收起。打开时收起贴纸 / 表情 / 附件 / 资料卡 / 置顶 / 收件箱等浮层，贴纸、附件、表情、会话重置、`Esc` 也会反向收起 GIF 层（`close_sticker_picker()` 同时关 GIF）。
+- 状态：`show_gif_picker / gif_query / gif_category / gif_search(InputState)`。搜索框 Change 更新 query，Enter 走 `send_first_gif`；`visible_gifs()` 有词时跨分类匹配标题 / 标签 / 分类，无词时按当前分类。切分类会清空搜索词。
+- 点击 GIF 走 `send_gif`：生成 `Message::new("你", "刚刚", "", palette::accent()).gif(gif)` 直接入列，清搜索词与回复态、滚到底部、焦点还给输入框（好友视图直接返回）。转发摘要退化为 `[GIF] 标题` 且克隆 `gif` 字段。
+- 视图 `ui/chat/gif_picker.rs`：底部 52 / 右侧 16、宽 348 的浮卡；搜索框 + 分类 chips（搜索时不高亮）+ 分隔线 + 3 列 GIF 格（色块 62px + emoji 30px + 标题）+ 底部「分类 / 搜索词 · 共 N 个」。⚠️ 此版本 `overflow_y_scroll` 要在 `.id()` 之后的 `Stateful<Div>` 上调用，直接挂 `Div` 会 E0599。
+- 消息里的 GIF 由 `messages.rs::gif_card` 渲染：184×96 横版色块 + 40px emoji + 标题 + 「GIF · 演示占位」；正文为空时不渲染文本节点。
+
 ### 贴纸消息约定
 
 - 数据：`data::Sticker { emoji, label, pack }`（Demo 用 emoji 字形代替贴纸图），`Message.sticker: Option<Sticker>` + `.sticker(s)` builder；种子 `seed_stickers()` 24 张分三包（日常 / 猫咪 / 礼物），`sticker_packs()` 给出标签顺序。
@@ -389,7 +493,10 @@ gpui_kit::application()
 - 入口是标题栏搜索框右侧放大镜（`chat-open-search-center`）→ `app::open_search_center`：它继承标题栏搜索框的关键词作为初始 query（写进 `search_center_input`），按视图选默认范围（私信视图 → `Dm`，其余 → `CurrentServer`），收起其他浮层后调 `run_search`。
 - 搜索中心**不占** `ViewMode`，只是一个 `show_search_center: bool`。`render_main` 里当 `show_search_center && matches!(view_mode, Server | DirectMessage)` 时用 `search_center::render` 替换整个聊天主区域，服务器栏与左侧栏保留，便于边搜边切。`reset_session` 会关掉它（切频道 / 开私信自动退出），`open_settings` / `open_server_settings` / `open_discover` 也会收起。
 - 范围是 `app::SearchScope`（`CurrentServer` / `AllServers` / `Dm` / `Everything`），视图侧文案唯一数据源是 `ui/search_center.rs::SCOPES`，切换走 `set_search_scope`（值变了才重跑）。
-- 检索逻辑只在 `app::run_search` 里：服务器结果按 `servers → categories → channels` 顺序遍历、跳过 `ChannelKind::Voice`、键用 `服务器名/频道名` 去 `messages` 取；私信结果遍历 `dm_conversations` 取 `dm_messages`。命中判定是自由函数 `hit_matches`（正文或作者名，调用方已转小写），结果 `truncate(60)`。
+- 检索逻辑只在 `app::run_search` 里：服务器结果按 `servers → categories → channels` 顺序遍历、跳过 `ChannelKind::Voice`、键用 `服务器名/频道名` 去 `messages` 取；私信结果遍历 `dm_conversations` 取 `dm_messages`。命中判定走 `SearchFilters::matches`，结果 `truncate(60)`。
+- 高级过滤：`app::SearchFilters::parse` 从查询串拆出 `from:` / `has:` / `before:` / `after:`，剩余词拼成小写 `text`；`is_empty()` 判空时要求四个条件与普通关键词都为空（只有 `from:` 也能搜）。`from:` 多值 OR 匹配作者名；`has:` 多值 AND，支持 `link/image/file/attachment/sticker/gif/reaction/edited/mention/pinned`；`before/after` 只接受 `today`（今天/刚刚，rank 2）与 `yesterday`（rank 1），按消息时间前缀比较，其余值不生效。
+- `app.search_filters` 由 `run_search` 每次重算时刷新，UI 只读它：`search_center.rs` 顶部「已应用」标签来自 `chips()`，点标签走 `remove_search_filter(token, window, cx)`（从 query 里删 token、`set_value` 后手动 `run_search`，因为 `set_value` 不发 Change）；结果高亮用 `search_filters.text` 而不是原始 query，否则过滤 token 会干扰高亮。
+- 演示种子：默认频道放了一条含 `https://` 的链接消息与一条 GIF 消息，供 `has:link` / `has:gif` 验证；`has:edited` 用编辑历史那两条种子消息。
 - `data::SearchHit { server, channel, is_dm, author, time, text, color }` + `scope_label()`（`服务器 ▸ #频道` / `私信 ▸ 好友`）。`color` 是 `Rgba`（直接来自 `Message`），视图用 `into()` 传给 `avatar`。
 - 跳转 `open_search_hit(index)`：私信走 `open_dm`，频道先按名字找到服务器索引写入 `active_server` 再 `select_channel`；两者都会经 `reset_session` 关掉搜索中心。
 - 命中高亮由视图内 `highlight()` 完成：`to_lowercase()` 后按字节找关键词，**先校验字节长度未变且落在 char boundary**，否则退化为整段普通文本（避免中文切片 panic）。
@@ -411,6 +518,16 @@ gpui_kit::application()
 - 面板定位固定 `left 72 / bottom 108 / w 300`，贴在 52 高的状态条上方，样式对齐 `BG_FOOTER` 浮卡。
 - 行内操作：麦克风图标 `toggle_participant_mute`（静音态红色 + 行尾「已静音」）、`UserX` 图标 `remove_voice_participant`（仅从列表移除，Demo 不涉及权限）；底部两个按钮分别是本机 `toggle_mic` 与 `leave_voice`。
 - 打开用户设置 / 服务器设置 / 探索页都会收起面板；连接态本身跨会话保持（与 `voice_channel` 一致）。
+
+### 帮助中心约定
+
+- 入口只有标题栏 `?` 按钮（`chat-open-help` → `toggle_help_center`），开着时按钮显示 active 态；关闭走 X、遮罩、Esc 三处，全部落到 `close_help_center`。
+- 文档数据在 `data::seed_help_articles()`（12 篇，`HelpArticle { id, category, title, summary, body, tips }`），分类顺序唯一数据源是 `help_categories()`；搜索匹配逻辑写在 `HelpArticle::matches`，正文与要点也参与，避免搜索只命中标题。
+- 状态只有四件：`show_help_center` / `help_query` / `help_category: Option<&'static str>`（None = 全部）/ `help_article: Option<&'static str>`（文档 id）。列表过滤走 `app::help_matches()`，视图不要自己过滤。
+- 输入变化时自动把 `help_category` 复位成 None 并清空 `help_article`，否则用户会遇到「搜到了但当前分类里不显示」。
+- Esc 在帮助中心里是**两层**：先 `close_help_article` 回列表，再 `close_help_center` 整体关闭；`close_top_overlay` 里排在快速切换器之后、附件预览之前。
+- 打开设置 / 服务器设置 / 探索页都会 `show_help_center = false`，防止整屏页关掉后帮助层又弹回来。
+- 遮罩与卡片是**兄弟节点**而不是父子：卡片点击不会冒泡到遮罩，避免点文档列表时误关整个面板。
 
 ---
 
@@ -462,8 +579,12 @@ cargo run       # 启动确认窗口创建正常
 
 1. `cargo check` 输出 `Finished`，且 warning 数为 0。
 2. 窗口尺寸 1440×900，标题 `Discord UI · GPUI Kit`。
-3. 手动验证涉及的交互：服务器切换、频道切换、搜索过滤、消息发送、表情回应、成员栏开关、麦克风/耳机/通知开关；资料卡（点作者名/成员）、消息菜单（置顶/复制/删除/编辑）、置顶面板（header 图钉）、语音频道连接与断开；在线状态切换（点底部用户信息）、@提及高亮点击、消息行内编辑（Enter 保存 / 取消）；用户设置（点底部齿轮打开，左侧 8 个分类切换，主题选项、开关、音量加减、恢复默认，右上角 X 关闭）；新建服务器（服务器栏 + → 输入名称 → Enter/创建，自动切换）、新建频道（分类 + → 输入名称 → Enter/创建，自动切换，同名拦截）；好友页五个标签切换、待处理请求接受/拒绝、添加好友（用户名#标签 → Enter/发送，成功后跳待处理）、好友行屏蔽与已屏蔽列表取消屏蔽；私信侧栏搜索（输入关键词过滤会话、X 清除、点「发起对话」中的好友建立新会话并切入、无结果空状态）；成员栏按角色分组（管理员/版主/在线/离线，点分组标题折叠与展开，点成员仍打开资料卡）；收件箱（header Inbox 图标带未读角标 → 打开面板，点通知跳转到对应频道/私信/好友页并标为已读、全部已读、与置顶面板互斥）；@提及补全（输入框打 @ 或 @前缀 → 上方浮层匹配成员，点击插入 @完整名）；频道操作菜单（频道行右键 → 菜单跟随光标：标记为已读清角标、编辑频道主题 → 弹层 Enter/保存后标题栏刷新、删除频道 → 回退到第一个文字频道且至少保留一个文字频道；标题栏铃铛打开同一菜单；点菜单外关闭）；服务器菜单（点侧栏服务器名/⌄ → 邀请好友弹出链接弹层并可复制、静音切换后侧栏出现静音图标、标记服务器已读清空全部角标、创建频道、离开服务器 → 切到第一个服务器且至少保留一个）；分类菜单（分类标题右键 → 在该分类中创建频道后弹窗创建并落入该分类、标记为已读清该分类角标、重命名分类 → 弹层保存后侧栏标题与展开状态保持、删除分类 → 分类内频道一并消失且当前频道回退、只剩一个文字分类时该项置灰；服务器菜单「新建分类」→ 输入名称 → Enter/创建后侧栏出现空分类且可再右键改名或删除）；主题切换（设置 → 外观 → 点「浅色」→ 整个界面立刻变浅色：服务器栏/侧栏/聊天区/菜单/弹层全部跟着变，输入框文字仍可读；点「深色」切回；点「跟随系统」按当前窗口外观决定；恢复默认设置会回到深色）；贴纸消息（点输入框右侧贴纸图标 → 弹层按「日常/猫咪/礼物」三包切换 → 点任意贴纸立刻作为一条消息发出并显示 132×132 贴纸卡；点礼物图标直达礼物包；再点同一图标收起；切频道/开设置时自动收起）；消息右键菜单（右键任意消息行 → 在光标处弹出菜单：添加回应把表情层打开、回复把「回复某人」提示条挂上、编辑（自己的消息）进入行内编辑、置顶后标题栏图钉面板能看到、复制文本进剪贴板、删除后消息消失；点菜单外或再次右键即关闭；悬停省略号入口仍可用同一组操作）；成员上下文菜单（右键成员栏任意成员 → 弹出菜单，头部显示头像/名字/角色与在线小点；「查看资料卡」打开右侧资料卡、「发送私信」跳到与他的私信并补建会话、「在输入框提及」把 @名字 填进输入框并聚焦、「复制用户名」复制 @名字、「屏蔽成员」后该名字出现在好友页「已屏蔽」分组并可在那里取消，菜单再次打开显示「取消屏蔽」；点菜单外任意位置关闭）；搜索中心（点标题栏搜索框右侧放大镜 → 主区域变成搜索页，输入关键词实时出结果、切「当前服务器/全部服务器/私信/全部」chips 重算、命中片段蓝色高亮、点任意结果跳到对应频道或私信并自动退出搜索页、无结果有空状态、X 返回聊天区）；语音房间（点语音频道连接 → 底部状态条显示「语音已连接 · 点此查看房间」→ 点击弹出房间面板，看到自己与其他 3 位参与者、切换某人的静音状态、点 UserX 移出列表、底部可静音本机或断开；断开后面板与状态条一起消失）；探索页（点服务器栏底部指南针 → 整屏探索页，搜索关键词过滤卡片、切分类 chips 过滤、无结果显示空状态、点「加入」后服务器出现在服务器栏并自动进入、点 X 回到原频道视图，再次打开已加入卡片显示「已加入」）；服务器设置（服务器名/⌄ → 服务器设置 → 切到全屏页：概览改名后侧栏与顶栏同步、消息记录与分类折叠状态保留、6 个色块点击后徽标颜色与服务器栏同步、简介保存；角色页列出各角色分组与成员；表情页可移除并恢复表情；邀请页复制链接后按钮变「已复制」、打开邀请弹层会回到主界面；右上角 X 返回主界面）；附件消息（点输入框左侧 + → 弹层列出 5 个模拟文件、点选后变为待发附件条（文件名/大小/待发送 + X 移除）、可直接点发送只发附件、发送后消息内出现图片占位卡或文件卡，切换频道后草稿清空）。；消息转发（消息右键/省略号 → 转发消息 → 弹层显示来源预览，搜索框过滤频道与私信，点目标后弹层关闭、列表顶部出现「已转发到 #xxx」提示、目标会话里多出一条带「转发自 #原频道」的消息且原消息不变；点来源标签跳回原会话；转发到当前会话自动滚到底部；提示条 X 可关闭，切频道后自动消失）
-4. 测试结束后**必须关闭应用进程**，不要留后台残留：
+3. 手动验证涉及的交互：服务器切换、频道切换、搜索过滤、消息发送、表情回应、成员栏开关、麦克风/耳机/通知开关；资料卡（点作者名/成员）、消息菜单（置顶/复制/删除/编辑）、置顶面板（header 图钉）、语音频道连接与断开；在线状态切换（点底部用户信息）、@提及高亮点击、消息行内编辑（Enter 保存 / 取消）；用户设置（点底部齿轮打开，左侧 8 个分类切换，主题选项、开关、音量加减、恢复默认，右上角 X 关闭）；新建服务器（服务器栏 + → 输入名称 → Enter/创建，自动切换）、新建频道（分类 + → 输入名称 → Enter/创建，自动切换，同名拦截）；好友页五个标签切换、待处理请求接受/拒绝、添加好友（用户名#标签 → Enter/发送，成功后跳待处理）、好友行屏蔽与已屏蔽列表取消屏蔽；私信侧栏搜索（输入关键词过滤会话、X 清除、点「发起对话」中的好友建立新会话并切入、无结果空状态）；成员栏按角色分组（管理员/版主/在线/离线，点分组标题折叠与展开，点成员仍打开资料卡）；收件箱（header Inbox 图标带未读角标 → 打开面板，点通知跳转到对应频道/私信/好友页并标为已读、全部已读、与置顶面板互斥）；@提及补全（输入框打 @ 或 @前缀 → 上方浮层匹配成员，点击插入 @完整名）；频道操作菜单（频道行右键 → 菜单跟随光标：标记为已读清角标、编辑频道主题 → 弹层 Enter/保存后标题栏刷新、删除频道 → 回退到第一个文字频道且至少保留一个文字频道；标题栏铃铛打开同一菜单；点菜单外关闭）；服务器菜单（点侧栏服务器名/⌄ → 邀请好友弹出链接弹层并可复制、静音切换后侧栏出现静音图标、标记服务器已读清空全部角标、创建频道、离开服务器 → 切到第一个服务器且至少保留一个）；分类菜单（分类标题右键 → 在该分类中创建频道后弹窗创建并落入该分类、标记为已读清该分类角标、重命名分类 → 弹层保存后侧栏标题与展开状态保持、删除分类 → 分类内频道一并消失且当前频道回退、只剩一个文字分类时该项置灰；服务器菜单「新建分类」→ 输入名称 → Enter/创建后侧栏出现空分类且可再右键改名或删除）；主题切换（设置 → 外观 → 点「浅色」→ 整个界面立刻变浅色：服务器栏/侧栏/聊天区/菜单/弹层全部跟着变，输入框文字仍可读；点「深色」切回；点「跟随系统」按当前窗口外观决定；恢复默认设置会回到深色）；贴纸消息（点输入框右侧贴纸图标 → 弹层按「日常/猫咪/礼物」三包切换 → 点任意贴纸立刻作为一条消息发出并显示 132×132 贴纸卡；点礼物图标直达礼物包；再点同一图标收起；切频道/开设置时自动收起）；消息右键菜单（右键任意消息行 → 在光标处弹出菜单：添加回应把表情层打开、回复把「回复某人」提示条挂上、编辑（自己的消息）进入行内编辑、置顶后标题栏图钉面板能看到、复制文本进剪贴板、删除后消息消失；点菜单外或再次右键即关闭；悬停省略号入口仍可用同一组操作）；成员上下文菜单（右键成员栏任意成员 → 弹出菜单，头部显示头像/名字/角色与在线小点；「查看资料卡」打开右侧资料卡、「发送私信」跳到与他的私信并补建会话、「在输入框提及」把 @名字 填进输入框并聚焦、「复制用户名」复制 @名字、「屏蔽成员」后该名字出现在好友页「已屏蔽」分组并可在那里取消，菜单再次打开显示「取消屏蔽」；点菜单外任意位置关闭）；搜索中心（点标题栏搜索框右侧放大镜 → 主区域变成搜索页，输入关键词实时出结果、切「当前服务器/全部服务器/私信/全部」chips 重算、命中片段蓝色高亮、点任意结果跳到对应频道或私信并自动退出搜索页、无结果有空状态、X 返回聊天区）；语音房间（点语音频道连接 → 底部状态条显示「语音已连接 · 点此查看房间」→ 点击弹出房间面板，看到自己与其他 3 位参与者、切换某人的静音状态、点 UserX 移出列表、底部可静音本机或断开；断开后面板与状态条一起消失）；探索页（点服务器栏底部指南针 → 整屏探索页，搜索关键词过滤卡片、切分类 chips 过滤、无结果显示空状态、点「加入」后服务器出现在服务器栏并自动进入、点 X 回到原频道视图，再次打开已加入卡片显示「已加入」）；服务器设置（服务器名/⌄ → 服务器设置 → 切到全屏页：概览改名后侧栏与顶栏同步、消息记录与分类折叠状态保留、6 个色块点击后徽标颜色与服务器栏同步、简介保存；角色页列出各角色分组与成员；表情页可移除并恢复表情；邀请页复制链接后按钮变「已复制」、打开邀请弹层会回到主界面；右上角 X 返回主界面）；附件消息（点输入框左侧 + → 弹层列出 5 个模拟文件、点选后变为待发附件条（文件名/大小/待发送 + X 移除）、可直接点发送只发附件、发送后消息内出现图片占位卡或文件卡，待发附件草稿清空）。；消息转发（消息右键/省略号 → 转发消息 → 弹层显示来源预览，搜索框过滤频道与私信，点目标后弹层关闭、列表顶部出现「已转发到 #xxx」提示、目标会话里多出一条带「转发自 #原频道」的消息且原消息不变；点来源标签跳回原会话；转发到当前会话自动滚到底部；提示条 X 可关闭，切频道后自动消失）；附件预览（点消息里的图片/文件卡 → 弹出大图层：头部文件名与大小、中央放大图标占位、底部「复制文件名（演示下载）」可写入剪贴板并关闭；点遮罩或 X 也能关闭，切频道自动收起）；未读与跳到最新（默认进入「开发者社区/#闲聊」，消息列表里出现红色「3 条新消息」分隔线、右下角同文案浮标；点分隔线胶囊或浮标 → 滚到底部、频道角标清零且分隔线与浮标消失；私信会话同样生效）；快捷键与快速切换（⌘/Ctrl+K 或标题栏「⌘K」打开切换器 → 输入关键词实时过滤频道/私信、↑↓ 循环高亮、Enter 或点击跳转到目标会话、Esc 关闭；Esc 还能按最上层优先关闭消息菜单/弹层/设置页/探索页）；会话草稿（在 #闲聊 输入「草稿测试」不发送 → 切到别的频道，侧栏 #闲聊 出现「草稿」标记 → 切回 #闲聊 输入框自动恢复「草稿测试」；切到私信再切回同样保留，含待发附件一起恢复；按发送后草稿标记消失，切走再回来输入框为空；好友页/探索页不保留草稿）；公共组件库重构（回归检查：设置页 10 个开关行点击仍生效、搜索/探索页筛选 chip 高亮切换正常、标题栏铃铛/图钉/搜索/收件箱/成员按钮 active 态与点击正常且收件箱未读徽标仍在、新建弹层 X 与搜索/探索页 X 可关闭、好友请求拒绝与屏蔽按钮 hover 变红且点击生效、各侧栏分组标题显示正常）；回复引用（右键消息/悬停工具栏 → 回复，输入条显示「回复 @作者：摘要」；输入内容发送后，新消息正文上方出现引用条（竖线 + 链接色），点引用条滚回原消息并短暂高亮该行；再次回复同一条消息取消；切会话后高亮清除）；GIF 搜索（点输入框 GIF 图标 → 弹层按热门/反应/搞怪/动物四类切换，每类 5 个 → 搜索框输入「猫」跨分类匹配出猫猫 → Enter 发送首个结果、点分类清空搜索、点任意格立即作为消息发出并显示横版 GIF 卡 → 再点图标 / Esc / 切频道均收起）；编辑历史（给自己发过的消息编辑后作者行出现「（已编辑）」→ 点开浮层可看到编辑前正文与版本时间，消息菜单同样有「编辑历史」项 → 点遮罩 / X / Esc 关闭、切频道自动收起；内容未变化不产生新版本）；搜索高级过滤（点放大镜进搜索中心 → 输入 `from:Nova` 只看 Nova 发的消息、`has:image` 只看图片附件、`has:gif` 只看 GIF 消息、`has:edited` 只看编辑过的消息、`after:today` 只看今天、`has:reaction after:yesterday` 两个条件叠加 → 搜索栏出现「已应用」标签，点标签移除该条件并重跑；只有过滤条件没有关键词也能出结果，命中高亮仍按纯关键词）
+4. 话题功能回归：预置话题的消息显示「N 条回复」徽标 → 点徽标 / 工具栏 / 右键菜单任一入口打开右侧面板，原消息与回复列表正确 → 在面板底部输入回复并 Enter，新回复立即出现且输入清空 → Esc / X 关闭；对无话题消息点「开话题」可新建，切会话后不串台；删除话题根消息后面板关闭、其他话题仍能正确打开。
+5. 送达与回执回归：默认频道滚到底部，自己的消息显示「已读 3 人」；点击状态浮出读者卡片，能看到 Nova / 小满 / 阿哲的头像与时间，点遮罩 / X / Esc 均能关闭；私信「阿哲」里自己的消息显示「已送达」且不可点开详情；新发一条消息显示「已发送」；打开回执详情后切频道或删除更早的消息，浮层不会串到别的消息。
+6. 私信通话回归：切到与 Nova 的私信 → 标题栏电话按钮打开右下浮窗显示「正在呼叫」→ 点「模拟接通」显示四组控制 → 依次点麦克风、摄像头、屏幕分享确认图标/文案切换且开分享会带开摄像头 → 点挂断浮窗消失；再从资料卡点视频按钮可发起视频通话；通话中点底部齿轮进设置页，浮窗仍可见；返回后点语音频道连接，通话浮窗自动消失。
+7. 帮助中心回归：点标题栏 `?` → 弹出帮助面板，左侧列出「全部 / 入门 / 消息 / 会话 / 语音 / 设置」与各自篇数；点「消息」只剩消息类文档；在搜索框输入「话题」立刻命中并自动回到全部分类，结果计数文案跟着变；点任意文档进入详情（返回列表 / 分类标签 / 标题 / 正文段落 / 要点）→ 点「返回列表」或 Esc 回上一层，再按 Esc 整体关闭；点空白遮罩关闭，点卡片内部不会误关；打开设置或探索页后返回，帮助层不会残留。
+8. 测试结束后**必须关闭应用进程**，不要留后台残留：
 
 ```bash
 pgrep -fl 'target/debug/discord-gpui'   # 确认无残留

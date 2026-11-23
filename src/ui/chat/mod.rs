@@ -1,6 +1,10 @@
 pub mod attachment_picker;
+pub mod attachment_preview;
 pub mod composer;
+pub mod edit_history;
+pub mod gif_picker;
 pub mod sticker_picker;
+pub mod thread_panel;
 pub mod emoji_picker;
 pub mod forward_dialog;
 pub mod header;
@@ -8,3 +12,5 @@ pub mod inbox_panel;
 pub mod message_menu;
 pub mod messages;
 pub mod pinned_panel;
+pub mod quick_switcher;
+pub mod read_receipts;

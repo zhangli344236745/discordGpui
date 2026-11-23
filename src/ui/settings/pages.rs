@@ -6,7 +6,7 @@ use gpui_kit::component::{h_flex, v_flex, Size};
 use gpui_kit::prelude::FluentBuilder as _;
 
 use crate::app::{DiscordApp, SettingsSection, ThemeChoice};
-use crate::ui::avatar;
+use crate::ui::{avatar, toggle_row};
 use crate::ui::ico;
 use crate::ui::theme::palette;
 
@@ -53,12 +53,7 @@ fn shell(title: &'static str, desc: &'static str) -> Div {
 }
 
 fn group(title: &'static str) -> Div {
-    div()
-        .pt(px(8.))
-        .text_size(px(12.))
-        .font_weight(FontWeight::BOLD)
-        .text_color(rgb(palette::text_muted()))
-        .child(title)
+    div().pt(px(8.)).child(crate::ui::section_label(title))
 }
 
 fn info_row(label: &'static str, value: &'static str) -> Div {
@@ -99,69 +94,6 @@ fn note_row(text: &'static str) -> Div {
 }
 
 type ClickHandler = dyn Fn(&mut DiscordApp, &mut Window, &mut Context<DiscordApp>) + 'static;
-
-/// 一行开关：左侧文案 + 右侧拨动条，点击整行生效。
-fn switch_row(
-    label: &'static str,
-    desc: &'static str,
-    on: bool,
-    id: String,
-    handler: Box<ClickHandler>,
-    cx: &mut Context<DiscordApp>,
-) -> Stateful<Div> {
-    let mut track = h_flex()
-        .w(px(40.))
-        .h(px(22.))
-        .flex_shrink_0()
-        .items_center()
-        .px(px(2.))
-        .rounded_full()
-        .bg(if on {
-            rgb(palette::accent())
-        } else {
-            rgb(palette::bg_toolbar_hover())
-        });
-    if on {
-        track = track.justify_end();
-    }
-    let knob = div()
-        .w(px(18.))
-        .h(px(18.))
-        .rounded_full()
-        .bg(rgb(palette::WHITE));
-
-    h_flex()
-        .w_full()
-        .items_center()
-        .justify_between()
-        .px(px(16.))
-        .py(px(12.))
-        .rounded(px(8.))
-        .bg(rgb(palette::bg_sidebar()))
-        .child(
-            v_flex()
-                .gap(px(4.))
-                .min_w_0()
-                .child(
-                    div()
-                        .text_size(px(14.))
-                        .text_color(rgb(palette::text_primary()))
-                        .child(label),
-                )
-                .child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(rgb(palette::text_muted()))
-                        .child(desc),
-                ),
-        )
-        .child(track.child(knob))
-        .id(id)
-        .on_click(cx.listener(move |this, _, window, cx| {
-            handler(this, window, cx);
-            cx.notify();
-        }))
-}
 
 fn small_button(
     symbol: &'static str,
@@ -290,19 +222,19 @@ fn account(app: &DiscordApp, _cx: &mut Context<DiscordApp>) -> Div {
 
 fn privacy(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
     let mut page = shell("隐私与安全", "控制谁可以与你互动以及你分享的信息。");
-    page = page.child(group("互动")).child(switch_row(
+    page = page.child(group("互动")).child(toggle_row(
         "允许 @提及",
         "被提及时在消息中高亮显示你的名字。",
         app.mention_pings,
-        "settings-privacy-mentions".into(),
+        "settings-privacy-mentions",
         Box::new(|this, _, _| this.toggle_mention_pings()),
         cx,
     ));
-    page = page.child(switch_row(
+    page = page.child(toggle_row(
         "私信通知",
         "收到新私信时显示系统通知。",
         app.notifications_on,
-        "settings-privacy-dm-notify".into(),
+        "settings-privacy-dm-notify",
         Box::new(|this, _, _| this.toggle_notifications()),
         cx,
     ));
@@ -360,19 +292,19 @@ fn appearance(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
         .child(themes)
         .child(note_row("深色 / 浅色会立即切换整界面配色；「跟随系统」在 Demo 中等同深色。"));
 
-    page = page.child(group("消息")).child(switch_row(
+    page = page.child(group("消息")).child(toggle_row(
         "紧凑消息",
         "减少消息之间的间距，一屏显示更多内容。",
         app.compact_messages,
-        "settings-appearance-compact".into(),
+        "settings-appearance-compact",
         Box::new(|this, _, _| this.toggle_compact_messages()),
         cx,
     ));
-    page = page.child(switch_row(
+    page = page.child(toggle_row(
         "显示时间戳",
         "在作者名旁显示消息发送时间。",
         app.show_timestamps,
-        "settings-appearance-timestamps".into(),
+        "settings-appearance-timestamps",
         Box::new(|this, _, _| this.toggle_show_timestamps()),
         cx,
     ));
@@ -419,11 +351,11 @@ fn voice_video(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
         Box::new(|this, _, _| this.adjust_output_volume(5)),
         cx,
     ));
-    page = page.child(group("通知")).child(switch_row(
+    page = page.child(group("通知")).child(toggle_row(
         "通知音效",
         "收到消息时播放提示音。",
         app.notification_sound,
-        "settings-voice-sound".into(),
+        "settings-voice-sound",
         Box::new(|this, _, _| this.toggle_notification_sound()),
         cx,
     ));
@@ -432,27 +364,27 @@ fn voice_video(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
 
 fn notifications(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
     let mut page = shell("通知", "选择你希望收到哪些提醒。");
-    page = page.child(switch_row(
+    page = page.child(toggle_row(
         "桌面通知",
         "在新消息到达时显示系统通知。",
         app.notifications_on,
-        "settings-notify-desktop".into(),
+        "settings-notify-desktop",
         Box::new(|this, _, _| this.toggle_notifications()),
         cx,
     ));
-    page = page.child(switch_row(
+    page = page.child(toggle_row(
         "通知音效",
         "播放提示音前检查系统音量。",
         app.notification_sound,
-        "settings-notify-sound".into(),
+        "settings-notify-sound",
         Box::new(|this, _, _| this.toggle_notification_sound()),
         cx,
     ));
-    page = page.child(switch_row(
+    page = page.child(toggle_row(
         "@提及提醒",
         "被其他成员提及时特别提醒。",
         app.mention_pings,
-        "settings-notify-mentions".into(),
+        "settings-notify-mentions",
         Box::new(|this, _, _| this.toggle_mention_pings()),
         cx,
     ));
@@ -461,19 +393,19 @@ fn notifications(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
 
 fn text_image(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
     let mut page = shell("文字与图片", "控制聊天区中内容与媒体的展示。");
-    page = page.child(switch_row(
+    page = page.child(toggle_row(
         "显示表情回应",
         "在消息下方显示已有的表情回应。",
         app.show_emoji,
-        "settings-text-emoji".into(),
+        "settings-text-emoji",
         Box::new(|this, _, _| this.toggle_show_emoji()),
         cx,
     ));
-    page = page.child(switch_row(
+    page = page.child(toggle_row(
         "显示时间戳",
         "在消息作者旁显示发送时间。",
         app.show_timestamps,
-        "settings-text-timestamps".into(),
+        "settings-text-timestamps",
         Box::new(|this, _, _| this.toggle_show_timestamps()),
         cx,
     ));
@@ -484,12 +416,18 @@ fn text_image(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
 }
 
 fn keybinds() -> Div {
-    let rows: [(&str, &str); 5] = [
-        ("Enter", "发送消息 / 保存消息编辑"),
+    let rows: [(&str, &str); 11] = [
+        ("Enter", "发送消息 / 保存消息编辑 / 发送话题回复 / 发送首个搜索结果"),
         ("Shift + Enter", "输入框内换行"),
+        ("Ctrl/⌘ + K", "打开频道 / 私信快速切换器"),
+        ("↑ / ↓", "在快速切换器里循环选择目标"),
+        ("Esc", "按最上层优先关闭浮层或页面"),
         ("点击作者名", "打开用户资料卡"),
         ("点击齿轮", "打开用户设置"),
         ("点击 ⋯", "打开消息操作菜单"),
+        ("右键消息", "打开消息菜单 / 创建话题"),
+        ("点击 GIF 图标", "搜索并发送 GIF"),
+        ("点击标题栏 ?", "打开帮助中心"),
     ];
     let mut page = shell("快捷键", "常用操作对应的键盘快捷键。").child(group("键盘"));
     for (keys, desc) in rows {

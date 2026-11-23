@@ -1,6 +1,6 @@
 use gpui_kit::*;
 
-use crate::app::{DiscordApp, MenuAnchor, ViewMode};
+use crate::app::{CallMode, DiscordApp, MenuAnchor, ViewMode};
 use crate::ui::theme::palette;
 use crate::ui::ico;
 
@@ -12,6 +12,12 @@ use gpui_kit::prelude::FluentBuilder as _;
 /// 聊天区顶部标题栏：频道名、主题、搜索框与开关。
 pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
     let is_dm = app.is_dm();
+    let active_dm = app.active_dm.clone();
+    let dm_call_mode = app
+        .dm_call
+        .as_ref()
+        .filter(|call| Some(&call.friend) == app.active_dm.as_ref())
+        .map(|call| call.mode);
     let title_icon = if is_dm {
         IconName::AtSign
     } else {
@@ -79,49 +85,23 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                 .text_color(rgb(palette::text_secondary()))
                 .child(
                     // 频道设置入口：与频道右键菜单同一个浮层。
-                    div()
-                        .w(px(24.))
-                        .h(px(24.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(4.))
-                        .text_color(if app.channel_menu.is_some() {
-                            rgb(palette::text_primary())
-                        } else {
-                            rgb(palette::text_secondary())
-                        })
-                        .hover(|el| el.bg(rgb(palette::bg_toolbar_hover())))
-                        .child(ico(IconName::Bell, Size::Small))
-                        .id("chat-channel-menu")
-                        .on_click(cx.listener(|this, _, _, cx| {
+                    crate::ui::icon_button(
+                        IconName::Bell, Size::Small, px(24.), "chat-channel-menu",
+                        app.channel_menu.is_some(),
+                        Box::new(|this, _, _| {
                             if this.view_mode == ViewMode::Server {
                                 let name = this.active_channel.clone();
                                 this.open_channel_menu(name, MenuAnchor::Header);
                             }
-                            cx.notify();
-                        })),
+                        }), cx,
+                    ),
                 )
                 .child(
-                    div()
-                        .w(px(24.))
-                        .h(px(24.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(4.))
-                        .text_color(if app.show_pins {
-                            rgb(palette::text_primary())
-                        } else {
-                            rgb(palette::text_secondary())
-                        })
-                        .hover(|el| el.bg(rgb(palette::bg_toolbar_hover())))
-                        .child(ico(IconName::Pin, Size::Small))
-                        .id("chat-toggle-pins")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.toggle_pins();
-                            cx.notify();
-                        })),
+                    crate::ui::icon_button(
+                        IconName::Pin, Size::Small, px(24.), "chat-toggle-pins",
+                        app.show_pins,
+                        Box::new(|this, _, _| this.toggle_pins()), cx,
+                    ),
                 )
                 .child(
                     h_flex()
@@ -136,46 +116,76 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                         )
                         // 放大镜进搜索中心（跨频道 / 私信），输入框仍做当前会话就地过滤。
                         .child(
+                            crate::ui::icon_button(
+                                IconName::Search, Size::XSmall, px(18.), "chat-open-search-center",
+                                app.show_search_center,
+                                Box::new(|this, window, cx| this.open_search_center(window, cx)), cx,
+                            ),
+                        )
+                        // 快速切换器入口：与 Ctrl/⌘+K 等价，便于不使用键盘的用户发现。
+                        .child(
                             div()
-                                .w(px(18.))
+                                .px_1()
                                 .h(px(18.))
                                 .flex()
                                 .items_center()
-                                .justify_center()
                                 .rounded(px(3.))
-                                .text_color(if app.show_search_center {
-                                    rgb(palette::text_primary())
-                                } else {
-                                    rgb(palette::text_secondary())
-                                })
+                                .text_size(px(10.))
+                                .text_color(rgb(palette::text_dim()))
                                 .hover(|el| {
                                     el.bg(rgb(palette::bg_toolbar_hover()))
                                         .text_color(rgb(palette::text_primary()))
                                 })
-                                .child(ico(IconName::Search, Size::XSmall))
-                                .id("chat-open-search-center")
+                                .child("⌘K")
+                                .id("chat-open-quick-switcher")
                                 .on_click(cx.listener(|this, _, window, cx| {
-                                    this.open_search_center(window, cx);
+                                    this.open_quick_switcher(window, cx);
                                 })),
                         ),
                 )
+                // 私信通话入口：语音 / 视频；与当前会话的通话状态联动高亮。
+                .when(is_dm, |el| {
+                    let voice_friend = active_dm.clone();
+                    let video_friend = active_dm.clone();
+                    el.child(
+                        h_flex().gap_1().child(
+                            crate::ui::icon_button(
+                                IconName::Phone,
+                                Size::Small,
+                                px(24.),
+                                "chat-dm-voice-call",
+                                dm_call_mode == Some(CallMode::Voice),
+                                Box::new(move |this, _, cx| {
+                                    if let Some(friend) = voice_friend.clone() {
+                                        this.start_dm_call(friend, CallMode::Voice, cx);
+                                    }
+                                }),
+                                cx,
+                            ),
+                        ).child(
+                            crate::ui::icon_button(
+                                IconName::Video,
+                                Size::Small,
+                                px(24.),
+                                "chat-dm-video-call",
+                                dm_call_mode == Some(CallMode::Video),
+                                Box::new(move |this, _, cx| {
+                                    if let Some(friend) = video_friend.clone() {
+                                        this.start_dm_call(friend, CallMode::Video, cx);
+                                    }
+                                }),
+                                cx,
+                            ),
+                        ),
+                    )
+                })
                 .child(
-                    div()
-                        .relative()
-                        .w(px(24.))
-                        .h(px(24.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(4.))
-                        .text_color(if app.show_inbox {
-                            rgb(palette::text_primary())
-                        } else {
-                            rgb(palette::text_secondary())
-                        })
-                        .hover(|el| el.bg(rgb(palette::bg_toolbar_hover())))
-                        .child(ico(IconName::Inbox, Size::Small))
-                        .when(app.unread_notification_count() > 0, |el| {
+                    crate::ui::icon_button(
+                        IconName::Inbox, Size::Small, px(24.), "chat-open-inbox",
+                        app.show_inbox,
+                        Box::new(|this, _, cx| this.toggle_inbox(cx)), cx,
+                    )
+                    .when(app.unread_notification_count() > 0, |el| {
                             el.child(
                                 div()
                                     .absolute()
@@ -194,36 +204,25 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                                     .justify_center()
                                     .child(app.unread_notification_count().to_string()),
                             )
-                        })
-                        .id("chat-open-inbox")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.toggle_inbox(cx);
-                        })),
+                        }),
                 )
-                .child(ico(IconName::CircleQuestionMark, Size::Small)),
+                .child(crate::ui::icon_button(
+                    IconName::CircleQuestionMark,
+                    Size::Small,
+                    px(24.),
+                    "chat-open-help",
+                    app.show_help_center,
+                    Box::new(|this, window, cx| this.toggle_help_center(window, cx)),
+                    cx,
+                )),
         )
         .when(!is_dm, |el| {
             el.child(
-                div()
-                    .ml_2()
-                    .w(px(28.))
-                    .h(px(28.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(4.))
-                    .text_color(if app.show_members {
-                        rgb(palette::text_primary())
-                    } else {
-                        rgb(palette::text_dim())
-                    })
-                    .hover(|el| el.bg(rgb(palette::bg_toolbar_hover())))
-                    .child(ico(IconName::Users, Size::Small))
-                    .id("chat-toggle-members")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.toggle_members();
-                        cx.notify();
-                    })),
+                crate::ui::icon_button(
+                    IconName::Users, Size::Small, px(28.), "chat-toggle-members",
+                    app.show_members,
+                    Box::new(|this, _, _| this.toggle_members()), cx,
+                ),
             )
         })
         .child(

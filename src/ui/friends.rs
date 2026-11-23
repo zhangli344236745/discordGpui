@@ -3,7 +3,7 @@ use gpui_kit::*;
 use crate::app::DiscordApp;
 use crate::data::FriendTab;
 use crate::ui::theme::palette;
-use crate::ui::{avatar, ico};
+use crate::ui::{avatar, ico, section_label};
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::input::Input;
@@ -17,14 +17,6 @@ const TABS: &[(FriendTab, &str, IconName)] = &[
     (FriendTab::Blocked, "已屏蔽", IconName::Shield),
     (FriendTab::AddFriend, "添加好友", IconName::UserCheck),
 ];
-
-fn section_label(text: String) -> Div {
-    div()
-        .text_size(px(12.))
-        .font_weight(FontWeight::BOLD)
-        .text_color(rgb(palette::text_muted()))
-        .child(text)
-}
 
 /// 好友页：顶部标签栏 + 按标签切换的内容（在线/待处理/全部/已屏蔽/添加好友）。
 pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElement {
@@ -267,24 +259,10 @@ fn request_row(
     if incoming {
         row = row
             .child(
-                div()
-                    .w(px(32.))
-                    .h(px(32.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(4.))
-                    .bg(rgb(palette::bg_channel_hover()))
-                    .text_color(rgb(palette::text_secondary()))
-                    .hover(|el| {
-                        el.bg(rgb(palette::danger()))
-                            .text_color(rgb(palette::WHITE))
-                    })
-                    .child(ico(IconName::X, Size::Small))
-                    .id(format!("request-reject-{index}"))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.reject_request(index, cx);
-                    })),
+                crate::ui::danger_icon_button(
+                    IconName::X, Size::Small, px(32.), format!("request-reject-{index}"),
+                    Box::new(move |this, _, cx| this.reject_request(index, cx)), cx,
+                ),
             )
             .child(
                 div()
@@ -497,24 +475,10 @@ fn friend_row(
 
     // 在线好友行右侧提供屏蔽入口。
     let row = row.child(
-        div()
-            .w(px(28.))
-            .h(px(28.))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(4.))
-            .text_color(rgb(palette::text_dim()))
-            .hover(|el| {
-                el.bg(rgb(palette::danger()))
-                    .text_color(rgb(palette::WHITE))
-            })
-            .child(ico(IconName::Ban, Size::XSmall))
-            .id(format!("friend-block-{name}"))
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.block_friend(name);
-                cx.notify();
-            })),
+        crate::ui::danger_icon_button(
+            IconName::Ban, Size::XSmall, px(28.), format!("friend-block-{name}"),
+            Box::new(move |this, _, _| this.block_friend(name)), cx,
+        ),
     );
 
     row.id(id).on_click(cx.listener(move |this, _, window, cx| {
