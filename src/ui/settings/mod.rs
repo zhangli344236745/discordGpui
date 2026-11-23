@@ -21,6 +21,7 @@ pub(crate) const SECTIONS: &[(SettingsSection, &str, IconName)] = &[
     (SettingsSection::TextImage, "文字与图片", IconName::TextCursorInput),
     (SettingsSection::Keybinds, "快捷键", IconName::Keyboard),
     (SettingsSection::Language, "语言", IconName::Globe),
+    (SettingsSection::Data, "数据与存储", IconName::Database),
 ];
 
 /// 当前分类的标题文案。

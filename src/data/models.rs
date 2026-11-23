@@ -1,24 +1,29 @@
 use gpui_kit::{rgb, Rgba};
+use serde::{Deserialize, Serialize};
 
 /// 单条消息上的表情回应。
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
+#[serde(from = "crate::data::persist::ReactionOwned")]
 pub struct Reaction {
+    #[serde(with = "crate::data::persist::leaked_str")]
     pub emoji: &'static str,
     pub count: usize,
     pub mine: bool,
 }
 
 /// 附件展示形态：图片给缩略图，其他文件给文件卡。
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AttachmentKind {
     Image,
     File,
 }
 
 /// 消息附件（纯 Demo：只保存文件名与大小文案，不做真实上传）。
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
+#[serde(from = "crate::data::persist::AttachmentOwned")]
 pub struct Attachment {
     pub name: String,
+    #[serde(with = "crate::data::persist::leaked_str")]
     pub size: &'static str,
     pub kind: AttachmentKind,
 }
@@ -46,11 +51,15 @@ impl Attachment {
 }
 
 /// 贴纸：Demo 用 emoji 字形 + 名称代替真实贴纸资源，按 pack 分组展示。
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Serialize)]
+#[serde(from = "crate::data::persist::StickerOwned")]
 pub struct Sticker {
+    #[serde(with = "crate::data::persist::leaked_str")]
     pub emoji: &'static str,
+    #[serde(with = "crate::data::persist::leaked_str")]
     pub label: &'static str,
     /// 所属贴纸包，同时也是弹层里的分类名。
+    #[serde(with = "crate::data::persist::leaked_str")]
     pub pack: &'static str,
 }
 
@@ -61,13 +70,18 @@ impl Sticker {
 }
 
 /// GIF：Demo 用色块 + emoji 字形模拟动图缩略图，按分类分组、按标签搜索。
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Serialize)]
+#[serde(from = "crate::data::persist::GifOwned")]
 pub struct Gif {
+    #[serde(with = "crate::data::persist::leaked_str")]
     pub title: &'static str,
+    #[serde(with = "crate::data::persist::leaked_str")]
     pub emoji: &'static str,
     pub color: u32,
+    #[serde(with = "crate::data::persist::leaked_str")]
     pub category: &'static str,
     /// 空格分隔的搜索关键词，搜索框按子串匹配标题或标签。
+    #[serde(with = "crate::data::persist::leaked_str")]
     pub tags: &'static str,
 }
 
@@ -90,14 +104,16 @@ impl Gif {
 }
 
 /// 消息的一次历史版本：保存编辑前的正文与编辑时间。
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
+#[serde(from = "crate::data::persist::EditRevisionOwned")]
 pub struct EditRevision {
     pub text: String,
+    #[serde(with = "crate::data::persist::leaked_str")]
     pub time: &'static str,
 }
 
 /// 转发来源：记录消息从哪个频道/私信转发而来，供正文上方的小字与点击跳转使用。
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ForwardOrigin {
     /// 展示文案，如「#闲聊」「@Nova」。
     pub label: String,
@@ -131,7 +147,7 @@ impl ForwardOrigin {
 }
 
 /// 转发弹层里的一个可选目标：某个文字频道或某条私信。
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ForwardTarget {
     /// 频道所属服务器名；私信为「私信」。
     pub server: String,
@@ -181,14 +197,16 @@ impl ForwardTarget {
 }
 
 /// 消息回复引用：作者 + 原消息摘要，点击可跳回原消息。
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
+#[serde(from = "crate::data::persist::ReplyRefOwned")]
 pub struct ReplyRef {
+    #[serde(with = "crate::data::persist::leaked_str")]
     pub author: &'static str,
     pub excerpt: String,
 }
 
 /// 自己发出的消息的送达状态：已发送 → 已送达 → 已读。
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DeliveryStatus {
     Sent,
     Delivered,
@@ -196,9 +214,12 @@ pub enum DeliveryStatus {
 }
 
 /// 已读回执中的一位读者（Demo 用静态名与时间，不接后端）。
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Serialize)]
+#[serde(from = "crate::data::persist::ReadReceiptOwned")]
 pub struct ReadReceipt {
+    #[serde(with = "crate::data::persist::leaked_str")]
     pub name: &'static str,
+    #[serde(with = "crate::data::persist::leaked_str")]
     pub time: &'static str,
     pub color: u32,
 }
@@ -210,11 +231,15 @@ impl ReadReceipt {
 }
 
 /// 话题里的一条回复：复用消息的最小展示字段，不参与主消息列表。
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
+#[serde(from = "crate::data::persist::ThreadReplyOwned")]
 pub struct ThreadReply {
+    #[serde(with = "crate::data::persist::leaked_str")]
     pub author: &'static str,
+    #[serde(with = "crate::data::persist::leaked_str")]
     pub time: &'static str,
     pub text: String,
+    #[serde(with = "crate::data::persist::rgba_u32")]
     pub color: Rgba,
 }
 
@@ -235,7 +260,7 @@ impl ThreadReply {
 }
 
 /// 挂在某条主消息上的话题：root_index 是它在当前会话消息列表里的下标。
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ChatThread {
     pub root_index: usize,
     pub title: String,
@@ -257,11 +282,15 @@ impl ChatThread {
 }
 
 /// 聊天消息。
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
+#[serde(from = "crate::data::persist::MessageOwned")]
 pub struct Message {
+    #[serde(with = "crate::data::persist::leaked_str")]
     pub author: &'static str,
+    #[serde(with = "crate::data::persist::leaked_str")]
     pub time: &'static str,
     pub text: String,
+    #[serde(with = "crate::data::persist::rgba_u32")]
     pub color: Rgba,
     pub grouped: bool,
     pub reactions: Vec<Reaction>,
@@ -388,12 +417,18 @@ impl Message {
 }
 
 /// 用户在线状态：影响头像状态点与底部状态文字。
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UserStatus {
     Online,
     Idle,
     Dnd,
     Invisible,
+}
+
+impl Default for UserStatus {
+    fn default() -> Self {
+        UserStatus::Online
+    }
 }
 
 impl UserStatus {
@@ -417,14 +452,14 @@ impl UserStatus {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ChannelKind {
     Text,
     Voice,
 }
 
 /// 频道通知级别。`Inherit` 表示跟随服务器默认，其余三级各自生效。
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug, Serialize, Deserialize)]
 pub enum NotifyLevel {
     #[default]
     Inherit,
@@ -481,7 +516,7 @@ impl NotifyLevel {
 }
 
 /// 频道（文字或语音）。
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Channel {
     pub name: String,
     pub kind: ChannelKind,
@@ -524,7 +559,7 @@ impl Channel {
 }
 
 /// 频道分类。名称用 String，支持运行时重命名。
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Category {
     pub name: String,
     pub channels: Vec<Channel>,
@@ -540,6 +575,7 @@ impl Category {
 }
 
 /// 服务器。名称与徽标用 String，支持运行时新建。
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Server {
     pub name: String,
     pub badge: String,
@@ -628,8 +664,10 @@ impl DiscoverServer {
 }
 
 /// 成员栏条目。name 可形如「Nova —— 管理员」，后缀为角色名。
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Serialize)]
+#[serde(from = "crate::data::persist::MemberOwned")]
 pub struct Member {
+    #[serde(with = "crate::data::persist::leaked_str")]
     pub name: &'static str,
     pub color: u32,
     pub online: bool,
@@ -657,16 +695,19 @@ pub struct MemberGroup {
 }
 
 /// 好友列表条目。
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Serialize)]
+#[serde(from = "crate::data::persist::FriendOwned")]
 pub struct Friend {
+    #[serde(with = "crate::data::persist::leaked_str")]
     pub name: &'static str,
     pub color: u32,
     pub online: bool,
+    #[serde(with = "crate::data::persist::leaked_str")]
     pub activity: &'static str,
 }
 
 /// 好友请求：incoming 为收到的请求，否则为发出的请求。
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct FriendRequest {
     pub name: String,
     pub color: u32,
@@ -684,12 +725,15 @@ pub enum FriendTab {
 }
 
 /// 私信会话列表条目。
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Serialize)]
+#[serde(from = "crate::data::persist::DmConversationOwned")]
 pub struct DmConversation {
+    #[serde(with = "crate::data::persist::leaked_str")]
     pub friend: &'static str,
     pub color: u32,
     pub online: bool,
     pub unread: usize,
+    #[serde(with = "crate::data::persist::leaked_str")]
     pub preview: &'static str,
 }
 
@@ -765,13 +809,25 @@ impl HelpArticle {
 }
 
 /// 当前登录用户（本地演示资料）：账户页可编辑，底部用户栏与资料预览共用。
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct MyProfile {
     pub display_name: String,
     pub username: String,
     pub email: String,
     pub bio: String,
     pub color: u32,
+}
+
+impl Default for MyProfile {
+    fn default() -> Self {
+        Self {
+            display_name: "Riven".into(),
+            username: "riven".into(),
+            email: String::new(),
+            bio: String::new(),
+            color: 0x5865f2,
+        }
+    }
 }
 
 impl MyProfile {
@@ -800,3 +856,38 @@ impl MyProfile {
             .unwrap_or('R')
     }
 }
+
+// ---------------------------------------------------------------------------
+// 反序列化：静态字符串字段让 serde 派生会给 `Deserialize` 加上 `'de: 'static`，
+// 无法从普通字符串解析。因此这些类型手写 `Deserialize`，先解析 persist 层的
+// String 镜像，再转成模型（字符串一次性 leak 成 `&'static str`）。
+// ---------------------------------------------------------------------------
+macro_rules! deserialize_via_owned {
+    ($($model:ty => $owned:ty),* $(,)?) => {
+        $(
+            impl<'de> Deserialize<'de> for $model {
+                fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+                where
+                    D: serde::Deserializer<'de>,
+                {
+                    <$owned as Deserialize>::deserialize(deserializer).map(Into::into)
+                }
+            }
+        )*
+    };
+}
+
+deserialize_via_owned!(
+    Reaction => crate::data::persist::ReactionOwned,
+    Attachment => crate::data::persist::AttachmentOwned,
+    Sticker => crate::data::persist::StickerOwned,
+    Gif => crate::data::persist::GifOwned,
+    EditRevision => crate::data::persist::EditRevisionOwned,
+    ReplyRef => crate::data::persist::ReplyRefOwned,
+    ReadReceipt => crate::data::persist::ReadReceiptOwned,
+    ThreadReply => crate::data::persist::ThreadReplyOwned,
+    Message => crate::data::persist::MessageOwned,
+    Member => crate::data::persist::MemberOwned,
+    Friend => crate::data::persist::FriendOwned,
+    DmConversation => crate::data::persist::DmConversationOwned,
+);

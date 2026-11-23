@@ -6,6 +6,7 @@ use gpui_kit::component::{v_flex, Theme, ThemeMode};
 use gpui_kit::prelude::FluentBuilder as _;
 
 use crate::data::{
+    persist,
     seed_discover_servers, seed_dm_conversations, seed_dm_messages, seed_friend_requests,
     gif_categories, help_categories, seed_friends, seed_gifs, seed_help_articles, seed_me,
     seed_members, seed_messages, seed_servers,
@@ -115,6 +116,7 @@ pub(crate) enum SettingsSection {
     TextImage,
     Keybinds,
     Language,
+    Data,
 }
 
 /// 外观主题选项。浅色会真正切换色板；「跟随系统」在 Demo 里等同深色（不读系统外观）。
@@ -126,6 +128,24 @@ pub(crate) enum ThemeChoice {
 }
 
 impl ThemeChoice {
+    /// 持久化用的稳定键（不要用展示文案，避免改文案破坏旧快照）。
+    pub(crate) fn key(self) -> &'static str {
+        match self {
+            ThemeChoice::Dark => "dark",
+            ThemeChoice::Light => "light",
+            ThemeChoice::System => "system",
+        }
+    }
+
+    /// 从快照键还原；未知值退回深色。
+    pub(crate) fn from_key(key: &str) -> Self {
+        match key {
+            "light" => ThemeChoice::Light,
+            "system" => ThemeChoice::System,
+            _ => ThemeChoice::Dark,
+        }
+    }
+
     pub(crate) fn label(self) -> &'static str {
         match self {
             ThemeChoice::Dark => "深色",
@@ -374,6 +394,10 @@ pub struct DiscordApp {
     pub(crate) drafts: HashMap<String, MessageDraft>,
     /// 输入框当前归属的会话键；切换时据此把内容存回旧会话。
     pub(crate) current_session: String,
+
+    // 本地持久化：上次落盘的快照 JSON（内容不变就不重复写盘）+ 数据页提示。
+    pub(crate) saved_json: String,
+    pub(crate) persist_note: Option<&'static str>,
 }
 
 /// 单个会话的未发送消息草稿（文本 + 可选附件）。
@@ -881,9 +905,13 @@ impl DiscordApp {
             root_focus,
             drafts: HashMap::new(),
             current_session: String::new(),
+            saved_json: String::new(),
+            persist_note: None,
         };
         // 让输入框在首个会话就归属正确的键，默认频道草稿也能被保存。
         this.current_session = this.session_key();
+        // 有本地快照就覆盖种子数据；没有则以种子数据启动并立即记一次基线。
+        this.restore_state(window, cx);
         window.focus(&this.root_focus, cx);
         this
     }
@@ -4541,6 +4569,166 @@ impl DiscordApp {
         cx.notify();
     }
 
+    // -----------------------------------------------------------------------
+    // 本地持久化（快照 / 自动保存 / 恢复示例数据）
+    // -----------------------------------------------------------------------
+
+    /// 把当前内容状态打包成快照。只包含数据，不含浮层显隐与输入焦点。
+    fn snapshot(&self) -> persist::Snapshot {
+        persist::Snapshot {
+            version: persist::VERSION,
+            servers: self.servers.clone(),
+            messages: self.messages.clone(),
+            dm_conversations: self.dm_conversations.clone(),
+            dm_messages: self.dm_messages.clone(),
+            threads: self.threads.clone(),
+            friends: self.friends.clone(),
+            friend_requests: self.friend_requests.clone(),
+            blocked_users: self.blocked_users.clone(),
+            me: self.me.clone(),
+            active_server: self.active_server,
+            active_channel: self.active_channel.clone(),
+            active_dm: self.active_dm.clone(),
+            notifications_on: self.notifications_on,
+            notification_sound: self.notification_sound,
+            my_status: self.my_status,
+            theme: self.theme_choice.key().to_string(),
+            show_members: self.show_members,
+            collapsed: self.collapsed.clone(),
+            collapsed_roles: self.collapsed_roles.clone(),
+            read_notifications: self.read_notifications.clone(),
+        }
+    }
+
+    /// 启动时尝试读回快照；任何字段与实际数据对不上都退回种子值。
+    fn restore_state(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(saved) = persist::load() else {
+            return;
+        };
+        if saved.servers.is_empty() {
+            return;
+        }
+
+        self.servers = saved.servers;
+        self.active_server = saved.active_server.min(self.servers.len() - 1);
+        let channel_ok = self.servers[self.active_server]
+            .categories
+            .iter()
+            .flat_map(|category| category.channels.iter())
+            .any(|channel| channel.name == saved.active_channel && channel.kind == ChannelKind::Text);
+        self.active_channel = if channel_ok {
+            saved.active_channel
+        } else {
+            self.first_text_channel().unwrap_or_default()
+        };
+
+        self.messages = saved.messages;
+        self.dm_conversations = saved.dm_conversations;
+        self.dm_messages = saved.dm_messages;
+        self.active_dm = saved
+            .active_dm
+            .filter(|name| self.dm_conversations.iter().any(|c| c.friend == name.as_str()))
+            .or_else(|| self.dm_conversations.first().map(|c| c.friend.to_string()));
+        self.threads = saved.threads;
+
+        if !saved.friends.is_empty() {
+            self.friends = saved.friends;
+        }
+        self.friend_requests = saved.friend_requests;
+        self.blocked_users = saved.blocked_users;
+        if !saved.me.display_name.is_empty() {
+            self.me = saved.me;
+        }
+
+        self.notifications_on = saved.notifications_on;
+        self.notification_sound = saved.notification_sound;
+        self.my_status = saved.my_status;
+        self.show_members = saved.show_members;
+        self.collapsed = saved.collapsed;
+        self.collapsed_roles = saved.collapsed_roles;
+        self.read_notifications = saved.read_notifications;
+
+        // 主题：只在和当前不同的时候切，避免启动时多余的 Theme::change。
+        let theme = ThemeChoice::from_key(&saved.theme);
+        if theme != self.theme_choice {
+            self.set_theme(theme, window, cx);
+        }
+
+        // 记录基线，避免刚启动就把同一份内容再写一遍。
+        self.saved_json = serde_json::to_string(&self.snapshot()).unwrap_or_default();
+    }
+
+    /// 每帧调用：快照内容与上次落盘不同才写，避免无意义的磁盘 IO。
+    fn autosave(&mut self) {
+        let snapshot = self.snapshot();
+        let Ok(json) = serde_json::to_string(&snapshot) else {
+            return;
+        };
+        if json == self.saved_json {
+            return;
+        }
+        if persist::save(&snapshot).is_ok() {
+            self.saved_json = json;
+        }
+    }
+
+    /// 数据页「立即保存」：立刻写盘并给出可见提示。
+    pub(crate) fn persist_now(&mut self, cx: &mut Context<Self>) {
+        let snapshot = self.snapshot();
+        match persist::save(&snapshot) {
+            Ok(_) => {
+                self.saved_json = serde_json::to_string(&snapshot).unwrap_or_default();
+                self.persist_note = Some("已写入本地快照");
+            }
+            Err(_) => {
+                self.persist_note = Some("写入失败：请检查磁盘权限或剩余空间");
+            }
+        }
+        cx.notify();
+    }
+
+    /// 数据页「恢复示例数据」：删掉快照并把内存状态重置回种子。
+    pub(crate) fn reset_local_data(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let _ = persist::clear();
+        self.servers = seed_servers();
+        self.active_server = 0;
+        self.active_channel = self.first_text_channel().unwrap_or_default();
+        self.view_mode = ViewMode::Server;
+        self.messages = seed_messages();
+        self.dm_conversations = seed_dm_conversations();
+        self.dm_messages = seed_dm_messages();
+        self.active_dm = self.dm_conversations.first().map(|c| c.friend.to_string());
+        self.friends = seed_friends();
+        self.friend_requests = seed_friend_requests();
+        self.blocked_users.clear();
+        self.me = seed_me();
+        self.threads = seed_threads();
+        self.read_notifications.clear();
+        self.drafts.clear();
+        self.saved_json.clear();
+        self.persist_note = Some("已恢复示例数据，下次改动会重新写入快照");
+        self.reset_session(window, cx);
+        cx.notify();
+    }
+
+    /// 数据页展示用：快照文件路径（找不到 HOME 时退化为相对路径）。
+    pub(crate) fn snapshot_path(&self) -> String {
+        persist::state_path().display().to_string()
+    }
+
+    /// 数据页展示用：当前快照包含的消息条数与频道数。
+    pub(crate) fn snapshot_size(&self) -> (usize, usize) {
+        let messages: usize = self.messages.values().map(Vec::len).sum::<usize>()
+            + self.dm_messages.values().map(Vec::len).sum::<usize>();
+        let channels: usize = self
+            .servers
+            .iter()
+            .flat_map(|server| server.categories.iter())
+            .map(|category| category.channels.len())
+            .sum();
+        (messages, channels)
+    }
+
     /// 读窗口当前外观：浅色 / 浅色增强都按浅色处理。
     fn window_is_light(window: &Window) -> bool {
         matches!(
@@ -4768,6 +4956,8 @@ impl DiscordApp {
 
 impl Render for DiscordApp {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // 内容有变化就顺手落盘；没有变化时这里只是序列化一次做比较。
+        self.autosave();
         // 键盘入口挂在元素树的根上（window.on_key_event 只能在 paint 阶段调用，Render 里会 panic）。
         // 根元素持有焦点，输入框聚焦时按键也会从焦点元素冒泡到这里。
         let content: AnyElement = if self.show_server_settings {

@@ -6,9 +6,9 @@
 
 ## 1. 项目定位
 
-- **产品**：一个 Discord 风格的桌面 IM 界面 Demo，纯前端模拟数据，无后端、无持久化。
+- **产品**：一个 Discord 风格的桌面 IM 界面 Demo，纯前端模拟数据，无后端；内容状态通过本地 JSON 快照持久化。
 - **优先级**：界面与交互功能优先；数据层保持可替换，方便未来接入真实 API。
-- **技术栈**：Rust 2024 edition + gpui-kit `0.10.0`（单一依赖）。
+- **技术栈**：Rust 2024 edition + gpui-kit `0.10.0` + serde / serde_json（仅数据层与快照使用）。
 - **配色**：Discord 深色主题；涨红跌绿等金融约定与本项目无关。
 
 ---
@@ -20,9 +20,10 @@ src/
 ├── main.rs                   # 仅：应用初始化、主题、窗口配置、打开窗口
 ├── app.rs                    # DiscordApp 状态 + ViewMode（Server/DirectMessage/Friends/Discover）+ 业务方法 + 顶层 Render 分发
 ├── data/
-│   ├── mod.rs                # 仅 re-export models::* 与 seed::*
+│   ├── mod.rs                # re-export models::* 与 seed::*；persist 单独 pub mod
 │   ├── models.rs             # 纯数据结构与构造函数（含 Friend / DmConversation / UserStatus / Attachment）
-│   └── seed.rs               # 模拟数据工厂（服务器/频道/消息/成员/好友/私信/可选附件清单）
+│   ├── seed.rs               # 模拟数据工厂（服务器/频道/消息/成员/好友/私信/可选附件清单）
+│   └── persist.rs            # 本地快照：Snapshot 结构、读写路径、反序列化镜像类型（*Owned）
 └── ui/
     ├── mod.rs                # 声明子模块，re-export ico / avatar / unread_badge
     ├── theme.rs              # 色板常量 palette + ico() 图标工具
@@ -544,6 +545,17 @@ gpui_kit::application()
 - 改名不回溯历史消息：`Message.author` 是 `&'static str`，旧消息保留当时的署名，这是有意为之。
 - 新增读取「我是谁」的界面一律用 `app.me`，头像用 `app.me.initial()`；不要在视图里自己取名字首字。
 
+### 本地持久化约定
+
+- 位置：`data/persist.rs`。`Snapshot` 只装**内容状态**（servers / messages / dm_conversations / dm_messages / threads / friends / friend_requests / blocked_users / me / 当前会话索引 / 通知与主题等偏好 / read_notifications），浮层显隐、输入焦点、语音连接、草稿、通话状态一律不持久化。
+- 文件：macOS 写 `~/Library/Application Support/discord-gpui/state.json`，其他平台 `~/.discord-gpui/state.json`；`state_path()` 是唯一入口，UI 只通过 `app.snapshot_path()` 展示，不自己拼路径。
+- 写入时机：`DiscordApp::render` 开头调 `self.autosave()`——把当前状态序列化一次，与 `saved_json` 比较，**只有内容变化才落盘**。不要在每个业务方法里手动调 save，漏一处就会丢改动。
+- 读取时机：`DiscordApp::new` 末尾 `restore_state(window, cx)`；无文件 / 版本不符 / servers 为空则保留种子数据。加载后要校验 `active_server` 越界、`active_channel` 是否仍存在（退回 `first_text_channel()`）、`active_dm` 是否在会话列表里；主题变化才调 `set_theme`，避免启动时多余的 `Theme::change`。
+- 数据页：用户设置 → 「数据与存储」（`SettingsSection::Data`），展示快照路径 / 消息与频道数量 / 最近操作，按钮「立即保存」（`persist_now`）、「恢复示例数据」（`reset_local_data`：删文件 + 重置种子 + `reset_session`）。
+- **serde 坑位**：模型里大量 `&'static str` 字段会让派生出来的 `Deserialize` 带上 `'de: 'static`，从普通字符串解析会编译失败；`bound` / `serde(from)` 都压不掉这个约束。现有做法是给这些类型手写 `impl Deserialize for X`，内部解析 `persist::XOwned`（String 字段）再 `Into` 转换，字符串统一走 `persist::leak()`。新增带静态字符串的模型时要补一个 `*Owned` 镜像并加进 `deserialize_via_owned!` 列表。
+- 序列化方向仍然走派生 + `#[serde(with = "leaked_str" / "rgba_u32")]`（`Rgba` 存成 0xRRGGBB）。改字段名/语义时递增 `persist::VERSION`，旧快照会被整体丢弃。
+- **验收可用测试**：`cargo test` 里有一条快照往返测试，覆盖静态字符串、Rgba、通知级别与私信列表。
+
 ### 帮助中心约定
 
 - 入口只有标题栏 `?` 按钮（`chat-open-help` → `toggle_help_center`），开着时按钮显示 active 态；关闭走 X、遮罩、Esc 三处，全部落到 `close_help_center`。
@@ -597,6 +609,7 @@ gpui_kit::application()
 cd /Users/worldunion/WorkBuddy/2026-11-20-14-21-58
 cargo check     # 快速类型检查，必须无 error / warning
 cargo build     # 完整构建
+cargo test      # 快照往返等数据层测试
 cargo run       # 启动确认窗口创建正常
 ```
 
@@ -612,7 +625,8 @@ cargo run       # 启动确认窗口创建正常
 8. 账户资料回归：打开设置 → 账户，顶部预览显示当前头像 / 名称 / 用户名 / 关于我 / 在线状态；在「显示名称」输入 `Riven Chen`、邮箱留空、点「保存改动」→ 提示「已保存」，预览与侧栏底部用户栏同步更新；把显示名称清空再保存 → 提示「显示名称与用户名不能为空」且不生效；点任意色块 → 头像立刻换色并提示「头像颜色已更新」；点「重置」→ 表单恢复成当前资料；不保存直接关设置再打开，表单回到已保存的值。
 9. 频道通知回归：右键 `#作品展示` → 菜单「通知设置」右侧显示「已静音」→ 点进通知页，四行单选当前选中「关闭通知」；改选「全部消息」后菜单摘要变「全部消息」、侧栏铃铛斜线与灰角标消失；再改回「关闭通知」→ 打开收件箱确认列表里没有 `#作品展示` 的通知且 header 未读数不含它；点返回箭头回到操作页、点「标记为已读」菜单关闭；点标题栏铃铛直接进通知页且锚点在右上；Esc 与点空白处都能整层关闭；切频道后菜单不残留。
 10. 服务器通知继承回归：点侧栏服务器名 → 菜单摘要「N 名成员 · 通知：全部消息」→ 点「通知设置」进三级单选页，页脚显示「5 个频道选择跟随服务器」（默认服务器）→ 选「关闭通知」：侧栏 `#公告`/`#规则` 等继承频道全部出现铃铛斜线、未读角标转灰，服务器标题右侧出现 `BellOff`，收件箱里这些频道的通知消失 → 打开 `#闲聊` 的频道通知页，「使用服务器默认」仍被选中但说明写「当前生效：仅 @提及」（它自己设过级别，不受服务器影响）→ 回到服务器页选「仅 @提及」，继承频道恢复提醒但未读角标仍是红色 → 点「返回」回操作页、点「静音服务器」后菜单关闭且标题变 `BellOff`，再打开菜单显示「取消静音服务器」→ Esc 能关闭服务器菜单。
-11. 测试结束后**必须关闭应用进程**，不要留后台残留：
+11. 本地持久化回归：首次启动后 `~/Library/Application Support/discord-gpui/state.json` 自动出现（约 25 KB）→ 在 `#闲聊` 发一条消息、把某频道设为静音、改主题为浅色，等一帧后文件大小/内容变化 → 关闭应用再启动，消息、静音级别、浅色主题、当前频道都还在 → 设置 → 「数据与存储」显示快照路径、`N 条消息 · M 个频道`，「立即保存」提示「已写入本地快照」→ 点「恢复示例数据」后回到初始种子（消息与频道复原），提示「已恢复示例数据」，重启后仍是示例数据 → 手动把快照里的 `active_channel` 改成不存在的频道，重启后停在第一个文字频道且不崩溃。
+12. 测试结束后**必须关闭应用进程**，不要留后台残留：
 
 ```bash
 pgrep -fl 'target/debug/discord-gpui'   # 确认无残留
@@ -634,6 +648,7 @@ pgrep -fl 'target/debug/discord-gpui'   # 确认无残留
 - 禁止把业务逻辑写进 `ui/` 视图模块。
 - 禁止把 widget 代码写回 `main.rs` 或 `app.rs`（顶层骨架除外）。
 - 禁止在 `data/` 中引用 `crate::app` 或 `crate::ui`。
+- 禁止在 `data/persist.rs` 之外直接读写快照文件（路径与序列化都收口在 persist 层）。
 - 禁止让两个整屏覆盖层（用户设置 / 服务器设置）同时可见。
 - 禁止使用重复或无语义的 Element ID。
 - 禁止裸写颜色值绕过 `palette`。

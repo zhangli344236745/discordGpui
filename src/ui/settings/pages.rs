@@ -27,6 +27,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
         SettingsSection::TextImage => text_image(app, cx),
         SettingsSection::Keybinds => keybinds(),
         SettingsSection::Language => language(),
+        SettingsSection::Data => data(app, cx),
     }
 }
 
@@ -62,7 +63,7 @@ fn group(title: &'static str) -> Div {
     div().pt(px(8.)).child(crate::ui::section_label(title))
 }
 
-fn info_row(label: &'static str, value: &'static str) -> Div {
+fn info_row(label: &'static str, value: impl Into<SharedString>) -> Div {
     h_flex()
         .w_full()
         .items_center()
@@ -79,9 +80,11 @@ fn info_row(label: &'static str, value: &'static str) -> Div {
         )
         .child(
             div()
+                .max_w(px(460.))
                 .text_size(px(14.))
                 .text_color(rgb(palette::text_primary()))
-                .child(value),
+                .truncate()
+                .child(value.into()),
         )
 }
 
@@ -608,6 +611,56 @@ fn language() -> Div {
 }
 
 /// 带标题与说明的输入行。
+/// 数据与存储：本地快照的位置、规模，以及手动保存 / 恢复示例数据。
+fn data(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
+    let (messages, channels) = app.snapshot_size();
+    let note = app
+        .persist_note
+        .unwrap_or("每次内容变化后会自动写入快照，无需手动保存");
+
+    let mut page = shell(
+        "数据与存储",
+        "消息、频道、好友与个人资料保存在本机 JSON 快照里，重启后自动恢复。",
+    )
+    .child(group("本地快照"));
+
+    page = page
+        .child(info_row("快照文件", app.snapshot_path()))
+        .child(info_row(
+            "内容规模",
+            format!("{messages} 条消息 · {channels} 个频道"),
+        ))
+        .child(info_row("自动保存", "已开启（内容变化即写入）"))
+        .child(info_row("最近一次操作", note));
+
+    page = page.child(group("维护")).child(
+        h_flex()
+            .w_full()
+            .gap(px(12.))
+            .child(action_button(
+                "立即保存",
+                true,
+                "settings-data-save",
+                Box::new(|this, _, cx| this.persist_now(cx)),
+                cx,
+            ))
+            .child(action_button(
+                "恢复示例数据",
+                false,
+                "settings-data-reset",
+                Box::new(|this, window, cx| this.reset_local_data(window, cx)),
+                cx,
+            )),
+    );
+
+    page.child(note_row(
+        "恢复示例数据会删除本地快照并清空所有改动（消息、频道、好友、资料），且无法撤销。",
+    ))
+    .child(note_row(
+        "浮层展开状态、输入框焦点、正在播放的语音连接不做持久化；草稿与通话状态也只在本次运行内有效。",
+    ))
+}
+
 fn form_field(label: &'static str, hint: &'static str, input: impl IntoElement) -> Div {
     v_flex()
         .w_full()
