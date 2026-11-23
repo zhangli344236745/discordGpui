@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use super::models::{
     Attachment, Category, Channel, ChatThread, DiscoverServer, DmConversation, Friend,
-    FriendRequest, Gif, HelpArticle, Member, Message, MyProfile, NotifyLevel, ReadReceipt, Server,
-    Sticker, ThreadReply,
+    FriendRequest, Gif, HelpArticle, Invite, InviteExpiry, Member, Message, MyProfile, NotifyLevel,
+    ReadReceipt, Server, Sticker, ThreadReply,
 };
 
 /// 前端模拟服务器数据。
@@ -858,4 +858,50 @@ pub fn seed_me() -> MyProfile {
         "专注界面与交互，喜欢把细节打磨到顺滑。",
         0x5865f2,
     )
+}
+
+/// 服务器邀请的种子数据：一条有效、一条已用完、一条已过期，覆盖三种状态。
+pub fn seed_invites() -> Vec<Invite> {
+    vec![
+        Invite {
+            code: "dev-community".into(),
+            server: "开发者社区".into(),
+            channel: "闲聊".into(),
+            inviter: "Riven",
+            uses: 6,
+            max_uses: 0,
+            expiry: InviteExpiry::Never,
+            created_minutes: 3 * 24 * 60,
+        },
+        Invite {
+            code: "dev-weekly-5".into(),
+            server: "开发者社区".into(),
+            channel: "作品展示".into(),
+            inviter: "Nova",
+            uses: 5,
+            max_uses: 5,
+            expiry: InviteExpiry::SevenDays,
+            created_minutes: 2 * 24 * 60,
+        },
+        Invite {
+            code: "dev-tmp-30m".into(),
+            server: "开发者社区".into(),
+            channel: "闲聊".into(),
+            inviter: "阿哲",
+            uses: 1,
+            max_uses: 10,
+            expiry: InviteExpiry::ThirtyMinutes,
+            created_minutes: 96,
+        },
+        Invite {
+            code: "rust-lang".into(),
+            server: "Rust 学习小组".into(),
+            channel: "日常交流".into(),
+            inviter: "Riven",
+            uses: 2,
+            max_uses: 25,
+            expiry: InviteExpiry::OneDay,
+            created_minutes: 40,
+        },
+    ]
 }

@@ -606,6 +606,133 @@ impl Server {
     }
 }
 
+/// 邀请链接的有效期选项。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum InviteExpiry {
+    ThirtyMinutes,
+    OneHour,
+    SixHours,
+    TwelveHours,
+    OneDay,
+    SevenDays,
+    Never,
+}
+
+impl InviteExpiry {
+    /// 表单里按顺序展示的全部选项。
+    pub const ALL: [InviteExpiry; 7] = [
+        InviteExpiry::ThirtyMinutes,
+        InviteExpiry::OneHour,
+        InviteExpiry::SixHours,
+        InviteExpiry::TwelveHours,
+        InviteExpiry::OneDay,
+        InviteExpiry::SevenDays,
+        InviteExpiry::Never,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            InviteExpiry::ThirtyMinutes => "30 分钟",
+            InviteExpiry::OneHour => "1 小时",
+            InviteExpiry::SixHours => "6 小时",
+            InviteExpiry::TwelveHours => "12 小时",
+            InviteExpiry::OneDay => "1 天",
+            InviteExpiry::SevenDays => "7 天",
+            InviteExpiry::Never => "永不",
+        }
+    }
+
+    /// 有效期分钟数；0 表示永不过期。
+    pub fn minutes(self) -> u32 {
+        match self {
+            InviteExpiry::ThirtyMinutes => 30,
+            InviteExpiry::OneHour => 60,
+            InviteExpiry::SixHours => 6 * 60,
+            InviteExpiry::TwelveHours => 12 * 60,
+            InviteExpiry::OneDay => 24 * 60,
+            InviteExpiry::SevenDays => 7 * 24 * 60,
+            InviteExpiry::Never => 0,
+        }
+    }
+}
+
+/// 一条服务器邀请。Demo 里只在本机生成与撤销，不真正走后端。
+#[derive(Clone, Serialize)]
+#[serde(from = "crate::data::persist::InviteOwned")]
+pub struct Invite {
+    /// 邀请码，链接即 `discord.gg/{code}`。
+    pub code: String,
+    /// 所属服务器名；与消息键一致，按名称归属。
+    pub server: String,
+    /// 邀请着陆的文字频道名。
+    pub channel: String,
+    /// 创建者显示名。
+    #[serde(with = "crate::data::persist::leaked_str")]
+    pub inviter: &'static str,
+    /// 已被使用次数。
+    pub uses: u32,
+    /// 最大使用次数；0 表示不限。
+    pub max_uses: u32,
+    pub expiry: InviteExpiry,
+    /// 创建于多少分钟前（演示值是静态的，新建的从 0 开始）。
+    pub created_minutes: u32,
+}
+
+impl Invite {
+    pub fn link(&self) -> String {
+        format!("discord.gg/{}", self.code)
+    }
+
+    /// 次数已用满（不限次数时永远为 false）。
+    pub fn used_up(&self) -> bool {
+        self.max_uses > 0 && self.uses >= self.max_uses
+    }
+
+    pub fn expired(&self) -> bool {
+        let total = self.expiry.minutes();
+        total > 0 && self.created_minutes >= total
+    }
+
+    /// 失效状态标签；仍有效时返回 None。
+    pub fn status(&self) -> Option<&'static str> {
+        if self.expired() {
+            Some("已过期")
+        } else if self.used_up() {
+            Some("已用完")
+        } else {
+            None
+        }
+    }
+
+    /// 使用次数文案：`3 / 10` 或 `3 / 不限`。
+    pub fn uses_label(&self) -> String {
+        if self.max_uses == 0 {
+            format!("{} / 不限", self.uses)
+        } else {
+            format!("{} / {}", self.uses, self.max_uses)
+        }
+    }
+
+    /// 有效期文案：剩余时间 / 已过期 / 永不过期。
+    pub fn expiry_label(&self) -> String {
+        let total = self.expiry.minutes();
+        if total == 0 {
+            return "永不过期".into();
+        }
+        if self.created_minutes >= total {
+            return "已过期".into();
+        }
+        let left = total - self.created_minutes;
+        if left < 60 {
+            format!("{left} 分钟后过期")
+        } else if left < 24 * 60 {
+            format!("{} 小时后过期", left / 60)
+        } else {
+            format!("{} 天后过期", left / (24 * 60))
+        }
+    }
+}
+
 /// 全量搜索的一条命中结果（跨频道 / 私信）。
 #[derive(Clone)]
 pub struct SearchHit {
@@ -892,4 +1019,61 @@ deserialize_via_owned!(
     Member => crate::data::persist::MemberOwned,
     Friend => crate::data::persist::FriendOwned,
     DmConversation => crate::data::persist::DmConversationOwned,
+    Invite => crate::data::persist::InviteOwned,
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn invite(max_uses: u32, expiry: InviteExpiry, created_minutes: u32, uses: u32) -> Invite {
+        Invite {
+            code: "demo-1".into(),
+            server: "开发者社区".into(),
+            channel: "闲聊".into(),
+            inviter: "Riven",
+            uses,
+            max_uses,
+            expiry,
+            created_minutes,
+        }
+    }
+
+    /// 三种失效状态的判定顺序：过期优先于用完，仍有效时返回 None。
+    #[test]
+    fn invite_status_follows_expiry_then_uses() {
+        assert_eq!(invite(0, InviteExpiry::Never, 9999, 3).status(), None);
+        assert_eq!(invite(5, InviteExpiry::OneDay, 10, 5).status(), Some("已用完"));
+        assert_eq!(invite(0, InviteExpiry::ThirtyMinutes, 45, 0).status(), Some("已过期"));
+
+        // 次数用完且同时过期时，过期优先。
+        let both = invite(1, InviteExpiry::OneHour, 90, 1);
+        assert!(both.expired() && both.used_up());
+        assert_eq!(both.status(), Some("已过期"));
+    }
+
+    /// 文案随剩余时间切换分钟 / 小时 / 天，不限次数用「不限」。
+    #[test]
+    fn invite_labels_read_naturally() {
+        assert_eq!(invite(0, InviteExpiry::Never, 0, 12).uses_label(), "12 / 不限");
+        assert_eq!(invite(10, InviteExpiry::Never, 0, 2).uses_label(), "2 / 10");
+        assert_eq!(
+            invite(0, InviteExpiry::ThirtyMinutes, 0, 0).expiry_label(),
+            "30 分钟后过期"
+        );
+        assert_eq!(
+            invite(0, InviteExpiry::SixHours, 60, 0).expiry_label(),
+            "5 小时后过期"
+        );
+        assert_eq!(
+            invite(0, InviteExpiry::SevenDays, 2 * 24 * 60, 0).expiry_label(),
+            "5 天后过期"
+        );
+        assert_eq!(
+            invite(0, InviteExpiry::Never, 0, 0).expiry_label(),
+            "永不过期"
+        );
+        assert_eq!(invite(0, InviteExpiry::OneHour, 61, 0).expiry_label(), "已过期");
+        assert_eq!(invite(0, InviteExpiry::Never, 0, 0).link(), "discord.gg/demo-1");
+    }
+}

@@ -6,8 +6,9 @@ use gpui_kit::component::input::Input;
 use gpui_kit::component::{h_flex, v_flex, Size, Sizable};
 
 use crate::app::{DiscordApp, ServerSettingsSection};
-use crate::ui::ico;
+use crate::data::InviteExpiry;
 use crate::ui::theme::palette;
+use crate::ui::{danger_icon_button, filter_chip, ico};
 
 /// 可选的服务器图标颜色。
 const SERVER_COLORS: [u32; 6] = [
@@ -80,6 +81,15 @@ fn hint(text: &'static str) -> Div {
     div()
         .text_size(px(11.))
         .text_color(rgb(palette::text_dim()))
+        .child(text)
+}
+
+/// 表单分组标签：比 `field_label` 轻，用于同一卡片里的子选项（频道 / 有效期等）。
+fn chip_label(text: &'static str) -> Div {
+    div()
+        .text_size(px(11.))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(rgb(palette::text_muted()))
         .child(text)
 }
 
@@ -392,89 +402,276 @@ fn emoji(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
 // ---------------------------------------------------------------------------
 
 fn invites(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
-    let code = app.invite_code();
-    let copied = app.invite_copied;
+    let list = app.server_invites();
+    let copied_code = app.invite_copied_code.clone();
 
-    shell("邀请", "把链接发给朋友，他们就能加入这个服务器。")
-        .child(
-            card()
-                .child(field_label("邀请链接"))
+    // 邀请频道：链接的落地页，只列文字频道。
+    let mut channels = h_flex().flex_wrap().gap_2();
+    for (index, name) in app.invite_channel_options().iter().enumerate() {
+        let selected = app.invite_channel == *name;
+        let target = name.clone();
+        channels = channels.child(filter_chip(
+            format!("#{name}"),
+            selected,
+            format!("invite-channel-{index}"),
+            Box::new(move |this: &mut DiscordApp, _, cx| {
+                this.set_invite_channel(target.clone(), cx);
+            }),
+            cx,
+        ));
+    }
+
+    let mut expiries = h_flex().flex_wrap().gap_2();
+    for expiry in InviteExpiry::ALL {
+        let selected = app.invite_expiry == expiry;
+        expiries = expiries.child(filter_chip(
+            expiry.label(),
+            selected,
+            format!("invite-expiry-{}", expiry.label()),
+            Box::new(move |this: &mut DiscordApp, _, cx| {
+                this.set_invite_expiry(expiry, cx);
+            }),
+            cx,
+        ));
+    }
+
+    let mut limits = h_flex().flex_wrap().gap_2();
+    for max in [0u32, 1, 5, 10, 25] {
+        let selected = app.invite_max_uses == max;
+        limits = limits.child(filter_chip(
+            if max == 0 {
+                "不限".to_string()
+            } else {
+                format!("{max} 次")
+            },
+            selected,
+            format!("invite-limit-{max}"),
+            Box::new(move |this: &mut DiscordApp, _, cx| {
+                this.set_invite_max_uses(max, cx);
+            }),
+            cx,
+        ));
+    }
+
+    let create_button = h_flex()
+        .h(px(32.))
+        .px_4()
+        .gap_1()
+        .items_center()
+        .rounded(px(6.))
+        .bg(rgb(palette::accent()))
+        .text_size(px(13.))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(rgb(palette::WHITE))
+        .hover(|el| el.bg(rgb(palette::accent_hover())))
+        .child(ico(IconName::Plus, Size::XSmall))
+        .child("生成并复制链接")
+        .id("invite-create")
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.create_invite(cx);
+        }));
+
+    // 已有邀请：一行一条，右侧复制与撤销。
+    let mut rows = v_flex().w_full().gap(px(2.));
+    if list.is_empty() {
+        rows = rows.child(
+            h_flex()
+                .w_full()
+                .py(px(20.))
+                .justify_center()
+                .text_size(px(12.))
+                .text_color(rgb(palette::text_dim()))
+                .child("还没有邀请链接，先在上面生成一条吧"),
+        );
+    }
+    for (index, invite) in list.iter().enumerate() {
+        let code = invite.code.clone();
+        let copied = copied_code.as_deref() == Some(code.as_str());
+        let copy_code = code.clone();
+        let revoked_code = code.clone();
+
+        let mut uses = v_flex().w(px(80.)).flex_shrink_0().gap(px(2.)).child(
+            div()
+                .text_size(px(12.))
+                .text_color(rgb(palette::text_secondary()))
+                .child(invite.uses_label()),
+        );
+        if let Some(status) = invite.status() {
+            uses = uses.child(
+                div()
+                    .text_size(px(10.))
+                    .text_color(rgb(palette::danger()))
+                    .child(status),
+            );
+        }
+
+        rows = rows.child(
+            h_flex()
+                .w_full()
+                .items_center()
+                .gap_3()
+                .px(px(12.))
+                .py(px(10.))
+                .rounded(px(6.))
+                .hover(|el| el.bg(rgb(palette::bg_rail())))
                 .child(
-                    h_flex()
-                        .gap_2()
-                        .items_center()
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .gap(px(2.))
                         .child(
-                            h_flex()
-                                .flex_1()
-                                .min_w_0()
-                                .h(px(32.))
-                                .px_3()
-                                .items_center()
-                                .rounded(px(6.))
-                                .bg(rgb(palette::bg_rail()))
+                            div()
+                                .truncate()
                                 .text_size(px(13.))
-                                .text_color(rgb(palette::text_secondary()))
-                                .child(format!("discord.gg/{code}")),
+                                .text_color(rgb(palette::accent()))
+                                .child(invite.link()),
                         )
                         .child(
-                            h_flex()
-                                .h(px(32.))
-                                .px_3()
-                                .gap_1()
-                                .items_center()
-                                .rounded(px(6.))
-                                .bg(if copied {
-                                    rgb(palette::bg_rail())
-                                } else {
-                                    rgb(palette::accent())
-                                })
-                                .text_size(px(12.))
-                                .text_color(if copied {
-                                    rgb(palette::success())
-                                } else {
-                                    rgb(palette::WHITE)
-                                })
-                                .hover(|el| el.bg(rgb(palette::accent_hover())))
-                                .child(ico(IconName::Copy, Size::XSmall))
-                                .child(if copied { "已复制" } else { "复制链接" })
-                                .id("server-invite-copy")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.copy_server_invite(cx);
-                                })),
+                            div()
+                                .truncate()
+                                .text_size(px(11.))
+                                .text_color(rgb(palette::text_muted()))
+                                .child(format!("{} 邀请 · #{}", invite.inviter, invite.channel)),
                         ),
                 )
-                .child(hint("链接由服务器名称生成：ASCII 名转小写，中文名用 gpui-N 兜底")),
-        )
-        .child(
-            card()
+                .child(uses)
                 .child(
                     div()
-                        .text_size(px(13.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(palette::text_primary()))
-                        .child("其他邀请方式"),
+                        .w(px(116.))
+                        .flex_shrink_0()
+                        .truncate()
+                        .text_size(px(12.))
+                        .text_color(if invite.expired() {
+                            rgb(palette::danger())
+                        } else {
+                            rgb(palette::text_muted())
+                        })
+                        .child(invite.expiry_label()),
                 )
                 .child(
                     h_flex()
-                        .h(px(32.))
-                        .px_3()
-                        .gap_2()
+                        .h(px(26.))
+                        .px_2()
+                        .gap_1()
                         .items_center()
-                        .rounded(px(6.))
-                        .bg(rgb(palette::bg_rail()))
-                        .text_size(px(12.))
-                        .text_color(rgb(palette::text_secondary()))
+                        .rounded(px(4.))
+                        .text_size(px(11.))
+                        .text_color(if copied {
+                            rgb(palette::success())
+                        } else {
+                            rgb(palette::text_secondary())
+                        })
                         .hover(|el| {
                             el.bg(rgb(palette::bg_channel_hover()))
                                 .text_color(rgb(palette::text_primary()))
                         })
-                        .child(ico(IconName::UserPlus, Size::XSmall))
-                        .child("打开邀请弹层")
-                        .id("server-invite-open-dialog")
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.open_invite(window, cx);
+                        .child(ico(IconName::Copy, Size::XSmall))
+                        .child(if copied { "已复制" } else { "复制" })
+                        .id(format!("invite-copy-{index}"))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.copy_invite_link(&copy_code, cx);
                         })),
                 )
-                .child(hint("打开弹层后复制链接会关闭设置页并回到主界面")),
+                .child(danger_icon_button(
+                    IconName::Trash,
+                    Size::XSmall,
+                    px(26.),
+                    format!("invite-revoke-{index}"),
+                    Box::new(move |this: &mut DiscordApp, _, cx| {
+                        this.revoke_invite(&revoked_code, cx);
+                    }),
+                    cx,
+                )),
+        );
+    }
+
+    shell("邀请", "生成邀请链接发给朋友，他们就能加入这个服务器。")
+        .child(
+            card()
+                .child(field_label("创建邀请链接"))
+                .child(
+                    v_flex()
+                        .gap(px(14.))
+                        .child(
+                            v_flex()
+                                .gap_2()
+                                .child(chip_label("邀请频道"))
+                                .child(channels),
+                        )
+                        .child(
+                            v_flex()
+                                .gap_2()
+                                .child(chip_label("有效期"))
+                                .child(expiries),
+                        )
+                        .child(
+                            v_flex()
+                                .gap_2()
+                                .child(chip_label("最大使用次数"))
+                                .child(limits),
+                        ),
+                )
+                .child(
+                    h_flex()
+                        .gap_3()
+                        .items_center()
+                        .child(create_button)
+                        .child(hint("生成后链接直接写入剪贴板")),
+                ),
+        )
+        .child(
+            card()
+                .child(
+                    h_flex()
+                        .w_full()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .items_center()
+                                .child(
+                                    div()
+                                        .text_size(px(13.))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(rgb(palette::text_primary()))
+                                        .child("已创建的邀请"),
+                                )
+                                .child(
+                                    div()
+                                        .px_2()
+                                        .h(px(18.))
+                                        .flex()
+                                        .items_center()
+                                        .rounded_full()
+                                        .bg(rgb(palette::bg_rail()))
+                                        .text_size(px(11.))
+                                        .text_color(rgb(palette::text_muted()))
+                                        .child(format!("{} 条", list.len())),
+                                ),
+                        )
+                        .child(
+                            h_flex()
+                                .h(px(28.))
+                                .px_2()
+                                .gap_1()
+                                .items_center()
+                                .rounded(px(4.))
+                                .text_size(px(12.))
+                                .text_color(rgb(palette::text_secondary()))
+                                .hover(|el| {
+                                    el.bg(rgb(palette::bg_channel_hover()))
+                                        .text_color(rgb(palette::text_primary()))
+                                })
+                                .child(ico(IconName::UserPlus, Size::XSmall))
+                                .child("邀请弹层")
+                                .id("server-invite-open-dialog")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.open_invite(window, cx);
+                                })),
+                        ),
+                )
+                .child(rows)
+                .child(hint("撤销后链接立即失效；已过期 / 已用完的记录只作为留档")),
         )
 }

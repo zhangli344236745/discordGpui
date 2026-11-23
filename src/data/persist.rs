@@ -15,7 +15,8 @@ use gpui_kit::{rgb, Rgba};
 use serde::{Deserialize, Serialize, Serializer};
 
 use super::models::{
-    ChatThread, DmConversation, Friend, FriendRequest, Message, MyProfile, Server, UserStatus,
+    ChatThread, DmConversation, Friend, FriendRequest, Invite, InviteExpiry, Message, MyProfile,
+    Server, UserStatus,
 };
 
 /// 快照版本号；字段语义变化时递增，加载端按需丢弃旧数据。
@@ -39,6 +40,10 @@ pub struct Snapshot {
     pub threads: HashMap<String, Vec<ChatThread>>,
     #[serde(default)]
     pub friends: Vec<Friend>,
+    /// 服务器邀请列表（按 `Invite.server` 归属服务器）。
+    /// 用 `Option` 区分「旧快照没有这个字段」与「用户把邀请全删了」：前者保留种子数据。
+    #[serde(default)]
+    pub invites: Option<Vec<Invite>>,
     /// 好友分组的顺序（只存分组名，成员关系在 `Friend.group` 上）。
     #[serde(default)]
     pub friend_groups: Vec<String>,
@@ -423,6 +428,45 @@ impl From<FriendOwned> for super::models::Friend {
 }
 
 #[derive(Deserialize)]
+pub struct InviteOwned {
+    #[serde(default)]
+    pub code: String,
+    #[serde(default)]
+    pub server: String,
+    #[serde(default)]
+    pub channel: String,
+    #[serde(default)]
+    pub inviter: String,
+    #[serde(default)]
+    pub uses: u32,
+    #[serde(default)]
+    pub max_uses: u32,
+    #[serde(default = "default_invite_expiry")]
+    pub expiry: InviteExpiry,
+    #[serde(default)]
+    pub created_minutes: u32,
+}
+
+fn default_invite_expiry() -> InviteExpiry {
+    InviteExpiry::Never
+}
+
+impl From<InviteOwned> for Invite {
+    fn from(value: InviteOwned) -> Self {
+        Self {
+            code: value.code,
+            server: value.server,
+            channel: value.channel,
+            inviter: leak(value.inviter),
+            uses: value.uses,
+            max_uses: value.max_uses,
+            expiry: value.expiry,
+            created_minutes: value.created_minutes,
+        }
+    }
+}
+
+#[derive(Deserialize)]
 pub struct DmConversationOwned {
     #[serde(default)]
     pub friend: String,
@@ -462,6 +506,7 @@ mod tests {
             dm_conversations: crate::data::seed_dm_conversations(),
             friends: crate::data::seed_friends(),
             friend_groups: crate::data::seed_friend_groups(),
+            invites: Some(crate::data::seed_invites()),
             me: crate::data::seed_me(),
             ..Default::default()
         };
@@ -496,5 +541,15 @@ mod tests {
         assert_eq!(back.me.display_name, snapshot.me.display_name);
         assert_eq!(back.dm_conversations.len(), snapshot.dm_conversations.len());
         assert_eq!(back.dm_conversations[0].friend, snapshot.dm_conversations[0].friend);
+
+        // 邀请：服务器 / 邀请人静态串 / 有效期都要完整往返。
+        let before_invites = snapshot.invites.clone().unwrap_or_default();
+        let after_invites = back.invites.clone().unwrap_or_default();
+        assert_eq!(after_invites.len(), before_invites.len());
+        assert_eq!(after_invites[0].code, before_invites[0].code);
+        assert_eq!(after_invites[0].server, before_invites[0].server);
+        assert_eq!(after_invites[0].inviter, before_invites[0].inviter);
+        assert_eq!(after_invites[0].expiry, before_invites[0].expiry);
+        assert_eq!(after_invites[0].max_uses, before_invites[0].max_uses);
     }
 }

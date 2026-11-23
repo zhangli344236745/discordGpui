@@ -9,11 +9,11 @@ use crate::data::{
     persist,
     seed_discover_servers, seed_dm_conversations, seed_dm_messages, seed_friend_requests,
     gif_categories, help_categories, seed_friend_groups, seed_friends, seed_gifs,
-    seed_help_articles, seed_me,
+    seed_help_articles, seed_invites, seed_me,
     seed_members, seed_messages, seed_servers,
     seed_stickers, seed_threads, sticker_packs, Attachment, Category, Channel, ChannelKind,
     ChatThread, DiscoverServer,     DmConversation, EditRevision, ForwardOrigin, ForwardTarget, Friend, FriendRequest,
-    FriendTab, Gif, HelpArticle, Member, MyProfile,
+    FriendTab, Gif, HelpArticle, Invite, InviteExpiry, Member, MyProfile,
     MemberGroup, Message, Notification, NotificationKind, NotificationTarget, NotifyLevel, Reaction,
     ReadReceipt,
     ReplyRef, SearchHit, Server, Sticker, ThreadReply, UserStatus, VoiceParticipant,
@@ -344,8 +344,13 @@ pub struct DiscordApp {
     /// 服务器自定义表情（Demo：可移除与恢复，不做上传）。
     pub(crate) server_emojis: Vec<&'static str>,
     pub(crate) removed_server_emojis: Vec<&'static str>,
-    /// 设置页里复制邀请链接后的「已复制」提示。
-    pub(crate) invite_copied: bool,
+    // 邀请管理：全部邀请 + 新建表单（频道 / 有效期 / 次数上限）+ 最近复制的邀请码。
+    pub(crate) invites: Vec<Invite>,
+    pub(crate) invite_channel: String,
+    pub(crate) invite_expiry: InviteExpiry,
+    /// 新建邀请的次数上限；0 表示不限。
+    pub(crate) invite_max_uses: u32,
+    pub(crate) invite_copied_code: Option<String>,
 
     // 语音房间面板：连接语音时展示参与者与本地设备状态。
     pub(crate) show_voice_room: bool,
@@ -912,7 +917,11 @@ impl DiscordApp {
                 "🎨", "🚀", "🔥", "✅", "👀", "🦀", "🎧", "🎮", "🍜", "🌙", "💡", "🐧",
             ],
             removed_server_emojis: Vec::new(),
-            invite_copied: false,
+            invites: seed_invites(),
+            invite_channel: String::new(),
+            invite_expiry: InviteExpiry::OneDay,
+            invite_max_uses: 0,
+            invite_copied_code: None,
             show_voice_room: false,
             voice_participants: Vec::new(),
             dm_call: None,
@@ -958,6 +967,7 @@ impl DiscordApp {
         };
         // 让输入框在首个会话就归属正确的键，默认频道草稿也能被保存。
         this.current_session = this.session_key();
+        this.sync_invite_channel();
         // 有本地快照就覆盖种子数据；没有则以种子数据启动并立即记一次基线。
         this.restore_state(window, cx);
         window.focus(&this.root_focus, cx);
@@ -1485,6 +1495,7 @@ impl DiscordApp {
         self.view_mode = ViewMode::Server;
         self.active_server = index;
         self.active_channel = self.first_text_channel().unwrap_or_default();
+        self.sync_invite_channel();
         self.reset_session(window, cx);
     }
 
@@ -1988,8 +1999,13 @@ impl DiscordApp {
         }
 
         // 该频道的历史消息一起清掉，避免重新创建同名频道时带出旧记录。
-        let key = format!("{}/{}", self.servers[self.active_server].name, menu.name);
+        let server_name = self.servers[self.active_server].name.clone();
+        let key = format!("{server_name}/{}", menu.name);
         self.messages.remove(&key);
+        // 指向该频道的邀请失效：撤销掉，免得列表里留下死链接。
+        self.invites
+            .retain(|invite| !(invite.server == server_name && invite.channel == menu.name));
+        self.sync_invite_channel();
 
         if self.view_mode == ViewMode::Server && self.active_channel == menu.name {
             if let Some(next) = self.first_text_channel() {
@@ -2344,9 +2360,9 @@ impl DiscordApp {
         }
     }
 
-    /// 打开邀请弹层，链接按当前服务器预填。
+    /// 打开邀请弹层，链接按当前服务器最新一条邀请预填。
     pub(crate) fn open_invite(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let link = format!("discord.gg/{}", self.invite_code());
+        let link = format!("discord.gg/{}", self.primary_invite_code());
         self.invite_input
             .update(cx, |input, cx| input.set_value(link, window, cx));
         self.show_server_menu = false;
@@ -4648,7 +4664,7 @@ impl DiscordApp {
         self.close_thread(); self.close_read_receipts(); self.close_edit_history();
         self.member_menu = None;
         self.server_settings_section = ServerSettingsSection::Overview;
-        self.invite_copied = false;
+        self.invite_copied_code = None;
         self.show_settings = false;
         self.show_server_menu = false;
         self.channel_menu = None;
@@ -4671,7 +4687,7 @@ impl DiscordApp {
     /// 关闭服务器设置页，回到主界面。
     pub(crate) fn close_server_settings(&mut self, cx: &mut Context<Self>) {
         self.show_server_settings = false;
-        self.invite_copied = false;
+        self.invite_copied_code = None;
         cx.notify();
     }
 
@@ -4682,7 +4698,7 @@ impl DiscordApp {
         cx: &mut Context<Self>,
     ) {
         self.server_settings_section = section;
-        self.invite_copied = false;
+        self.invite_copied_code = None;
         cx.notify();
     }
 
@@ -4721,6 +4737,14 @@ impl DiscordApp {
             let badge = new_name.chars().next().unwrap_or('?').to_string();
             self.servers[index].name = new_name;
             self.servers[index].badge = badge;
+
+            // 邀请按服务器名归属，改名后一并搬到新名下。
+            let new_key = self.servers[index].name.clone();
+            for invite in self.invites.iter_mut() {
+                if invite.server == current {
+                    invite.server = new_key.clone();
+                }
+            }
         }
 
         if !new_desc.is_empty() {
@@ -4759,11 +4783,112 @@ impl DiscordApp {
         cx.notify();
     }
 
-    /// 复制当前服务器的邀请链接（设置页内使用，不关闭页面）。
-    pub(crate) fn copy_server_invite(&mut self, cx: &mut Context<Self>) {
-        let link = format!("discord.gg/{}", self.invite_code());
-        cx.write_to_clipboard(ClipboardItem::new_string(link));
-        self.invite_copied = true;
+    // ---------------------------- 邀请管理 ----------------------------
+
+    /// 当前服务器可用于邀请的文字频道（语音频道不能做邀请落地页）。
+    pub(crate) fn invite_channel_options(&self) -> Vec<String> {
+        self.servers[self.active_server]
+            .categories
+            .iter()
+            .flat_map(|category| category.channels.iter())
+            .filter(|channel| channel.kind == ChannelKind::Text)
+            .map(|channel| channel.name.clone())
+            .collect()
+    }
+
+    /// 邀请频道失效时回落到第一个文字频道；服务器切换 / 频道删除后都要调一次。
+    pub(crate) fn sync_invite_channel(&mut self) {
+        let options = self.invite_channel_options();
+        if !options.iter().any(|name| name == &self.invite_channel) {
+            self.invite_channel = options.first().cloned().unwrap_or_default();
+        }
+    }
+
+    /// 当前服务器的邀请列表（副本，视图只读）。
+    pub(crate) fn server_invites(&self) -> Vec<Invite> {
+        let server = self.servers[self.active_server].name.as_str();
+        self.invites
+            .iter()
+            .filter(|invite| invite.server == server)
+            .cloned()
+            .collect()
+    }
+
+    /// 当前服务器最新一条邀请码；一条都没有时退回按服务器名生成的 slug。
+    pub(crate) fn primary_invite_code(&self) -> String {
+        self.server_invites()
+            .first()
+            .map(|invite| invite.code.clone())
+            .unwrap_or_else(|| self.invite_code())
+    }
+
+    pub(crate) fn set_invite_channel(&mut self, name: String, cx: &mut Context<Self>) {
+        self.invite_channel = name;
+        cx.notify();
+    }
+
+    pub(crate) fn set_invite_expiry(&mut self, expiry: InviteExpiry, cx: &mut Context<Self>) {
+        self.invite_expiry = expiry;
+        cx.notify();
+    }
+
+    /// 次数上限：0 表示不限。
+    pub(crate) fn set_invite_max_uses(&mut self, max: u32, cx: &mut Context<Self>) {
+        self.invite_max_uses = max;
+        cx.notify();
+    }
+
+    /// 生成一条邀请并立刻复制链接。邀请码形如 `dev-community-4`，与已有码去重。
+    pub(crate) fn create_invite(&mut self, cx: &mut Context<Self>) {
+        self.sync_invite_channel();
+        let channel = self.invite_channel.clone();
+        if channel.is_empty() {
+            return;
+        }
+
+        let server = self.servers[self.active_server].name.clone();
+        let base = self.invite_code();
+        let mut serial = self.invites.iter().filter(|invite| invite.server == server).count() + 1;
+        let mut code = format!("{base}-{serial}");
+        while self.invites.iter().any(|invite| invite.code == code) {
+            serial += 1;
+            code = format!("{base}-{serial}");
+        }
+
+        self.invites.insert(
+            0,
+            Invite {
+                code: code.clone(),
+                server,
+                channel,
+                inviter: persist::leak(self.me.display_name.clone()),
+                uses: 0,
+                max_uses: self.invite_max_uses,
+                expiry: self.invite_expiry,
+                created_minutes: 0,
+            },
+        );
+        cx.write_to_clipboard(ClipboardItem::new_string(format!("discord.gg/{code}")));
+        self.invite_copied_code = Some(code);
+        cx.notify();
+    }
+
+    /// 复制某条邀请的链接，并在列表行上标记「已复制」。
+    pub(crate) fn copy_invite_link(&mut self, code: &str, cx: &mut Context<Self>) {
+        let Some(invite) = self.invites.iter().find(|invite| invite.code == code) else {
+            return;
+        };
+        cx.write_to_clipboard(ClipboardItem::new_string(invite.link()));
+        self.invite_copied_code = Some(code.to_string());
+        cx.notify();
+    }
+
+    /// 撤销（删除）一条邀请。
+    pub(crate) fn revoke_invite(&mut self, code: &str, cx: &mut Context<Self>) {
+        self.invites.retain(|invite| invite.code != code);
+        if self.invite_copied_code.as_deref() == Some(code) {
+            self.invite_copied_code = None;
+        }
         cx.notify();
     }
 
@@ -4898,6 +5023,7 @@ impl DiscordApp {
             threads: self.threads.clone(),
             friends: self.friends.clone(),
             friend_groups: self.friend_groups.clone(),
+            invites: Some(self.invites.clone()),
             friend_requests: self.friend_requests.clone(),
             blocked_users: self.blocked_users.clone(),
             me: self.me.clone(),
@@ -4955,6 +5081,11 @@ impl DiscordApp {
         }
         self.friend_requests = saved.friend_requests;
         self.blocked_users = saved.blocked_users;
+        // 旧快照没有 invites 字段时保留种子邀请，而不是清空。
+        if let Some(invites) = saved.invites {
+            self.invites = invites;
+        }
+        self.sync_invite_channel();
         if !saved.me.display_name.is_empty() {
             self.me = saved.me;
         }
@@ -5019,6 +5150,9 @@ impl DiscordApp {
         self.active_dm = self.dm_conversations.first().map(|c| c.friend.to_string());
         self.friends = seed_friends();
         self.friend_groups = seed_friend_groups();
+        self.invites = seed_invites();
+        self.invite_copied_code = None;
+        self.sync_invite_channel();
         self.collapsed_groups.clear();
         self.friend_requests = seed_friend_requests();
         self.blocked_users.clear();
