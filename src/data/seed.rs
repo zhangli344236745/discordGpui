@@ -295,38 +295,64 @@ pub fn seed_friends() -> Vec<Friend> {
             color: 0x00a8fc,
             online: true,
             activity: "正在使用 GPUI Kit",
+            group: "一起打游戏".into(),
         },
         Friend {
             name: "阿哲",
             color: 0x5865f2,
             online: true,
             activity: "正在玩 Factorio",
+            group: "一起打游戏".into(),
         },
         Friend {
             name: "小满",
             color: 0xfaa61c,
             online: true,
             activity: "正在听音乐",
+            group: "现实朋友".into(),
         },
         Friend {
             name: "Lin",
             color: 0x57f287,
             online: true,
             activity: "在线",
+            group: "现实朋友".into(),
+        },
+        Friend {
+            name: "小柯",
+            color: 0x9b59b6,
+            online: true,
+            activity: "正在写周报",
+            group: "现实朋友".into(),
         },
         Friend {
             name: "Mia",
             color: 0xeb459e,
             online: false,
             activity: "离线",
+            group: "同事".into(),
         },
+        Friend {
+            name: "Ada",
+            color: 0x1abc9c,
+            online: false,
+            activity: "离线",
+            group: "同事".into(),
+        },
+        // 刻意留一个未分组好友，用来验证「未分组」分组的兜底渲染。
         Friend {
             name: "Kai",
             color: 0x80848e,
             online: false,
             activity: "离线",
+            group: String::new(),
         },
     ]
+}
+
+/// 好友分组的默认顺序；好友身上出现但这里没有的分组会按出现顺序补在后面。
+pub fn seed_friend_groups() -> Vec<String> {
+    vec!["一起打游戏".into(), "现实朋友".into(), "同事".into()]
 }
 
 /// 前端模拟私信会话数据。

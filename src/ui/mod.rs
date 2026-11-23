@@ -7,6 +7,8 @@ pub mod create_dialog;
 pub mod discover;
 pub mod dm_call_panel;
 pub mod dm_sidebar;
+pub mod friend_group_dialog;
+pub mod friend_group_menu;
 pub mod friends;
 pub mod help_center;
 pub mod invite_dialog;
@@ -29,6 +31,6 @@ pub mod widgets;
 pub use theme::ico;
 pub use widgets::{
     avatar, avatar_status, close_button, danger_icon_button, draft_badge, filter_chip, icon_button,
-    menu_divider, menu_item, radio_item, section_label, toggle_row, unread_badge,
-    unread_badge_muted,
+    menu_divider, menu_item, point_icon_button, radio_item, section_label, toggle_row,
+    unread_badge, unread_badge_muted,
 };

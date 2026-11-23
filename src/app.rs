@@ -8,7 +8,8 @@ use gpui_kit::prelude::FluentBuilder as _;
 use crate::data::{
     persist,
     seed_discover_servers, seed_dm_conversations, seed_dm_messages, seed_friend_requests,
-    gif_categories, help_categories, seed_friends, seed_gifs, seed_help_articles, seed_me,
+    gif_categories, help_categories, seed_friend_groups, seed_friends, seed_gifs,
+    seed_help_articles, seed_me,
     seed_members, seed_messages, seed_servers,
     seed_stickers, seed_threads, sticker_packs, Attachment, Category, Channel, ChannelKind,
     ChatThread, DiscoverServer,     DmConversation, EditRevision, ForwardOrigin, ForwardTarget, Friend, FriendRequest,
@@ -20,7 +21,8 @@ use crate::data::{
 use crate::ui::theme::palette;
 use crate::ui::{
     category_dialog, category_menu, channel_menu, channel_sidebar, chat, create_dialog, dm_call_panel,
-    dm_sidebar, discover, friends, help_center, invite_dialog, member_list, profile_card,
+    dm_sidebar, discover, friend_group_dialog, friend_group_menu, friends, help_center,
+    invite_dialog, member_list, profile_card,
     server_menu, server_rail,
     member_menu, search_center, server_settings, settings, status_menu, topic_dialog, voice_room,
     voice_status,
@@ -102,6 +104,20 @@ pub(crate) struct MemberMenuState {
 #[derive(Clone)]
 pub(crate) struct CategoryMenuState {
     pub(crate) name: String,
+    pub(crate) anchor: MenuAnchor,
+}
+
+/// 好友分组操作菜单状态：目标分组名 + 展开锚点。
+#[derive(Clone)]
+pub(crate) struct FriendGroupMenuState {
+    pub(crate) name: String,
+    pub(crate) anchor: MenuAnchor,
+}
+
+/// 「移动到分组」菜单状态：目标好友名 + 展开锚点。
+#[derive(Clone)]
+pub(crate) struct FriendGroupPickerState {
+    pub(crate) friend: String,
     pub(crate) anchor: MenuAnchor,
 }
 
@@ -267,6 +283,17 @@ pub struct DiscordApp {
     pub(crate) friend_requests: Vec<FriendRequest>,
     pub(crate) blocked_users: Vec<String>,
     pub(crate) add_friend_input: Entity<InputState>,
+
+    // 好友分组：分组顺序 + 折叠列表 + 分组菜单 / 移动菜单 / 新建重命名弹层。
+    pub(crate) friend_groups: Vec<String>,
+    pub(crate) collapsed_groups: Vec<String>,
+    pub(crate) friend_group_menu: Option<FriendGroupMenuState>,
+    pub(crate) friend_group_picker: Option<FriendGroupPickerState>,
+    pub(crate) show_create_group: bool,
+    pub(crate) show_rename_group: bool,
+    /// 重命名前的分组名，用于定位分组并在改名后迁移折叠状态。
+    pub(crate) rename_group_source: String,
+    pub(crate) group_input: Entity<InputState>,
 
     // 频道操作菜单（右键 / 标题栏铃铛）与频道主题编辑弹层。
     pub(crate) channel_menu: Option<ChannelMenuState>,
@@ -575,6 +602,7 @@ impl DiscordApp {
             cx.new(|cx| InputState::new(window, cx).placeholder("输入频道名称"));
         let add_friend_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("输入用户名#标签，例如 Zoe#1234"));
+        let group_input = cx.new(|cx| InputState::new(window, cx).placeholder("输入分组名称"));
         let topic_input = cx.new(|cx| InputState::new(window, cx).placeholder("输入频道主题"));
         let invite_input = cx.new(|cx| InputState::new(window, cx).placeholder("邀请链接"));
         let category_input =
@@ -654,6 +682,18 @@ impl DiscordApp {
         cx.subscribe_in(&add_friend_input, window, |this, _, event: &InputEvent, window, cx| {
             if matches!(event, InputEvent::PressEnter { secondary: false, .. }) {
                 this.send_friend_request(window, cx);
+            }
+        })
+        .detach();
+
+        // 分组输入框同时服务「新建分组」与「重命名分组」，按当前弹层分发 Enter。
+        cx.subscribe_in(&group_input, window, |this, _, event: &InputEvent, window, cx| {
+            if matches!(event, InputEvent::PressEnter { secondary: false, .. }) {
+                if this.show_create_group {
+                    this.create_group(window, cx);
+                } else if this.show_rename_group {
+                    this.save_group_rename(window, cx);
+                }
             }
         })
         .detach();
@@ -830,6 +870,14 @@ impl DiscordApp {
             friend_requests: seed_friend_requests(),
             blocked_users: Vec::new(),
             add_friend_input,
+            friend_groups: seed_friend_groups(),
+            collapsed_groups: Vec::new(),
+            friend_group_menu: None,
+            friend_group_picker: None,
+            show_create_group: false,
+            show_rename_group: false,
+            rename_group_source: String::new(),
+            group_input,
             channel_menu: None,
             show_edit_topic: false,
             edit_topic_target: String::new(),
@@ -2786,7 +2834,13 @@ impl DiscordApp {
 
     /// Esc：按「最上层优先」顺序关闭当前浮层 / 整屏页，不误伤底层状态。
     fn close_top_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.editing_message.is_some() {
+        if self.show_create_group || self.show_rename_group {
+            self.close_group_dialog(cx);
+        } else if self.friend_group_picker.is_some() {
+            self.friend_group_picker = None;
+        } else if self.friend_group_menu.is_some() {
+            self.friend_group_menu = None;
+        } else if self.editing_message.is_some() {
             self.cancel_edit();
         } else if self.show_quick_switcher {
             self.close_quick_switcher();
@@ -3669,6 +3723,8 @@ impl DiscordApp {
                     color: request.color,
                     online: false,
                     activity: "离线",
+                    // 新通过的好友先落在「未分组」，用户可以再拖到别的分组。
+                    group: String::new(),
                 });
             }
         }
@@ -3698,6 +3754,264 @@ impl DiscordApp {
         if let Some(pos) = self.blocked_users.iter().position(|n| n == &name) {
             self.blocked_users.remove(pos);
         }
+    }
+
+    // ---------------------------- 好友分组 ----------------------------
+
+    /// 分组显示顺序：自定义顺序在前，好友身上多出来的分组按首次出现补齐，空名（未分组）永远最后。
+    /// 没有成员但仍在顺序表里的空分组也会返回，方便用户进去删掉它。
+    pub(crate) fn friend_group_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .friend_groups
+            .iter()
+            .filter(|name| !name.is_empty())
+            .cloned()
+            .collect();
+        for friend in &self.friends {
+            if !friend.group.is_empty() && !names.iter().any(|name| name == &friend.group) {
+                names.push(friend.group.clone());
+            }
+        }
+        names.push(String::new());
+        names
+    }
+
+    /// 好友当前所在的分组名；空字符串表示未分组。
+    pub(crate) fn friend_group_of(&self, name: &str) -> String {
+        self.friends
+            .iter()
+            .find(|friend| friend.name == name)
+            .map(|friend| friend.group.clone())
+            .unwrap_or_default()
+    }
+
+    /// 某个分组里的好友，保持 `friends` 里的原始顺序。
+    pub(crate) fn friends_in_group(&self, group: &str) -> Vec<&Friend> {
+        self.friends.iter().filter(|f| f.group == group).collect()
+    }
+
+    /// 分组标题右侧的「N 人在线」。
+    pub(crate) fn group_online_count(&self, group: &str) -> usize {
+        self.friends
+            .iter()
+            .filter(|f| f.group == group && f.online)
+            .count()
+    }
+
+    pub(crate) fn is_group_collapsed(&self, group: &str) -> bool {
+        self.collapsed_groups.iter().any(|name| name == group)
+    }
+
+    /// 折叠 / 展开分组（未分组也允许折叠）。
+    pub(crate) fn toggle_group_collapsed(&mut self, group: String, cx: &mut Context<Self>) {
+        if let Some(pos) = self.collapsed_groups.iter().position(|name| name == &group) {
+            self.collapsed_groups.remove(pos);
+        } else {
+            self.collapsed_groups.push(group);
+        }
+        cx.notify();
+    }
+
+    /// 把好友身上出现、但顺序表里还没有的分组补进去，保证上下移动有稳定基准。
+    fn normalize_groups(&mut self) {
+        for name in self.friend_group_names() {
+            if name.is_empty() {
+                continue;
+            }
+            if !self.friend_groups.iter().any(|existing| existing == &name) {
+                self.friend_groups.push(name);
+            }
+        }
+    }
+
+    /// 打开「新建分组」弹层。
+    pub(crate) fn open_create_group(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.group_input
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.show_rename_group = false;
+        self.rename_group_source.clear();
+        self.show_create_group = true;
+        self.friend_group_menu = None;
+        self.friend_group_picker = None;
+        cx.notify();
+    }
+
+    /// 新建分组：空名、「未分组」与重名都不生效。
+    pub(crate) fn create_group(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let name = self.group_input.read(cx).value().trim().to_string();
+        if name.is_empty() || name == "未分组" {
+            return;
+        }
+        if self
+            .friend_group_names()
+            .iter()
+            .any(|existing| existing == &name)
+        {
+            return;
+        }
+        self.friend_groups.push(name);
+        self.group_input
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.show_create_group = false;
+        cx.notify();
+    }
+
+    /// 打开重命名分组弹层，输入框预填当前分组名。
+    pub(crate) fn open_group_rename(
+        &mut self,
+        name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.group_input.update(cx, |input, cx| {
+            input.set_value(name.clone(), window, cx)
+        });
+        self.rename_group_source = name;
+        self.show_create_group = false;
+        self.show_rename_group = true;
+        self.friend_group_menu = None;
+        self.friend_group_picker = None;
+        cx.notify();
+    }
+
+    /// 保存重命名：同步顺序表、成员身上的分组名与折叠状态。
+    pub(crate) fn save_group_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let value = self.group_input.read(cx).value().trim().to_string();
+        let source = std::mem::take(&mut self.rename_group_source);
+        self.show_rename_group = false;
+        self.group_input
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        if value.is_empty() || source.is_empty() || value == source || value == "未分组" {
+            cx.notify();
+            return;
+        }
+        if self
+            .friend_group_names()
+            .iter()
+            .any(|existing| existing == &value)
+        {
+            cx.notify();
+            return;
+        }
+
+        if let Some(pos) = self.friend_groups.iter().position(|name| name == &source) {
+            self.friend_groups[pos] = value.clone();
+        }
+        for friend in self.friends.iter_mut() {
+            if friend.group == source {
+                friend.group = value.clone();
+            }
+        }
+        if let Some(pos) = self.collapsed_groups.iter().position(|name| name == &source) {
+            self.collapsed_groups[pos] = value;
+        }
+        cx.notify();
+    }
+
+    /// 关闭分组弹层（新建与重命名共用）。
+    pub(crate) fn close_group_dialog(&mut self, cx: &mut Context<Self>) {
+        self.show_create_group = false;
+        self.show_rename_group = false;
+        self.rename_group_source.clear();
+        cx.notify();
+    }
+
+    /// 删除分组：成员回到「未分组」，顺序表与折叠状态一并清掉。
+    pub(crate) fn delete_group(&mut self, name: String, cx: &mut Context<Self>) {
+        if name.is_empty() {
+            return;
+        }
+        self.friend_groups.retain(|existing| existing != &name);
+        self.collapsed_groups.retain(|existing| existing != &name);
+        for friend in self.friends.iter_mut() {
+            if friend.group == name {
+                friend.group.clear();
+            }
+        }
+        self.friend_group_menu = None;
+        cx.notify();
+    }
+
+    /// 分组上移 / 下移（delta = -1 / 1），到达边界时不动作。
+    pub(crate) fn move_group(&mut self, name: String, delta: isize, cx: &mut Context<Self>) {
+        self.normalize_groups();
+        let Some(pos) = self.friend_groups.iter().position(|group| group == &name) else {
+            return;
+        };
+        let target = pos as isize + delta;
+        if target < 0 || target as usize >= self.friend_groups.len() {
+            return;
+        }
+        self.friend_groups.swap(pos, target as usize);
+        self.friend_group_menu = None;
+        cx.notify();
+    }
+
+    /// 打开分组操作菜单（右键分组标题），同时收起其他浮层。
+    pub(crate) fn open_group_menu(
+        &mut self,
+        name: String,
+        x: f32,
+        y: f32,
+        cx: &mut Context<Self>,
+    ) {
+        self.friend_group_menu = Some(FriendGroupMenuState {
+            name,
+            anchor: MenuAnchor::Point(x, y),
+        });
+        self.friend_group_picker = None;
+        self.profile_target = None;
+        self.close_message_menu();
+        self.channel_menu = None;
+        self.category_menu = None;
+        self.member_menu = None;
+        self.show_pins = false;
+        self.show_inbox = false;
+        self.show_server_menu = false;
+        self.show_status_menu = false;
+        cx.notify();
+    }
+
+    /// 打开「移动到分组」菜单（好友行右侧文件夹按钮）。
+    pub(crate) fn open_group_picker(
+        &mut self,
+        friend: String,
+        x: f32,
+        y: f32,
+        cx: &mut Context<Self>,
+    ) {
+        self.friend_group_picker = Some(FriendGroupPickerState {
+            friend,
+            anchor: MenuAnchor::Point(x, y),
+        });
+        self.friend_group_menu = None;
+        self.profile_target = None;
+        self.close_message_menu();
+        self.channel_menu = None;
+        self.category_menu = None;
+        self.member_menu = None;
+        self.show_pins = false;
+        self.show_inbox = false;
+        self.show_server_menu = false;
+        self.show_status_menu = false;
+        cx.notify();
+    }
+
+    /// 把好友移动到指定分组；目标分组不在顺序表里时补到末尾。空名表示「未分组」。
+    pub(crate) fn set_friend_group(
+        &mut self,
+        friend: String,
+        group: String,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(pos) = self.friends.iter().position(|f| f.name == friend) {
+            self.friends[pos].group = group.clone();
+        }
+        if !group.is_empty() && !self.friend_groups.iter().any(|name| name == &group) {
+            self.friend_groups.push(group);
+        }
+        self.friend_group_picker = None;
+        cx.notify();
     }
 
     // -----------------------------------------------------------------------
@@ -4583,6 +4897,7 @@ impl DiscordApp {
             dm_messages: self.dm_messages.clone(),
             threads: self.threads.clone(),
             friends: self.friends.clone(),
+            friend_groups: self.friend_groups.clone(),
             friend_requests: self.friend_requests.clone(),
             blocked_users: self.blocked_users.clone(),
             me: self.me.clone(),
@@ -4633,6 +4948,10 @@ impl DiscordApp {
 
         if !saved.friends.is_empty() {
             self.friends = saved.friends;
+        }
+        // 分组顺序以快照为准；旧快照没有这个字段时保留种子里的默认顺序。
+        if !saved.friend_groups.is_empty() {
+            self.friend_groups = saved.friend_groups;
         }
         self.friend_requests = saved.friend_requests;
         self.blocked_users = saved.blocked_users;
@@ -4699,6 +5018,8 @@ impl DiscordApp {
         self.dm_messages = seed_dm_messages();
         self.active_dm = self.dm_conversations.first().map(|c| c.friend.to_string());
         self.friends = seed_friends();
+        self.friend_groups = seed_friend_groups();
+        self.collapsed_groups.clear();
         self.friend_requests = seed_friend_requests();
         self.blocked_users.clear();
         self.me = seed_me();
@@ -4916,6 +5237,15 @@ impl DiscordApp {
             })
             .when(self.show_rename_category || self.show_create_category, |el| {
                 el.child(category_dialog::render(self, cx))
+            })
+            .when(self.show_create_group || self.show_rename_group, |el| {
+                el.child(friend_group_dialog::render(self, cx))
+            })
+            .when(self.friend_group_menu.is_some(), |el| {
+                el.child(friend_group_menu::render(self, cx))
+            })
+            .when(self.friend_group_picker.is_some(), |el| {
+                el.child(friend_group_menu::render_picker(self, cx))
             })
             .when(self.show_edit_topic, |el| {
                 el.child(topic_dialog::render(self, cx))

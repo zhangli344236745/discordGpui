@@ -1,9 +1,10 @@
 use gpui_kit::*;
+use gpui_kit::prelude::FluentBuilder as _;
 
 use crate::app::DiscordApp;
 use crate::data::FriendTab;
 use crate::ui::theme::palette;
-use crate::ui::{avatar, ico, section_label};
+use crate::ui::{avatar, ico, point_icon_button, section_label};
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::input::Input;
@@ -150,15 +151,44 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
             content = content.child(request_section(app, cx));
         }
         FriendTab::All => {
-            content = content.child(section_label(format!("全部好友 — {}", app.friends.len())));
-            for friend in &app.friends {
-                content = content.child(friend_row(
-                    friend.name,
-                    friend.color,
-                    friend.activity,
-                    friend.online,
+            content = content.child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .justify_between()
+                    .child(section_label(format!("全部好友 — {}", app.friends.len())))
+                    .child(new_group_button(cx)),
+            );
+            for group in app.friend_group_names() {
+                let members = app.friends_in_group(&group);
+                let total = members.len();
+                let online_count = app.group_online_count(&group);
+                let collapsed = app.is_group_collapsed(&group);
+
+                content = content.child(group_header(
+                    group.clone(),
+                    total,
+                    online_count,
+                    collapsed,
                     cx,
                 ));
+                if collapsed {
+                    continue;
+                }
+                if total == 0 {
+                    content = content.child(empty_hint("这个分组还没有好友"));
+                    continue;
+                }
+                // 好友行整体缩进，视觉上从属于分组标题。
+                for friend in members {
+                    content = content.child(div().pl(px(20.)).child(friend_row(
+                        friend.name,
+                        friend.color,
+                        friend.activity,
+                        friend.online,
+                        cx,
+                    )));
+                }
             }
         }
         FriendTab::Blocked => {
@@ -425,7 +455,10 @@ fn empty_hint(text: &'static str) -> Div {
         .child(text)
 }
 
-/// 单个好友行：头像、名称、活动状态，点击发起私信。
+/// 单个好友行：头像、名称、活动状态，点击主区域发起私信。
+///
+/// 右侧的「移动到分组」与「屏蔽」两个按钮是主区域的**兄弟节点**，不是子节点：
+/// 否则点击按钮会冒泡到行的 on_click 上，顺带把私信窗口打开。
 fn friend_row(
     name: &'static str,
     color: u32,
@@ -434,13 +467,14 @@ fn friend_row(
     cx: &mut Context<DiscordApp>,
 ) -> impl IntoElement {
     let click_name = name.to_string();
+    let picker_name = name.to_string();
     let id = format!("friend-row-{name}");
-    let row = h_flex()
-        .h(px(56.))
-        .px_4()
+
+    let main = h_flex()
+        .flex_1()
+        .min_w_0()
         .gap_3()
-        .rounded(px(8.))
-        .hover(|el| el.bg(rgb(palette::bg_message_hover())))
+        .items_center()
         .child(avatar(
             name.chars().next().unwrap_or('?'),
             color,
@@ -471,17 +505,142 @@ fn friend_row(
                         .text_color(rgb(palette::text_dim()))
                         .child(activity),
                 ),
-        );
+        )
+        .id(format!("{id}-main"))
+        .on_click(cx.listener(move |this, _, window, cx| {
+            this.open_dm(click_name.clone(), window, cx);
+        }));
 
-    // 在线好友行右侧提供屏蔽入口。
-    let row = row.child(
-        crate::ui::danger_icon_button(
+    h_flex()
+        .h(px(56.))
+        .px_3()
+        .gap_1()
+        .rounded(px(8.))
+        .hover(|el| el.bg(rgb(palette::bg_message_hover())))
+        .child(main)
+        .child(point_icon_button(
+            IconName::FolderInput,
+            format!("friend-move-group-{name}"),
+            Box::new(move |this, x, y, cx| {
+                this.open_group_picker(picker_name.clone(), x, y, cx)
+            }),
+            cx,
+        ))
+        .child(crate::ui::danger_icon_button(
             IconName::Ban, Size::XSmall, px(28.), format!("friend-block-{name}"),
             Box::new(move |this, _, _| this.block_friend(name)), cx,
-        ),
-    );
+        ))
+}
 
-    row.id(id).on_click(cx.listener(move |this, _, window, cx| {
-        this.open_dm(click_name.clone(), window, cx);
-    }))
+/// 分组标题行：折叠箭头 + 分组名 + 人数 + 在线数，右侧省略号打开分组菜单。
+fn group_header(
+    group: String,
+    total: usize,
+    online: usize,
+    collapsed: bool,
+    cx: &mut Context<DiscordApp>,
+) -> impl IntoElement {
+    let toggle_key = group.clone();
+    let menu_key = group.clone();
+    let label = if group.is_empty() {
+        String::from("未分组")
+    } else {
+        group.clone()
+    };
+    let id = format!("friend-group-{group}");
+
+    let toggle = h_flex()
+        .flex_1()
+        .min_w_0()
+        .gap_2()
+        .items_center()
+        .child(ico(
+            if collapsed {
+                IconName::ChevronRight
+            } else {
+                IconName::ChevronDown
+            },
+            Size::XSmall,
+        ))
+        .child(
+            div()
+                .truncate()
+                .text_size(px(11.))
+                .font_weight(FontWeight::BOLD)
+                .text_color(rgb(palette::text_secondary()))
+                .child(label),
+        )
+        .child(
+            div()
+                .text_size(px(11.))
+                .text_color(rgb(palette::text_dim()))
+                .child(total.to_string()),
+        )
+        .when(online > 0, |el| {
+            el.child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(rgb(palette::online()))
+                    .child(format!("{online} 在线")),
+            )
+        })
+        .id(format!("{id}-toggle"))
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.toggle_group_collapsed(toggle_key.clone(), cx);
+        }));
+
+    let mut row = h_flex()
+        .h(px(28.))
+        .px_2()
+        .mt(px(8.))
+        .gap_1()
+        .items_center()
+        .rounded(px(4.))
+        .hover(|el| el.bg(rgb(palette::bg_channel_hover())))
+        .child(toggle);
+    // 「未分组」没有重命名 / 排序 / 删除，不给菜单按钮。
+    if !group.is_empty() {
+        row = row.child(point_icon_button(
+            IconName::Ellipsis,
+            format!("{id}-menu"),
+            Box::new(move |this, x, y, cx| this.open_group_menu(menu_key.clone(), x, y, cx)),
+            cx,
+        ));
+    }
+
+    row.id(format!("{id}-row"))
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                if group.is_empty() {
+                    return;
+                }
+                let x: f32 = event.position.x.into();
+                let y: f32 = event.position.y.into();
+                this.open_group_menu(group.clone(), x, y, cx);
+                cx.notify();
+            }),
+        )
+}
+
+/// 全部好友标签右上角的「新建分组」按钮。
+fn new_group_button(cx: &mut Context<DiscordApp>) -> impl IntoElement {
+    h_flex()
+        .h(px(26.))
+        .px_2()
+        .gap_1()
+        .items_center()
+        .rounded(px(4.))
+        .text_size(px(12.))
+        .text_color(rgb(palette::text_muted()))
+        .hover(|el| {
+            el.bg(rgb(palette::bg_channel_hover()))
+                .text_color(rgb(palette::text_primary()))
+        })
+        .child(ico(IconName::FolderPlus, Size::XSmall))
+        .child("新建分组")
+        .id("friend-group-create")
+        .on_click(cx.listener(|this, _, window, cx| {
+            this.open_create_group(window, cx);
+        }))
 }

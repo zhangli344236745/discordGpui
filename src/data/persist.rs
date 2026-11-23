@@ -39,6 +39,9 @@ pub struct Snapshot {
     pub threads: HashMap<String, Vec<ChatThread>>,
     #[serde(default)]
     pub friends: Vec<Friend>,
+    /// 好友分组的顺序（只存分组名，成员关系在 `Friend.group` 上）。
+    #[serde(default)]
+    pub friend_groups: Vec<String>,
     #[serde(default)]
     pub friend_requests: Vec<FriendRequest>,
     #[serde(default)]
@@ -403,6 +406,8 @@ pub struct FriendOwned {
     pub online: bool,
     #[serde(default)]
     pub activity: String,
+    #[serde(default)]
+    pub group: String,
 }
 
 impl From<FriendOwned> for super::models::Friend {
@@ -412,6 +417,7 @@ impl From<FriendOwned> for super::models::Friend {
             color: value.color,
             online: value.online,
             activity: leak(value.activity),
+            group: value.group,
         }
     }
 }
@@ -454,6 +460,8 @@ mod tests {
             servers: crate::data::seed_servers(),
             messages: crate::data::seed_messages(),
             dm_conversations: crate::data::seed_dm_conversations(),
+            friends: crate::data::seed_friends(),
+            friend_groups: crate::data::seed_friend_groups(),
             me: crate::data::seed_me(),
             ..Default::default()
         };
@@ -478,6 +486,12 @@ mod tests {
         assert_eq!(after[0].color.r, before[0].color.r);
         assert_eq!(after[0].color.g, before[0].color.g);
         assert_eq!(after[0].color.b, before[0].color.b);
+
+        // 好友分组：顺序表与成员身上的分组名都要能完整往返。
+        assert_eq!(back.friend_groups, snapshot.friend_groups);
+        assert_eq!(back.friends.len(), snapshot.friends.len());
+        assert_eq!(back.friends[0].group, snapshot.friends[0].group);
+        assert_eq!(back.friends[0].name, snapshot.friends[0].name);
 
         assert_eq!(back.me.display_name, snapshot.me.display_name);
         assert_eq!(back.dm_conversations.len(), snapshot.dm_conversations.len());

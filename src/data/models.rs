@@ -695,7 +695,7 @@ pub struct MemberGroup {
 }
 
 /// 好友列表条目。
-#[derive(Clone, Copy, Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(from = "crate::data::persist::FriendOwned")]
 pub struct Friend {
     #[serde(with = "crate::data::persist::leaked_str")]
@@ -704,6 +704,8 @@ pub struct Friend {
     pub online: bool,
     #[serde(with = "crate::data::persist::leaked_str")]
     pub activity: &'static str,
+    /// 所属好友分组名；空字符串表示「未分组」。分组顺序记录在 app 层。
+    pub group: String,
 }
 
 /// 好友请求：incoming 为收到的请求，否则为发出的请求。

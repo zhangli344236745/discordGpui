@@ -228,7 +228,7 @@ gpui_kit::application()
 ### 公共组件库约定（`ui/widgets.rs`）
 
 - 公共组件只做渲染与事件转发，不持有业务状态；交互回调统一是 `ClickHandler = dyn Fn(&mut DiscordApp, &mut Window, &mut Context<DiscordApp>) + 'static`，调用方传 `Box::new(|this, window, cx| ...)`，组件内部用 `cx.listener(move |this, _, window, cx| { handler(...); cx.notify(); })` 包装。
-- 交互组件：`icon_button(icon, icon_size, side, id, active, handler, cx)`（幽灵按钮，`active` 只切主要/次要文字色，返回 `Stateful<Div>` 可继续 `.when()` 挂徽标）、`danger_icon_button`（危险操作，hover 变 danger + 白字）、`close_button`（弹层右上角 X，28×28）、`toggle_row`（设置页开关行）、`filter_chip`（搜索/探索页文字胶囊）、`menu_item(icon, label, trailing, id, handler, cx)`（浮层菜单行：图标 + 文案 + 可选右侧补充，返回 `Stateful<Div>` 可再 `.text_color()` 覆写）、`radio_item(title, hint, selected, id, handler, cx)`（互斥单选行：左侧圆环 + 标题 + 说明两行，48px）。纯展示组件：`section_label`（分组小标题，11px 加粗 muted）、`menu_divider`（菜单分隔线）、`avatar` / `avatar_status` / `unread_badge` / `unread_badge_muted`（灰底角标，静音频道用）/ `draft_badge`。
+- 交互组件：`icon_button(icon, icon_size, side, id, active, handler, cx)`（幽灵按钮，`active` 只切主要/次要文字色，返回 `Stateful<Div>` 可继续 `.when()` 挂徽标）、`danger_icon_button`（危险操作，hover 变 danger + 白字）、`close_button`（弹层右上角 X，28×28）、`toggle_row`（设置页开关行）、`filter_chip`（搜索/探索页文字胶囊）、`menu_item(icon, label, trailing, id, handler, cx)`（浮层菜单行：图标 + 文案 + 可选右侧补充，返回 `Stateful<Div>` 可再 `.text_color()` 覆写）、`radio_item(title, hint, selected, id, handler, cx)`（互斥单选行：左侧圆环 + 标题 + 说明两行，48px）、`point_icon_button(icon, id, handler, cx)`（28px 行内图标按钮，回调额外拿到点击坐标 `(x, y)`，用于把浮层锚到光标处；handler 类型是 `Box<dyn Fn(&mut DiscordApp, f32, f32, &mut Context<DiscordApp>)>`）。纯展示组件：`section_label`（分组小标题，11px 加粗 muted）、`menu_divider`（菜单分隔线）、`avatar` / `avatar_status` / `unread_badge` / `unread_badge_muted`（灰底角标，静音频道用）/ `draft_badge`。
 - `icon_button` 有 `side: Pixels` 参数覆盖 18/24/28 等尺寸；**不能**表达的颜色语义（如通知按钮的 `text_message`/`danger` 双色）保留视图内联实现，别硬塞进公共组件。
 - 接入时若回调闭包不使用 window/cx，用 `|this, _, _|` 避免 unused 警告；`impl Into<ElementId>` 参数上调用方**直接传字符串字面量**（不要写 `"xxx".into()`，多 impl Trait 参数会导致 E0283 类型歧义）。
 - 抽取边界：只抽形态同构、≥2 处复用的片段。好友页图标 tab（带 badge 与方块圆角）、通用标题栏（左侧内容异构）、成员/参与者行、server_settings 表单卡属于高风险过度泛化，保持各自私有实现。
@@ -279,7 +279,18 @@ gpui_kit::application()
 - `FriendTab`（data 层枚举：Online/Pending/All/Blocked/AddFriend）决定好友页内容，`friend_tab` 存于 app，切换走 `set_friend_tab`。标签数据源在 `friends.rs::TABS`。
 - `FriendRequest { name: String, color, incoming }`：`incoming=true` 为收到的请求（可 接受/拒绝），否则为发出的请求（显示等待中）。`accept_request` 把动态名用 `Box::leak` 转为 `&'static str` 后加入好友（Demo 纯前端静态模型）；`reject_request` 直接移除。
 - 添加好友：输入框 `add_friend_input` 接受「用户名#标签」，Enter 或按钮触发 `send_friend_request`，按基础名去重，成功后切到 Pending 标签。屏蔽好友从 `friends` 移除并记入 `blocked_users`，`unblock_friend` 反向恢复。
-- 屏蔽入口在好友行右侧的 Ban 图标，与整行的「发起私信」点击共存（GPUI 事件不冒泡，各自独立 id）。
+- 屏蔽入口在好友行右侧的 Ban 图标。**好友行必须是「主区域 + 按钮」的兄弟结构**：可点开私信的部分（头像 + 文案）是一个带 `on_click` 的子元素，Ban / 移动分组两个按钮是它的兄弟节点。早期把它们写成整行 `on_click` 的子节点，点子按钮会连带触发整行的私信跳转（GPUI 的 click 会沿树冒泡，独立 id 并不能阻断）。
+
+### 好友分组约定
+
+- 数据分两半：`Friend.group: String`（空字符串 = 未分组）记录成员归属；`app.friend_groups: Vec<String>` 只记录**分组顺序**。两者都进快照；`collapsed_groups`（折叠状态）只在内存里，重启后全部展开。
+- `friend_group_names()` 是唯一的展示顺序入口：顺序表在前 → 好友身上多出来但表里没有的分组按首次出现补齐 → 空名（未分组）永远最后。顺序表里没有成员的空分组**仍然返回**，用户才有机会进去改名或删掉。
+- `friends_in_group(name)` / `group_online_count(name)` / `friend_group_of(friend)` 是读取三件套，视图不再自己 filter。
+- 写操作：`create_group`（空名 / 「未分组」/ 重名静默忽略）、`save_group_rename`（同步顺序表 + 成员 `group` + 折叠列表）、`delete_group`（成员回到未分组，顺序表与折叠状态一起清）、`move_group(name, ±1)`（先 `normalize_groups()` 把散落分组补进表再 swap，到边界不动）、`set_friend_group(friend, group)`（目标分组不在表里就追加）。
+- 浮层两个，都在 `ui/friend_group_menu.rs`，都用「遮罩 + 卡片」兄弟节点：`render` 是分组操作（重命名 / 上移 / 下移 / 删除），右键分组标题或点行尾省略号打开 → `open_group_menu`；`render_picker` 是「移动到分组」（列全部分组、当前项打勾、底部新建分组），点好友行文件夹按钮打开 → `open_group_picker`。两个入口都会先收起资料卡 / 消息菜单 / 各类菜单，避免叠层。
+- UI 位置：只改**全部**标签（`FriendTab::All`）为分组视图，在线标签保持「在线 / 离线」两段。分组标题 = 折叠箭头（`ChevronRight` / `ChevronDown`）+ 11px 粗体名 + 人数 + 「N 在线」，整行点击走 `toggle_group_collapsed`；「未分组」不给菜单按钮也不开菜单。
+- 新建 / 重命名复用 `create_dialog::dialog()` 骨架（`ui/friend_group_dialog.rs`），共用一个 `group_input`，按 `show_create_group` 分流；Enter 由 `subscribe_in(&group_input)` 分发。
+- Esc 收口顺序排在最前：分组弹层 → 移动菜单 → 分组菜单 → 其余浮层。
 
 ### 私信侧栏搜索约定
 
@@ -547,7 +558,7 @@ gpui_kit::application()
 
 ### 本地持久化约定
 
-- 位置：`data/persist.rs`。`Snapshot` 只装**内容状态**（servers / messages / dm_conversations / dm_messages / threads / friends / friend_requests / blocked_users / me / 当前会话索引 / 通知与主题等偏好 / read_notifications），浮层显隐、输入焦点、语音连接、草稿、通话状态一律不持久化。
+- 位置：`data/persist.rs`。`Snapshot` 只装**内容状态**（servers / messages / dm_conversations / dm_messages / threads / friends / friend_groups / friend_requests / blocked_users / me / 当前会话索引 / 通知与主题等偏好 / read_notifications），浮层显隐、输入焦点、语音连接、草稿、通话状态、好友分组的折叠状态一律不持久化。
 - 文件：macOS 写 `~/Library/Application Support/discord-gpui/state.json`，其他平台 `~/.discord-gpui/state.json`；`state_path()` 是唯一入口，UI 只通过 `app.snapshot_path()` 展示，不自己拼路径。
 - 写入时机：`DiscordApp::render` 开头调 `self.autosave()`——把当前状态序列化一次，与 `saved_json` 比较，**只有内容变化才落盘**。不要在每个业务方法里手动调 save，漏一处就会丢改动。
 - 读取时机：`DiscordApp::new` 末尾 `restore_state(window, cx)`；无文件 / 版本不符 / servers 为空则保留种子数据。加载后要校验 `active_server` 越界、`active_channel` 是否仍存在（退回 `first_text_channel()`）、`active_dm` 是否在会话列表里；主题变化才调 `set_theme`，避免启动时多余的 `Theme::change`。
@@ -626,7 +637,8 @@ cargo run       # 启动确认窗口创建正常
 9. 频道通知回归：右键 `#作品展示` → 菜单「通知设置」右侧显示「已静音」→ 点进通知页，四行单选当前选中「关闭通知」；改选「全部消息」后菜单摘要变「全部消息」、侧栏铃铛斜线与灰角标消失；再改回「关闭通知」→ 打开收件箱确认列表里没有 `#作品展示` 的通知且 header 未读数不含它；点返回箭头回到操作页、点「标记为已读」菜单关闭；点标题栏铃铛直接进通知页且锚点在右上；Esc 与点空白处都能整层关闭；切频道后菜单不残留。
 10. 服务器通知继承回归：点侧栏服务器名 → 菜单摘要「N 名成员 · 通知：全部消息」→ 点「通知设置」进三级单选页，页脚显示「5 个频道选择跟随服务器」（默认服务器）→ 选「关闭通知」：侧栏 `#公告`/`#规则` 等继承频道全部出现铃铛斜线、未读角标转灰，服务器标题右侧出现 `BellOff`，收件箱里这些频道的通知消失 → 打开 `#闲聊` 的频道通知页，「使用服务器默认」仍被选中但说明写「当前生效：仅 @提及」（它自己设过级别，不受服务器影响）→ 回到服务器页选「仅 @提及」，继承频道恢复提醒但未读角标仍是红色 → 点「返回」回操作页、点「静音服务器」后菜单关闭且标题变 `BellOff`，再打开菜单显示「取消静音服务器」→ Esc 能关闭服务器菜单。
 11. 本地持久化回归：首次启动后 `~/Library/Application Support/discord-gpui/state.json` 自动出现（约 25 KB）→ 在 `#闲聊` 发一条消息、把某频道设为静音、改主题为浅色，等一帧后文件大小/内容变化 → 关闭应用再启动，消息、静音级别、浅色主题、当前频道都还在 → 设置 → 「数据与存储」显示快照路径、`N 条消息 · M 个频道`，「立即保存」提示「已写入本地快照」→ 点「恢复示例数据」后回到初始种子（消息与频道复原），提示「已恢复示例数据」，重启后仍是示例数据 → 手动把快照里的 `active_channel` 改成不存在的频道，重启后停在第一个文字频道且不崩溃。
-12. 测试结束后**必须关闭应用进程**，不要留后台残留：
+12. 好友分组回归：好友页 → 全部标签，默认看到「一起打游戏 / 现实朋友 / 同事 / 未分组」四段，标题右侧人数与在线数对得上（未分组只剩 Kai 一位离线好友）→ 点分组标题折叠，好友行收起且箭头转右，再点展开 → 点右上「新建分组」输入「大学同学」回车，列表末尾出现空分组并显示「这个分组还没有好友」→ 点某个好友行右侧文件夹按钮 → 菜单里当前分组打勾，选「大学同学」后该好友移到新分组、人数变 1（且**没有**顺带打开私信）→ 打开分组省略号菜单：点「上移」分组顺序变化、到顶时右侧显示「已在最前」；点「重命名分组」改成「老同学」，成员仍在、顺序不变；新建一个空分组后点「删除分组」确认它消失 → 右键分组标题能打开同一个菜单，Esc 逐层关闭（菜单 → 无残留）→ 重启应用，分组顺序与成员归属都还在，折叠状态恢复为全部展开。点好友行 Ban 图标只屏蔽、不跳私信。
+13. 测试结束后**必须关闭应用进程**，不要留后台残留：
 
 ```bash
 pgrep -fl 'target/debug/discord-gpui'   # 确认无残留

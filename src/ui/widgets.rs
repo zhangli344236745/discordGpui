@@ -393,3 +393,38 @@ pub fn unread_badge_muted(count: usize) -> Div {
         .justify_center()
         .child(count.to_string())
 }
+
+/// 行内小图标按钮：以**点击位置**为锚点打开浮层（右键菜单之外的一种轻量入口）。
+///
+/// 与 `icon_button` 的区别是回调里额外拿到窗口坐标，调用方可以直接把菜单锚到光标处，
+/// 不必再用固定偏移猜位置。放在行内时记得把它做成主点击区域的**兄弟节点**，
+/// 否则点击会一路冒泡到整行的 on_click 上。
+pub fn point_icon_button(
+    icon: IconName,
+    id: impl Into<ElementId>,
+    handler: Box<dyn Fn(&mut DiscordApp, f32, f32, &mut Context<DiscordApp>) + 'static>,
+    cx: &mut Context<DiscordApp>,
+) -> impl IntoElement {
+    h_flex()
+        .size(px(28.))
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .rounded(px(4.))
+        .text_color(rgb(palette::text_dim()))
+        .hover(|el| {
+            el.bg(rgb(palette::bg_channel_hover()))
+                .text_color(rgb(palette::text_primary()))
+        })
+        .child(ico(icon, Size::XSmall))
+        .id(id)
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                let x: f32 = event.position.x.into();
+                let y: f32 = event.position.y.into();
+                handler(this, x, y, cx);
+                cx.notify();
+            }),
+        )
+}
