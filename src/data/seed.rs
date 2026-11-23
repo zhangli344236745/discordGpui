@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use super::models::{
-    Attachment, Category, Channel, ChatThread, DiscoverServer, DmConversation, Friend,
-    FriendRequest, Gif, HelpArticle, Invite, InviteExpiry, Member, Message, MyProfile, NotifyLevel,
-    ReadReceipt, Role, Server, Sticker, ThreadReply,
+    Attachment, AuditEntry, AuditKind, Category, Channel, ChatThread, DiscoverServer,
+    DmConversation, Friend, FriendRequest, Gif, HelpArticle, Invite, InviteExpiry, Member, Message,
+    MyProfile, NotifyLevel, ReadReceipt, Role, Server, Sticker, ThreadReply,
 };
 
 /// 前端模拟服务器数据。
@@ -918,5 +918,49 @@ pub fn seed_invites() -> Vec<Invite> {
             expiry: InviteExpiry::OneDay,
             created_minutes: 40,
         },
+    ]
+}
+
+/// 审核日志的初始条目：`seq` 升序，最大的一条是「刚刚」。
+pub fn seed_audit() -> Vec<AuditEntry> {
+    vec![
+        AuditEntry::new(
+            1,
+            AuditKind::Server,
+            "Riven",
+            "创建了服务器",
+            "开发者社区",
+        ),
+        AuditEntry::new(2, AuditKind::Channel, "Riven", "创建了频道", "#闲聊"),
+        AuditEntry::new(3, AuditKind::Channel, "阿哲", "创建了频道", "#作品展示"),
+        AuditEntry::new(4, AuditKind::Role, "Nova", "创建了角色", "管理员"),
+        AuditEntry::new(
+            5,
+            AuditKind::Emoji,
+            "小满",
+            "移除了表情",
+            ":party_blob:",
+        ),
+        AuditEntry::new(
+            6,
+            AuditKind::Role,
+            "Nova",
+            "给成员授予了角色",
+            "Lin → 贡献者",
+        ),
+        AuditEntry::new(
+            7,
+            AuditKind::Invite,
+            "阿哲",
+            "创建了邀请",
+            "discord.gg/dev-tmp-30m · #闲聊",
+        ),
+        AuditEntry::new(
+            8,
+            AuditKind::Server,
+            "Riven",
+            "更新了服务器简介",
+            "欢迎分享作品与踩坑记录",
+        ),
     ]
 }

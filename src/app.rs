@@ -9,9 +9,10 @@ use crate::data::{
     persist,
     seed_discover_servers, seed_dm_conversations, seed_dm_messages, seed_friend_requests,
     gif_categories, help_categories, seed_friend_groups, seed_friends, seed_gifs,
-    seed_help_articles, seed_invites, seed_me, seed_roles,
+    seed_audit, seed_help_articles, seed_invites, seed_me, seed_roles,
     seed_members, seed_messages, seed_servers,
-    seed_stickers, seed_threads, sticker_packs, Attachment, Category, Channel, ChannelKind,
+    seed_stickers, seed_threads, sticker_packs, Attachment, AuditEntry, AuditKind, Category,
+    Channel, ChannelKind,
     ChatThread, DiscoverServer,     DmConversation, EditRevision, ForwardOrigin, ForwardTarget, Friend, FriendRequest,
     FriendTab, Gif, HelpArticle, Invite, InviteExpiry, Member, MyProfile,
     MemberGroup, Message, Notification, NotificationKind, NotificationTarget, NotifyLevel, Reaction,
@@ -178,7 +179,11 @@ pub(crate) enum ServerSettingsSection {
     Roles,
     Emoji,
     Invites,
+    Audit,
 }
+
+/// 审核日志最多保留的条数：超出后丢最旧的，避免快照无限膨胀。
+pub(crate) const AUDIT_LIMIT: usize = 200;
 
 /// 新建角色时轮换使用的颜色（与种子角色的取色一致）。
 pub(crate) const ROLE_COLORS: [u32; 6] = [0xf23f43, 0x57f287, 0x00a8fc, 0xfaa61c, 0xeb459e, 0x5865f2];
@@ -360,6 +365,10 @@ pub struct DiscordApp {
     /// 新建邀请的次数上限；0 表示不限。
     pub(crate) invite_max_uses: u32,
     pub(crate) invite_copied_code: Option<String>,
+
+    // 审核日志：按 seq 升序的条目 + 当前筛选类别（None = 全部）。
+    pub(crate) audit: Vec<AuditEntry>,
+    pub(crate) audit_filter: Option<AuditKind>,
 
     // 语音房间面板：连接语音时展示参与者与本地设备状态。
     pub(crate) show_voice_room: bool,
@@ -945,6 +954,8 @@ impl DiscordApp {
             invite_expiry: InviteExpiry::OneDay,
             invite_max_uses: 0,
             invite_copied_code: None,
+            audit: seed_audit(),
+            audit_filter: None,
             show_voice_room: false,
             voice_participants: Vec::new(),
             dm_call: None,
@@ -1740,6 +1751,7 @@ impl DiscordApp {
         server.categories[ci]
             .channels
             .push(Channel::text(&name, &format!("欢迎来到 #{name}")));
+        self.log_audit(AuditKind::Channel, "创建了频道", format!("#{name}"));
         self.show_create_channel = false;
         self.select_channel(name, window, cx);
     }
@@ -2029,6 +2041,7 @@ impl DiscordApp {
         self.invites
             .retain(|invite| !(invite.server == server_name && invite.channel == menu.name));
         self.sync_invite_channel();
+        self.log_audit(AuditKind::Channel, "删除了频道", format!("#{}", menu.name));
 
         if self.view_mode == ViewMode::Server && self.active_channel == menu.name {
             if let Some(next) = self.first_text_channel() {
@@ -4780,18 +4793,30 @@ impl DiscordApp {
                     invite.server = new_key.clone();
                 }
             }
+            self.log_audit(
+                AuditKind::Server,
+                "更新了服务器名称",
+                format!("{current} → {new_key}"),
+            );
         }
 
-        if !new_desc.is_empty() {
+        if !new_desc.is_empty() && self.servers[index].description != new_desc {
             self.servers[index].description = new_desc;
+            self.log_audit(AuditKind::Server, "更新了服务器简介", "新的简介已保存");
         }
         cx.notify();
     }
 
     /// 切换服务器图标颜色（点击即生效）。
     pub(crate) fn set_server_color(&mut self, color: u32, cx: &mut Context<Self>) {
-        if let Some(server) = self.servers.get_mut(self.active_server) {
-            server.color = color;
+        let index = self.active_server;
+        if self.servers[index].color != color {
+            self.servers[index].color = color;
+            self.log_audit(
+                AuditKind::Server,
+                "更新了服务器图标颜色",
+                format!("#{color:06x}"),
+            );
         }
         cx.notify();
     }
@@ -4801,6 +4826,7 @@ impl DiscordApp {
         if let Some(position) = self.server_emojis.iter().position(|item| *item == emoji) {
             self.server_emojis.remove(position);
             self.removed_server_emojis.push(emoji);
+            self.log_audit(AuditKind::Emoji, "移除了表情", emoji);
         }
         cx.notify();
     }
@@ -4814,6 +4840,7 @@ impl DiscordApp {
         {
             self.removed_server_emojis.remove(position);
             self.server_emojis.push(emoji);
+            self.log_audit(AuditKind::Emoji, "恢复了表情", emoji);
         }
         cx.notify();
     }
@@ -4853,6 +4880,7 @@ impl DiscordApp {
         }
         let color = ROLE_COLORS[self.roles.len() % ROLE_COLORS.len()];
         self.roles.push(Role::new(name.clone(), color));
+        self.log_audit(AuditKind::Role, "创建了角色", name.clone());
         self.select_role(name, window, cx);
         self.role_notice = Some("已新建角色，改名后回车保存");
         cx.notify();
@@ -4900,6 +4928,11 @@ impl DiscordApp {
             }
         }
 
+        self.log_audit(
+            AuditKind::Role,
+            "更新了角色名称",
+            format!("{current} → {new_name}"),
+        );
         self.selected_role = Some(new_name);
         self.role_notice = Some("角色名已更新");
         cx.notify();
@@ -4910,8 +4943,19 @@ impl DiscordApp {
         let Some(current) = self.selected_role.clone() else {
             return;
         };
-        if let Some(role) = self.roles.iter_mut().find(|role| role.name == current) {
+        let mut changed = false;
+        if let Some(role) = self.roles.iter_mut().find(|role| role.name == current)
+            && role.color != color
+        {
             role.color = color;
+            changed = true;
+        }
+        if changed {
+            self.log_audit(
+                AuditKind::Role,
+                "更新了角色颜色",
+                format!("{current} · #{color:06x}"),
+            );
         }
         self.role_notice = Some("颜色已更新");
         cx.notify();
@@ -4930,6 +4974,7 @@ impl DiscordApp {
         }
         let key = format!("role-{current}");
         self.collapsed_roles.retain(|item| item != &key);
+        self.log_audit(AuditKind::Role, "删除了角色", current.clone());
         self.selected_role = None;
         self.role_notice = Some("角色已删除，相关成员回到「无角色」");
         cx.notify();
@@ -4943,12 +4988,23 @@ impl DiscordApp {
             return;
         };
         let leaked = persist::leak(current.clone());
-        if let Some(member) = self.members.iter_mut().find(|m| m.name == member_name) {
-            member.role = if member.role == Some(current.as_str()) {
-                None
-            } else {
-                Some(leaked)
-            };
+        let Some(index) = self.members.iter().position(|m| m.name == member_name) else {
+            return;
+        };
+        let had_role = self.members[index].role == Some(current.as_str());
+        self.members[index].role = if had_role { None } else { Some(leaked) };
+        if had_role {
+            self.log_audit(
+                AuditKind::Role,
+                "移除了成员的角色",
+                format!("{member_name} ✕ {current}"),
+            );
+        } else {
+            self.log_audit(
+                AuditKind::Role,
+                "给成员授予了角色",
+                format!("{member_name} → {current}"),
+            );
         }
         cx.notify();
     }
@@ -5025,6 +5081,11 @@ impl DiscordApp {
             code = format!("{base}-{serial}");
         }
 
+        self.log_audit(
+            AuditKind::Invite,
+            "创建了邀请",
+            format!("discord.gg/{code} · #{channel}"),
+        );
         self.invites.insert(
             0,
             Invite {
@@ -5059,6 +5120,65 @@ impl DiscordApp {
         if self.invite_copied_code.as_deref() == Some(code) {
             self.invite_copied_code = None;
         }
+        self.log_audit(
+            AuditKind::Invite,
+            "撤销了邀请",
+            format!("discord.gg/{code}"),
+        );
+        cx.notify();
+    }
+
+    // ---------------------------- 审核日志 ----------------------------
+
+    /// 最新一条日志的序号；日志为空时是 0，新条目自然从 1 开始。
+    pub(crate) fn audit_newest_seq(&self) -> u32 {
+        self.audit.last().map(|entry| entry.seq).unwrap_or(0)
+    }
+
+    /// 追加一条日志。操作者固定为当前用户，序号接在最新一条之后。
+    /// 超过 `AUDIT_LIMIT` 时丢最旧的几条。
+    pub(crate) fn log_audit(
+        &mut self,
+        kind: AuditKind,
+        action: impl Into<String>,
+        detail: impl Into<String>,
+    ) {
+        let seq = self.audit_newest_seq() + 1;
+        let actor = self.me.display_name.clone();
+        self.audit
+            .push(AuditEntry::new(seq, kind, actor, action, detail));
+        if self.audit.len() > AUDIT_LIMIT {
+            let overflow = self.audit.len() - AUDIT_LIMIT;
+            self.audit.drain(..overflow);
+        }
+    }
+
+    /// 当前筛选下的日志，最新的排在最前面。
+    pub(crate) fn audit_visible(&self) -> Vec<&AuditEntry> {
+        self.audit
+            .iter()
+            .rev()
+            .filter(|entry| self.audit_filter.is_none_or(|kind| entry.kind == kind))
+            .collect()
+    }
+
+    /// 某个类别（`None` = 全部）的条数，用于筛选条上的计数。
+    pub(crate) fn audit_count(&self, kind: Option<AuditKind>) -> usize {
+        self.audit
+            .iter()
+            .filter(|entry| kind.is_none_or(|value| entry.kind == value))
+            .count()
+    }
+
+    pub(crate) fn set_audit_filter(&mut self, kind: Option<AuditKind>, cx: &mut Context<Self>) {
+        self.audit_filter = kind;
+        cx.notify();
+    }
+
+    /// 清空日志（不可撤销）。
+    pub(crate) fn clear_audit(&mut self, cx: &mut Context<Self>) {
+        self.audit.clear();
+        self.audit_filter = None;
         cx.notify();
     }
 
@@ -5194,6 +5314,7 @@ impl DiscordApp {
             friends: self.friends.clone(),
             friend_groups: self.friend_groups.clone(),
             invites: Some(self.invites.clone()),
+            audit: Some(self.audit.clone()),
             members: Some(self.members.clone()),
             roles: Some(self.roles.clone()),
             friend_requests: self.friend_requests.clone(),
@@ -5256,6 +5377,10 @@ impl DiscordApp {
         // 旧快照没有 invites 字段时保留种子邀请，而不是清空。
         if let Some(invites) = saved.invites {
             self.invites = invites;
+        }
+        // 审核日志：旧快照没有就保留种子日志。
+        if let Some(audit) = saved.audit {
+            self.audit = audit;
         }
         // 成员与角色：旧快照没有就保留种子；选中角色若已不存在则清空。
         if let Some(members) = saved.members {
@@ -5341,6 +5466,8 @@ impl DiscordApp {
         self.role_notice = None;
         self.invites = seed_invites();
         self.invite_copied_code = None;
+        self.audit = seed_audit();
+        self.audit_filter = None;
         self.sync_invite_channel();
         self.collapsed_groups.clear();
         self.friend_requests = seed_friend_requests();

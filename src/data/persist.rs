@@ -15,8 +15,8 @@ use gpui_kit::{rgb, Rgba};
 use serde::{Deserialize, Serialize, Serializer};
 
 use super::models::{
-    ChatThread, DmConversation, Friend, FriendRequest, Invite, InviteExpiry, Member, Message,
-    MyProfile, Role, Server, UserStatus,
+    AuditEntry, ChatThread, DmConversation, Friend, FriendRequest, Invite, InviteExpiry, Member,
+    Message, MyProfile, Role, Server, UserStatus,
 };
 
 /// 快照版本号；字段语义变化时递增，加载端按需丢弃旧数据。
@@ -49,6 +49,9 @@ pub struct Snapshot {
     /// 用 `Option` 区分「旧快照没有这个字段」与「用户把邀请全删了」：前者保留种子数据。
     #[serde(default)]
     pub invites: Option<Vec<Invite>>,
+    /// 审核日志（按 `seq` 升序）。旧快照缺字段时保留种子日志。
+    #[serde(default)]
+    pub audit: Option<Vec<AuditEntry>>,
     /// 好友分组的顺序（只存分组名，成员关系在 `Friend.group` 上）。
     #[serde(default)]
     pub friend_groups: Vec<String>,
@@ -532,6 +535,7 @@ mod tests {
             invites: Some(crate::data::seed_invites()),
             members: Some(crate::data::seed_members()),
             roles: Some(crate::data::seed_roles()),
+            audit: Some(crate::data::seed_audit()),
             me: crate::data::seed_me(),
             ..Default::default()
         };
@@ -588,5 +592,15 @@ mod tests {
         assert_eq!(after_roles.len(), before_roles.len());
         assert_eq!(after_roles[0].name, before_roles[0].name);
         assert_eq!(after_roles[0].color, before_roles[0].color);
+
+        // 审核日志：类别枚举、序号与两段文本都要完整往返。
+        let before_audit = snapshot.audit.clone().unwrap_or_default();
+        let after_audit = back.audit.clone().unwrap_or_default();
+        assert_eq!(after_audit.len(), before_audit.len());
+        assert_eq!(after_audit[0].kind, before_audit[0].kind);
+        assert_eq!(after_audit[0].seq, before_audit[0].seq);
+        assert_eq!(after_audit[0].actor, before_audit[0].actor);
+        assert_eq!(after_audit[0].action, before_audit[0].action);
+        assert_eq!(after_audit[0].detail, before_audit[0].detail);
     }
 }

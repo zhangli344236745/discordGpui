@@ -329,11 +329,12 @@ gpui_kit::application()
 ### 服务器设置页约定
 
 - 入口：服务器下拉菜单第一项「服务器设置」（`server-menu-settings`）→ `app::open_server_settings`；它会把当前服务器名称/简介预填到 `server_name_edit` / `server_desc_edit`，并收起所有浮层（含用户设置页）。
-- 分类：`ServerSettingsSection`（Overview/Roles/Emoji/Invites），文案与图标唯一数据源是 `ui/server_settings/mod.rs::SECTIONS`，切换走 `select_server_settings_section`。
+- 分类：`ServerSettingsSection`（Overview/Roles/Emoji/Invites/Audit），文案与图标唯一数据源是 `ui/server_settings/mod.rs::SECTIONS`，切换走 `select_server_settings_section`。
 - 概览：名称与简介各一个 Input，Enter（订阅在 `new` 里）或「保存」按钮都调用 `save_server_overview`。改名是**带迁移**的：同步搬走 `messages` 里 `旧名/` 前缀的键、重写 `collapsed` 里的折叠键，并按新名首字更新 `badge`；空名或未改名不生效。图标颜色由 6 个色块 `set_server_color` 点击即生效。
 - 角色：主从布局（左列表 / 右详情），数据来自 `app.roles` 与 `app.members`，见「角色管理约定」。
 - 表情：`server_emojis` / `removed_server_emojis` 两个向量，`remove_server_emoji` 与 `restore_server_emoji` 互转；Demo 不做真实上传。
 - 邀请：见下方「邀请管理约定」；入口按钮 `open_invite` 会关掉服务器设置页（弹层挂在主界面）。
+- 审核日志：见下方「审核日志约定」；纯列表页，不持有表单状态。
 - 打开用户设置页（`open_settings`）会关闭服务器设置页；切换分类时清掉 `invite_copied_code`（列表里的「已复制」标记）。
 
 ### 角色管理约定
@@ -354,6 +355,15 @@ gpui_kit::application()
 - 改名与删除的连带处理：`save_server_overview` 改名时把 `invites` 里同属旧名的记录改到新名下；`delete_channel` 会撤销指向该频道的邀请并重算落地频道。
 - 持久化：`Snapshot.invites`（`InviteOwned` 镜像负责静态字符串还原），`cargo test` 里有往返断言。
 - 弹层 `invite_dialog` 预填 `primary_invite_code()`（当前服务器最新一条，没有则退回 slug），因此从服务器菜单打开时看到的永远是列表里最新的链接。
+
+### 审核日志约定
+
+- 数据：`data::AuditEntry { seq, kind, actor, action, detail }` + `AuditKind { Server, Channel, Role, Invite, Emoji }`。全部字段都是自有 String，`Serialize` / `Deserialize` 直接派生，**不需要 `*Owned` 镜像**；`seq` 单调递增，越大越新。
+- 写入只有一个入口 `app::log_audit(kind, action, detail)`：取 `audit_newest_seq() + 1` 作序号、`me.display_name` 作操作者，超过 `AUDIT_LIMIT`（200）就 `drain` 掉最旧的。业务方法里**先做变更再记录**，不要在失败分支里留日志。
+- 已接入的操作：服务器改名 / 改简介 / 换图标色，建频道 / 删频道，建角色 / 角色改名 / 换色 / 删角色 / 授予与移除成员角色，创建邀请 / 撤销邀请，移除与恢复表情。新增类似操作时顺手补一条。
+- 时间不存时间戳：`AuditEntry::time_label(newest)` 用「最新序号 - 本条序号」当分钟差，`0` 是「刚刚」、`<60` 分钟、`<1440` 小时、再往上按天。这样快照里没有时钟依赖，重启后也不会漂移。
+- 视图：`filter_chip` 做「全部 + 五个类别」筛选（标签带条数），`app.audit_visible()` 返回倒序引用列表，`app.audit_count(kind)` 供计数；行首 30px 圆角方块用 `AuditKind::color()` 打底 + `audit_icon(kind)` 图标。清空走 `clear_audit`（不二次确认，与其它演示操作保持一致）。
+- 持久化：`Snapshot.audit: Option<Vec<AuditEntry>>`，旧快照缺字段时保留种子日志（`seed_audit()` 8 条，`seq` 1~8）。
 
 ### 快捷键与快速切换器约定
 
@@ -578,7 +588,7 @@ gpui_kit::application()
 
 ### 本地持久化约定
 
-- 位置：`data/persist.rs`。`Snapshot` 只装**内容状态**（servers / messages / dm_conversations / dm_messages / threads / friends / friend_groups / invites / members / roles / friend_requests / blocked_users / me / 当前会话索引 / 通知与主题等偏好 / read_notifications），浮层显隐、输入焦点、语音连接、草稿、通话状态、好友分组的折叠状态一律不持久化。
+- 位置：`data/persist.rs`。`Snapshot` 只装**内容状态**（servers / messages / dm_conversations / dm_messages / threads / friends / friend_groups / invites / audit / members / roles / friend_requests / blocked_users / me / 当前会话索引 / 通知与主题等偏好 / read_notifications），浮层显隐、输入焦点、语音连接、草稿、通话状态、好友分组的折叠状态一律不持久化。
 - 文件：macOS 写 `~/Library/Application Support/discord-gpui/state.json`，其他平台 `~/.discord-gpui/state.json`；`state_path()` 是唯一入口，UI 只通过 `app.snapshot_path()` 展示，不自己拼路径。
 - 写入时机：`DiscordApp::render` 开头调 `self.autosave()`——把当前状态序列化一次，与 `saved_json` 比较，**只有内容变化才落盘**。不要在每个业务方法里手动调 save，漏一处就会丢改动。
 - 读取时机：`DiscordApp::new` 末尾 `restore_state(window, cx)`；无文件 / 版本不符 / servers 为空则保留种子数据。加载后要校验 `active_server` 越界、`active_channel` 是否仍存在（退回 `first_text_channel()`）、`active_dm` 是否在会话列表里；主题变化才调 `set_theme`，避免启动时多余的 `Theme::change`。
@@ -661,7 +671,9 @@ cargo run       # 启动确认窗口创建正常
 13. 邀请管理回归：服务器设置 → 邀请 → 顶部列出「已创建的邀请 3 条」：`dev-community` 显示「6 / 不限」「永不过期」，`dev-weekly-5` 标红「已用完」，`dev-tmp-30m` 标红「已过期」→ 选频道 `#作品展示`、有效期「1 小时」、次数「10 次」，点「生成并复制链接」：列表头部出现 `discord.gg/dev-community-4`、使用次数「0 / 10」、剩余「1 小时后过期」，同时系统剪贴板已写入该链接 → 点该行的「复制」变「已复制」，点另一行后只有新行高亮 → 点某行垃圾桶撤销，行消失、复制的标记清空，条数减一 → 切换服务器再看邀请页只剩该服务器的邀请，落地频道自动落到它的第一个文字频道 → 打开服务器菜单「邀请好友」，弹层预填的是当前服务器最新一条邀请码；重启应用后邀请列表（含新增与撤销结果）保持不变。
 14. 角色管理回归：服务器设置 → 角色，左侧是「管理员（2 人）/ 版主（1 人）/ 贡献者（1 人）」三段并按角色色着色，右侧默认选中「管理员」并显示 Nova、阿哲已勾选 → 把名称改成「管理组」回车：左列表与成员栏分组同时改名、成员仍在组内；清空名称再保存提示「角色名不能为空」不生效 → 点绿色块：角色圆点与成员栏分组标题颜色同步变化，资料卡里仍显示角色名 → 点 Lin 行：Lin 加入「管理员」；再点一次退出，成员栏「贡献者」随之消失、Lin 回到「在线 / 离线」→ 新建角色（名称 `新角色 4`）后改名「实习生」，点 Kai 授予该角色，成员栏末尾出现「实习生」分组且 Kai 移出「离线」→ 删除该角色：成员栏分组消失、Kai 回到「离线」→ 重启应用，角色表顺序、颜色与各成员归属全部保留（旧的 `Nova —— 管理员` 式名字已不再出现）。
 
-15. 测试结束后**必须关闭应用进程**，不要留后台残留：
+15. 审核日志回归：服务器设置 → 审核日志，顶部「共 8 条」、筛选条为「全部 8 / 服务器 2 / 频道 2 / 角色 2 / 邀请 1 / 表情 1」，第一行是「更新了服务器简介」并显示「Riven · 刚刚」→ 切到「角色 2」只剩两条角色记录，条数变「2 / 8」→ 回「全部」，去概览把服务器名改成「开发社区邦」：返回日志页第一行变成「更新了服务器名称 / 开发者社区 → 开发社区邦」，第二行降级为「1 分钟前」→ 去角色页新建角色、改个颜色，日志里多出「创建了角色」「更新了角色颜色」→ 回日志页点「清空日志」：列表变成空状态「日志是空的…」，筛选条只剩「全部 0」，清空按钮消失 → 再改一次服务器简介，日志只剩这 1 条且显示「刚刚」→ 重启应用后日志内容（含清空后的新记录）保持不变。
+
+16. 测试结束后**必须关闭应用进程**，不要留后台残留：
 
 ```bash
 pgrep -fl 'target/debug/discord-gpui'   # 确认无残留

@@ -21,6 +21,7 @@ pub(crate) const SECTIONS: &[(ServerSettingsSection, &str, IconName)] = &[
         IconName::FaceSlightlySmiling,
     ),
     (ServerSettingsSection::Invites, "邀请", IconName::Link),
+    (ServerSettingsSection::Audit, "审核日志", IconName::Logs),
 ];
 
 /// 当前分类的标题文案。

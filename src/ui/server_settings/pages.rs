@@ -6,7 +6,7 @@ use gpui_kit::component::input::Input;
 use gpui_kit::component::{h_flex, v_flex, Size, Sizable};
 
 use crate::app::{DiscordApp, ROLE_COLORS, ServerSettingsSection};
-use crate::data::InviteExpiry;
+use crate::data::{AuditKind, InviteExpiry};
 use crate::ui::theme::palette;
 use crate::ui::{avatar, danger_icon_button, filter_chip, ico};
 
@@ -22,6 +22,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
         ServerSettingsSection::Roles => roles(app, cx),
         ServerSettingsSection::Emoji => emoji(app, cx),
         ServerSettingsSection::Invites => invites(app, cx),
+        ServerSettingsSection::Audit => audit(app, cx),
     }
 }
 
@@ -906,4 +907,180 @@ fn invites(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                 .child(rows)
                 .child(hint("撤销后链接立即失效；已过期 / 已用完的记录只作为留档")),
         )
+}
+
+// ---------------------------------------------------------------------------
+// 审核日志
+// ---------------------------------------------------------------------------
+
+/// 类别对应的行首图标。
+fn audit_icon(kind: AuditKind) -> IconName {
+    match kind {
+        AuditKind::Server => IconName::Server,
+        AuditKind::Channel => IconName::Hash,
+        AuditKind::Role => IconName::Shield,
+        AuditKind::Invite => IconName::Link,
+        AuditKind::Emoji => IconName::FaceSlightlySmiling,
+    }
+}
+
+fn audit(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
+    let newest = app.audit_newest_seq();
+    let total = app.audit_count(None);
+    let entries = app.audit_visible();
+
+    // 筛选条：全部 + 五个类别，各带条数。
+    let mut filters = h_flex().flex_wrap().gap_2();
+    filters = filters.child(filter_chip(
+        format!("全部 {total}"),
+        app.audit_filter.is_none(),
+        "audit-filter-all",
+        Box::new(|this: &mut DiscordApp, _, cx| {
+            this.set_audit_filter(None, cx);
+        }),
+        cx,
+    ));
+    for (index, kind) in AuditKind::ALL.into_iter().enumerate() {
+        filters = filters.child(filter_chip(
+            format!("{} {}", kind.label(), app.audit_count(Some(kind))),
+            app.audit_filter == Some(kind),
+            format!("audit-filter-{index}"),
+            Box::new(move |this: &mut DiscordApp, _, cx| {
+                this.set_audit_filter(Some(kind), cx);
+            }),
+            cx,
+        ));
+    }
+
+    // 标题行：左侧条数说明，右侧清空按钮。
+    let mut header = h_flex()
+        .w_full()
+        .items_center()
+        .justify_between()
+        .gap_3()
+        .child(
+            h_flex()
+                .gap_2()
+                .items_center()
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(palette::text_primary()))
+                        .child(if entries.len() == total {
+                            format!("共 {total} 条")
+                        } else {
+                            format!("{} / {total} 条", entries.len())
+                        }),
+                )
+                .child(hint("只保留最近 200 条")),
+        );
+    if total > 0 {
+        header = header.child(
+            h_flex()
+                .h(px(28.))
+                .px_2()
+                .gap(px(6.))
+                .items_center()
+                .rounded(px(4.))
+                .text_size(px(12.))
+                .text_color(rgb(palette::danger()))
+                .hover(|el| el.bg(rgb(palette::bg_channel_hover())))
+                .child(ico(IconName::Trash, Size::XSmall))
+                .child("清空日志")
+                .id("audit-clear")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.clear_audit(cx);
+                })),
+        );
+    }
+
+    // 日志列表：一行一条，最新的在最上面。
+    let mut rows = v_flex().w_full().gap(px(2.));
+    if entries.is_empty() {
+        rows = rows.child(
+            h_flex()
+                .w_full()
+                .py(px(24.))
+                .justify_center()
+                .text_size(px(12.))
+                .text_color(rgb(palette::text_dim()))
+                .child(if total == 0 {
+                    "日志是空的：改名、建频道、改角色这些操作都会记在这里"
+                } else {
+                    "这个筛选下还没有记录"
+                }),
+        );
+    }
+    for entry in &entries {
+        rows = rows.child(
+            h_flex()
+                .w_full()
+                .items_center()
+                .gap_3()
+                .px(px(12.))
+                .py(px(10.))
+                .rounded(px(6.))
+                .hover(|el| el.bg(rgb(palette::bg_rail())))
+                .child(
+                    div()
+                        .w(px(30.))
+                        .h(px(30.))
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(8.))
+                        .bg(rgb(entry.kind.color()))
+                        .text_color(rgb(palette::WHITE))
+                        .child(ico(audit_icon(entry.kind), Size::Small)),
+                )
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .gap(px(2.))
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .items_center()
+                                .child(
+                                    div()
+                                        .flex_shrink_0()
+                                        .text_size(px(13.))
+                                        .text_color(rgb(palette::text_primary()))
+                                        .child(entry.action.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_size(px(12.))
+                                        .text_color(rgb(palette::text_muted()))
+                                        .child(entry.detail.clone()),
+                                ),
+                        )
+                        .child(
+                            h_flex()
+                                .gap_1()
+                                .text_size(px(11.))
+                                .text_color(rgb(palette::text_dim()))
+                                .child(
+                                    div()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .child(entry.actor.clone()),
+                                )
+                                .child("·")
+                                .child(entry.time_label(newest)),
+                        ),
+                ),
+        );
+    }
+
+    shell(
+        "审核日志",
+        "记录本机的服务器、频道、角色、邀请与表情变更，按操作时间倒序排列。",
+    )
+    .child(card().child(filters).child(header).child(rows))
 }

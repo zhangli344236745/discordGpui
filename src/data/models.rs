@@ -733,6 +733,92 @@ impl Invite {
     }
 }
 
+/// 审核日志的类别：决定筛选条、图标与配色。
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
+pub enum AuditKind {
+    Server,
+    Channel,
+    Role,
+    Invite,
+    Emoji,
+}
+
+impl AuditKind {
+    /// 全部类别，顺序即筛选条的展示顺序。
+    pub const ALL: [AuditKind; 5] = [
+        AuditKind::Server,
+        AuditKind::Channel,
+        AuditKind::Role,
+        AuditKind::Invite,
+        AuditKind::Emoji,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            AuditKind::Server => "服务器",
+            AuditKind::Channel => "频道",
+            AuditKind::Role => "角色",
+            AuditKind::Invite => "邀请",
+            AuditKind::Emoji => "表情",
+        }
+    }
+
+    /// 行首图标的底色。
+    pub fn color(self) -> u32 {
+        match self {
+            AuditKind::Server => 0x5865f2,
+            AuditKind::Channel => 0x00a8fc,
+            AuditKind::Role => 0xfaa61c,
+            AuditKind::Invite => 0x57f287,
+            AuditKind::Emoji => 0xeb459e,
+        }
+    }
+}
+
+/// 一条审核日志。全部字段都是自有 String，可直接派发 serde，无需 `*Owned` 镜像。
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct AuditEntry {
+    /// 全局递增序号：越大越新，同时用来推算「多久以前」。
+    pub seq: u32,
+    pub kind: AuditKind,
+    /// 操作者显示名。
+    pub actor: String,
+    /// 做了什么，如「更新了服务器名称」。
+    pub action: String,
+    /// 具体内容，如「开发者社区 → Dev Community」；允许为空。
+    pub detail: String,
+}
+
+impl AuditEntry {
+    pub fn new(
+        seq: u32,
+        kind: AuditKind,
+        actor: impl Into<String>,
+        action: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self {
+            seq,
+            kind,
+            actor: actor.into(),
+            action: action.into(),
+            detail: detail.into(),
+        }
+    }
+
+    /// 相对时间文案：最新一条是「刚刚」，其余按序号差推分钟 / 小时 / 天。
+    /// 序号差当作「中间隔了几次操作」，每次操作按一分钟计。
+    pub fn time_label(&self, newest: u32) -> String {
+        let diff = newest.saturating_sub(self.seq);
+        match diff {
+            0 => "刚刚".into(),
+            1..=59 => format!("{diff} 分钟前"),
+            60..=1439 => format!("{} 小时前", diff / 60),
+            _ => format!("{} 天前", diff / (24 * 60)),
+        }
+    }
+}
+
 /// 全量搜索的一条命中结果（跨频道 / 私信）。
 #[derive(Clone)]
 pub struct SearchHit {
@@ -1093,5 +1179,19 @@ mod tests {
         );
         assert_eq!(invite(0, InviteExpiry::OneHour, 61, 0).expiry_label(), "已过期");
         assert_eq!(invite(0, InviteExpiry::Never, 0, 0).link(), "discord.gg/demo-1");
+    }
+
+    /// 审核日志的相对时间：最新一条「刚刚」，其余按序号差换成分钟 / 小时 / 天。
+    #[test]
+    fn audit_time_label_counts_back_from_newest() {
+        let entry = |seq| AuditEntry::new(seq, AuditKind::Channel, "Riven", "创建了频道", "#闲聊");
+        let newest = 5_000;
+        assert_eq!(entry(newest).time_label(newest), "刚刚");
+        assert_eq!(entry(newest - 1).time_label(newest), "1 分钟前");
+        assert_eq!(entry(newest - 59).time_label(newest), "59 分钟前");
+        assert_eq!(entry(newest - 120).time_label(newest), "2 小时前");
+        assert_eq!(entry(newest - 3 * 24 * 60).time_label(newest), "3 天前");
+        // 序号比最新还大（理论上不会发生）也不应下溢。
+        assert_eq!(entry(newest + 3).time_label(newest), "刚刚");
     }
 }
