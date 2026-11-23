@@ -13,7 +13,8 @@ use gpui_kit::prelude::FluentBuilder as _;
 pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
     let server = app.active_server_ref();
     let server_name = server.name.clone();
-    let muted = server.muted;
+    // 「跟随服务器」的频道是否静音由服务器默认级别决定，标题栏铃铛要一起反映。
+    let muted = server.notify.is_muted();
 
     let header = h_flex()
         .h(px(48.))

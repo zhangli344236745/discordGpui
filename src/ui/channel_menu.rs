@@ -32,6 +32,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
     let unread = app.channel_unread_of(&name);
     let topic = app.channel_topic_of(&name);
     let level = app.channel_notify_of(&name);
+    let resolved = app.effective_notify_of(&name);
 
     // 右键菜单跟随光标；标题栏入口贴右上角展开。通知设置页文案更长，卡片加宽。
     let (left, top, right) = match menu.anchor {
@@ -60,7 +61,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
         ChannelMenuPage::Actions => {
             actions_page(card, name.clone(), is_voice, unread, topic, level, cx)
         }
-        ChannelMenuPage::Notify => notify_page(card, name.clone(), level, cx),
+        ChannelMenuPage::Notify => notify_page(card, name.clone(), level, resolved, cx),
     };
 
     // 透明遮罩与卡片是兄弟节点：点遮罩关闭，点卡片不触发关闭。
@@ -208,6 +209,7 @@ fn notify_page(
     card: Div,
     name: String,
     level: NotifyLevel,
+    resolved: NotifyLevel,
     cx: &mut Context<DiscordApp>,
 ) -> Div {
     let header = h_flex()
@@ -257,9 +259,15 @@ fn notify_page(
 
     for level_option in LEVELS {
         let selected = level_option == level;
+        // 「跟随服务器」这一行把继承到的实际级别写进说明，避免用户猜。
+        let hint = if level_option == NotifyLevel::Inherit {
+            format!("跟随时通知设置，当前生效：{}", resolved.label())
+        } else {
+            level_option.hint().to_string()
+        };
         card = card.child(radio_item(
             level_option.label(),
-            level_option.hint(),
+            hint,
             selected,
             format!("channel-notify-{}", level_option.index()),
             Box::new(move |this, _, cx| this.set_channel_notify(level_option, cx)),

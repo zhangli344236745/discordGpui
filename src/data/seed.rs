@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use super::models::{
     Attachment, Category, Channel, ChatThread, DiscoverServer, DmConversation, Friend,
-    FriendRequest, Gif, HelpArticle, Member, Message, MyProfile, ReadReceipt, Server, Sticker,
-    ThreadReply,
+    FriendRequest, Gif, HelpArticle, Member, Message, MyProfile, NotifyLevel, ReadReceipt, Server,
+    Sticker, ThreadReply,
 };
 
 /// 前端模拟服务器数据。
@@ -13,7 +13,7 @@ pub fn seed_servers() -> Vec<Server> {
             name: "开发者社区".into(),
             badge: "开".into(),
             color: 0x5865f2,
-            muted: false,
+            notify: NotifyLevel::All,
             description: "一个聊 Rust、前端与工具链的开发者聚集地，欢迎分享作品与踩坑记录。".into(),
             categories: vec![
                 Category {
@@ -29,12 +29,12 @@ pub fn seed_servers() -> Vec<Server> {
                     channels: vec![
                         Channel::text("闲聊", "日常摸鱼、随便聊聊")
                             .unread(3)
-                            .notify(crate::data::NotifyLevel::Mentions),
+                            .notify(NotifyLevel::Mentions),
                         Channel::text("前端开发", "React / Vue / CSS 话题"),
                         Channel::text("Rust 讨论", "所有权、异步与生态"),
                         Channel::text("作品展示", "晒一晒最近做的东西")
                             .unread(2)
-                            .notify(crate::data::NotifyLevel::Nothing),
+                            .notify(NotifyLevel::Nothing),
                     ],
                 },
                 Category {
@@ -47,7 +47,7 @@ pub fn seed_servers() -> Vec<Server> {
             name: "设计工坊".into(),
             badge: "设".into(),
             color: 0xeb459e,
-            muted: false,
+            notify: NotifyLevel::All,
             description: "视觉与交互设计的交流空间，随手发灵感、互评设计稿。".into(),
             categories: vec![
                 Category {
@@ -68,7 +68,7 @@ pub fn seed_servers() -> Vec<Server> {
             name: "音乐房".into(),
             badge: "音".into(),
             color: 0x57f287,
-            muted: false,
+            notify: NotifyLevel::All,
             description: "一起听歌、聊编曲与设备的地方，语音频道常驻。".into(),
             categories: vec![Category {
                 name: "音乐".into(),
@@ -82,7 +82,7 @@ pub fn seed_servers() -> Vec<Server> {
             name: "游戏夜".into(),
             badge: "游".into(),
             color: 0xfee75c,
-            muted: false,
+            notify: NotifyLevel::All,
             description: "开黑、组队与赛事讨论，晚上语音房最热闹。".into(),
             categories: vec![Category {
                 name: "组队".into(),

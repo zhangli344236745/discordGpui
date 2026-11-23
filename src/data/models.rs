@@ -544,8 +544,8 @@ pub struct Server {
     pub name: String,
     pub badge: String,
     pub color: u32,
-    /// 是否静音：静音后菜单显示「取消静音」，侧栏标题旁出现静音图标。
-    pub muted: bool,
+    /// 服务器默认通知级别：频道选「跟随服务器」时继承这个值；`Nothing` 等同服务器静音。
+    pub notify: NotifyLevel,
     /// 服务器简介，在服务器设置「概览」里展示与编辑。
     pub description: String,
     pub categories: Vec<Category>,
@@ -560,7 +560,7 @@ impl Server {
             name,
             badge,
             color,
-            muted: false,
+            notify: NotifyLevel::All,
             description: "刚创建的新服务器，快去邀请朋友吧。".into(),
             categories: vec![Category::new(
                 "文字频道",

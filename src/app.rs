@@ -254,8 +254,10 @@ pub struct DiscordApp {
     pub(crate) edit_topic_target: String,
     pub(crate) topic_input: Entity<InputState>,
 
-    // 服务器下拉菜单（邀请 / 静音 / 标记已读 / 创建频道 / 离开）与邀请弹层。
+    // 服务器下拉菜单（邀请 / 通知 / 静音 / 标记已读 / 创建频道 / 离开）与邀请弹层。
     pub(crate) show_server_menu: bool,
+    /// 服务器菜单是否翻到「通知设置」页；每次打开菜单都会复位成操作页。
+    pub(crate) server_notify_page: bool,
     pub(crate) show_invite: bool,
     pub(crate) invite_input: Entity<InputState>,
 
@@ -809,6 +811,7 @@ impl DiscordApp {
             edit_topic_target: String::new(),
             topic_input,
             show_server_menu: false,
+            server_notify_page: false,
             show_invite: false,
             invite_input,
             category_menu: None,
@@ -1179,7 +1182,12 @@ impl DiscordApp {
             for category in &server.categories {
                 for channel in &category.channels {
                     // 静音频道不进收件箱，也不产生 @提及通知（仍可正常翻消息）。
-                    if channel.notify.is_muted() {
+                    // 频道选「跟随服务器」时，继承服务器的默认级别一起判断。
+                    let effective = match channel.notify {
+                        NotifyLevel::Inherit => server.notify,
+                        level => level,
+                    };
+                    if effective.is_muted() {
                         continue;
                     }
                     if channel.unread > 0 && channel.kind == ChannelKind::Text {
@@ -1768,9 +1776,9 @@ impl DiscordApp {
             .unwrap_or(NotifyLevel::Inherit)
     }
 
-    /// 频道是否静音：侧栏画铃铛斜线，未读角标转灰。
+    /// 频道是否静音（按生效级别判断，含「跟随服务器」继承来的静音）。
     pub(crate) fn channel_muted(&self, name: &str) -> bool {
-        self.channel_notify_of(name).is_muted()
+        self.effective_notify_of(name).is_muted()
     }
 
     /// 把菜单翻到通知设置页（复用同一个卡片与遮罩）。
@@ -2157,6 +2165,8 @@ impl DiscordApp {
     /// 打开/关闭服务器下拉菜单；打开时收起其它浮层。
     pub(crate) fn toggle_server_menu(&mut self, cx: &mut Context<Self>) {
         self.show_server_menu = !self.show_server_menu;
+        // 每次展开都回到操作页，避免上次停在通知页留下错位状态。
+        self.server_notify_page = false;
         if self.show_server_menu {
             self.channel_menu = None;
             self.category_menu = None;
@@ -2172,12 +2182,63 @@ impl DiscordApp {
 
     pub(crate) fn close_server_menu(&mut self) {
         self.show_server_menu = false;
+        self.server_notify_page = false;
     }
 
-    /// 静音 / 取消静音当前服务器。
+    /// 服务器默认通知级别（没有「继承」这一级，兜底 All）。
+    pub(crate) fn server_notify_default(&self) -> NotifyLevel {
+        match self.servers[self.active_server].notify {
+            NotifyLevel::Inherit => NotifyLevel::All,
+            level => level,
+        }
+    }
+
+    /// 频道实际生效的通知级别：自己设过就用自己，选「跟随服务器」则取服务器默认。
+    pub(crate) fn effective_notify_of(&self, name: &str) -> NotifyLevel {
+        match self.channel_notify_of(name) {
+            NotifyLevel::Inherit => self.server_notify_default(),
+            level => level,
+        }
+    }
+
+    /// 当前服务器里有多少个频道仍是「跟随服务器」，用于通知页脚注。
+    pub(crate) fn inherit_channel_count(&self) -> usize {
+        self.servers[self.active_server]
+            .categories
+            .iter()
+            .flat_map(|category| category.channels.iter())
+            .filter(|channel| channel.notify == NotifyLevel::Inherit)
+            .count()
+    }
+
+    /// 打开服务器通知设置页（在同一个服务器菜单卡片里翻页）。
+    pub(crate) fn open_server_notify_page(&mut self, cx: &mut Context<Self>) {
+        self.server_notify_page = true;
+        cx.notify();
+    }
+
+    /// 通知设置页返回服务器操作页。
+    pub(crate) fn close_server_notify_page(&mut self, cx: &mut Context<Self>) {
+        self.server_notify_page = false;
+        cx.notify();
+    }
+
+    /// 设置服务器默认通知级别；选「关闭通知」即等同于静音整个服务器。
+    pub(crate) fn set_server_notify(&mut self, level: NotifyLevel, cx: &mut Context<Self>) {
+        self.servers[self.active_server].notify = level;
+        cx.notify();
+    }
+
+    /// 静音 / 取消静音当前服务器：静音写 Nothing，取消静音回到 All。
     pub(crate) fn toggle_server_mute(&mut self, cx: &mut Context<Self>) {
-        self.servers[self.active_server].muted = !self.servers[self.active_server].muted;
+        let current = self.server_notify_default();
+        self.servers[self.active_server].notify = if current.is_muted() {
+            NotifyLevel::All
+        } else {
+            NotifyLevel::Nothing
+        };
         self.show_server_menu = false;
+        self.server_notify_page = false;
         cx.notify();
     }
 
@@ -2720,6 +2781,8 @@ impl DiscordApp {
             self.close_server_settings(cx);
         } else if self.show_settings {
             self.close_settings();
+        } else if self.show_server_menu {
+            self.close_server_menu();
         } else if self.show_invite {
             self.show_invite = false;
         } else if self.show_create_server {

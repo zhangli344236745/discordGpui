@@ -464,18 +464,22 @@ gpui_kit::application()
 ### 频道通知设置约定
 
 - 模型：`NotifyLevel { Inherit, All, Mentions, Nothing }`（`data/models.rs`，`Default = Inherit`），挂在 `Channel.notify`；`label()` 是行标题、`hint()` 是行说明、`short()` 是菜单右侧摘要、`is_muted()` 统一判断静音、`index()` 用作 Element ID。
-- 状态只在 `Channel` 上，不另设 app 字段；读取走 `channel_notify_of(name)` / `channel_muted(name)`，写入走 `set_channel_notify(level, cx)`（按 `channel_position` 定位，写后不关面板，方便连点对比）。
+- 状态只在 `Channel` 上，不另设 app 字段；读取走 `channel_notify_of(name)`（原始值）/ `effective_notify_of(name)`（继承解析后）/ `channel_muted(name)`，写入走 `set_channel_notify(level, cx)`（按 `channel_position` 定位，写后不关面板，方便连点对比）。
+- 继承链：`Inherit` → 服务器 `Server.notify`（`server_notify_default()`，`Inherit` 兜底 `All`）。通知页「使用服务器默认」一行的说明会实时写出「当前生效：X」；服务器通知页改级别会影响所有仍选 `Inherit` 的频道（`inherit_channel_count()` 统计个数）。
 - 入口两个：频道右键菜单的「通知设置」项、标题栏铃铛（`chat-toggle-notifications` → `open_active_channel_notify(cx)`，以 `MenuAnchor::Header` 打开并直接翻到通知页）。私信标题栏的同一按钮仍是全局通知开关 `toggle_notifications()`，不要混。
-- 视觉反馈三处：侧栏频道行在 `is_muted()` 时加 `BellOff`（12px，dim 色）、未读角标换成 `unread_badge_muted`（灰底）；标题栏铃铛静音时变 `BellOff` + dim 色；菜单「通知设置」右侧显示 `short()`。
-- 静音语义（演示范围内）：`app::notifications()` 聚合时 `continue` 跳过静音频道，所以它既不进收件箱、也不产生 @提及通知、不计入 `unread_notification_count()`；频道未读数本身不清零，进频道仍能看到未读分隔线。
+- 视觉反馈三处：侧栏频道行静音时加 `BellOff`（12px，dim 色）、未读角标换成 `unread_badge_muted`（灰底）；标题栏铃铛静音时变 `BellOff` + dim 色；频道菜单「通知设置」右侧显示 `short()`。侧栏服务器标题的铃铛反映的是 `Server.notify`，不是频道级别。
+- 静音语义（演示范围内）：`app::notifications()` 聚合时按**生效级别** `continue` 跳过静音频道（频道 `Inherit` 时用服务器 `notify` 判断），所以它既不进收件箱、也不产生 @提及通知、不计入 `unread_notification_count()`；频道未读数本身不清零，进频道仍能看到未读分隔线。
 - 种子数据刻意留了两个对照：`#闲聊` 是 `Mentions` + 3 条未读（红色角标），`#作品展示` 是 `Nothing` + 2 条未读（灰角标 + 铃铛斜线）。
 
 ### 服务器菜单约定
 
-- 入口：频道侧栏头部（服务器名 + ⌄，`sidebar-server-menu`）→ `app::toggle_server_menu(cx)`。菜单用固定定位贴在头部下方（`left 8 / top 44`，宽 224），不跟随光标。
-- 显隐状态只有 `app.show_server_menu: bool`；`server_menu.rs` 顶部 `if !app.show_server_menu { return div().into_any_element(); }`，顶层用 `.when(...)` 挂载。
-- 菜单项：邀请好友（`open_invite`）、静音/取消静音（`toggle_server_mute`）、标记服务器已读（`mark_server_read`）、创建频道（`open_create_channel`）、离开服务器（`leave_server`，危险色 + 遮罩分隔）。
-- `Server.muted: bool` 是模型字段（新建服务器默认 false，seed 全 false）；静音后侧栏标题右侧显示 `BellOff` 图标，菜单文案变「取消静音服务器」。
+- 入口：频道侧栏头部（服务器名 + ⌄，`sidebar-server-menu`）→ `app::toggle_server_menu(cx)`。菜单用固定定位贴在头部下方（`left 8 / top 44`，操作页宽 232、通知页 280），不跟随光标。
+- 状态：`app.show_server_menu: bool` + `app.server_notify_page: bool`。`server_menu.rs` 顶部 `if !app.show_server_menu { return div().into_any_element(); }`；`toggle_server_menu` 每次展开都把 `server_notify_page` 复位成操作页，所以别的路径只置 `show_server_menu = false` 也不会残留错页。
+- 菜单项：服务器设置（`open_server_settings`）、邀请好友（`open_invite`）、通知设置（`open_server_notify_page` 翻页，右侧显示当前级别）、静音/取消静音（`toggle_server_mute`）、标记服务器已读（`mark_server_read`）、创建频道、新建分类、离开服务器（危险色 + 分隔线）。行样式统一用公共组件 `menu_item`，危险项事后 `.text_color(danger)`。
+- 通知页：返回箭头 + 「服务器通知」+ 三级单选（全部消息 / 仅 @提及 / 关闭通知，复用 `radio_item`）+ 页脚「N 个频道选择跟随服务器」。
+- 遮罩与卡片是**兄弟节点**（`server-menu-backdrop` 单独一层），否则点单选行会冒泡到遮罩把菜单关掉。
+- Esc 收口在 `close_top_overlay` 里排在 `show_invite` 之前：`show_server_menu` → `close_server_menu()`（同时复位页状态）。
+- `Server.notify: NotifyLevel` 取代了早期的 `Server.muted: bool`：服务器没有「继承」对象，`server_notify_default()` 把 `Inherit` 兜底成 `All`；「静音服务器」= 写 `Nothing`，「取消静音」= 回到 `All`（原本是 `Mentions` 的会被重置成 `All`，属演示范围内的取舍）。
 - 邀请弹层 `invite_dialog.rs` 复用 `create_dialog::dialog()`：链接由 `invite_code()` 生成（ASCII 名转小写 slug，纯中文名用 `gpui-{序号}` 兜底），提交按钮即复制到剪贴板并关闭。
 - `leave_server` 的硬约束：至少保留一个服务器（`servers.len() <= 1` 直接返回）；删除后 `active_server` 用 `min(len-1)` 收敛，清理该服务器 `messages` 里 `服务器/` 前缀的历史键；若语音连接在被删服务器上则断开，若在其后则下标前移一位。
 - 菜单互斥：`toggle_server_menu` 会关掉频道菜单/资料卡/消息菜单/置顶/收件箱/状态菜单/表情层；`open_create_server`、`open_create_channel`、`open_invite`、`open_channel_menu`、`reset_session` 都会把 `show_server_menu` 置 false。
@@ -607,7 +611,8 @@ cargo run       # 启动确认窗口创建正常
 7. 帮助中心回归：点标题栏 `?` → 弹出帮助面板，左侧列出「全部 / 入门 / 消息 / 会话 / 语音 / 设置」与各自篇数；点「消息」只剩消息类文档；在搜索框输入「话题」立刻命中并自动回到全部分类，结果计数文案跟着变；点任意文档进入详情（返回列表 / 分类标签 / 标题 / 正文段落 / 要点）→ 点「返回列表」或 Esc 回上一层，再按 Esc 整体关闭；点空白遮罩关闭，点卡片内部不会误关；打开设置或探索页后返回，帮助层不会残留。
 8. 账户资料回归：打开设置 → 账户，顶部预览显示当前头像 / 名称 / 用户名 / 关于我 / 在线状态；在「显示名称」输入 `Riven Chen`、邮箱留空、点「保存改动」→ 提示「已保存」，预览与侧栏底部用户栏同步更新；把显示名称清空再保存 → 提示「显示名称与用户名不能为空」且不生效；点任意色块 → 头像立刻换色并提示「头像颜色已更新」；点「重置」→ 表单恢复成当前资料；不保存直接关设置再打开，表单回到已保存的值。
 9. 频道通知回归：右键 `#作品展示` → 菜单「通知设置」右侧显示「已静音」→ 点进通知页，四行单选当前选中「关闭通知」；改选「全部消息」后菜单摘要变「全部消息」、侧栏铃铛斜线与灰角标消失；再改回「关闭通知」→ 打开收件箱确认列表里没有 `#作品展示` 的通知且 header 未读数不含它；点返回箭头回到操作页、点「标记为已读」菜单关闭；点标题栏铃铛直接进通知页且锚点在右上；Esc 与点空白处都能整层关闭；切频道后菜单不残留。
-10. 测试结束后**必须关闭应用进程**，不要留后台残留：
+10. 服务器通知继承回归：点侧栏服务器名 → 菜单摘要「N 名成员 · 通知：全部消息」→ 点「通知设置」进三级单选页，页脚显示「5 个频道选择跟随服务器」（默认服务器）→ 选「关闭通知」：侧栏 `#公告`/`#规则` 等继承频道全部出现铃铛斜线、未读角标转灰，服务器标题右侧出现 `BellOff`，收件箱里这些频道的通知消失 → 打开 `#闲聊` 的频道通知页，「使用服务器默认」仍被选中但说明写「当前生效：仅 @提及」（它自己设过级别，不受服务器影响）→ 回到服务器页选「仅 @提及」，继承频道恢复提醒但未读角标仍是红色 → 点「返回」回操作页、点「静音服务器」后菜单关闭且标题变 `BellOff`，再打开菜单显示「取消静音服务器」→ Esc 能关闭服务器菜单。
+11. 测试结束后**必须关闭应用进程**，不要留后台残留：
 
 ```bash
 pgrep -fl 'target/debug/discord-gpui'   # 确认无残留
