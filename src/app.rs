@@ -12,7 +12,8 @@ use crate::data::{
     seed_stickers, seed_threads, sticker_packs, Attachment, Category, Channel, ChannelKind,
     ChatThread, DiscoverServer,     DmConversation, EditRevision, ForwardOrigin, ForwardTarget, Friend, FriendRequest,
     FriendTab, Gif, HelpArticle, Member, MyProfile,
-    MemberGroup, Message, Notification, NotificationKind, NotificationTarget, Reaction, ReadReceipt,
+    MemberGroup, Message, Notification, NotificationKind, NotificationTarget, NotifyLevel, Reaction,
+    ReadReceipt,
     ReplyRef, SearchHit, Server, Sticker, ThreadReply, UserStatus, VoiceParticipant,
 };
 use crate::ui::theme::palette;
@@ -73,11 +74,20 @@ pub(crate) enum MenuAnchor {
     Header,
 }
 
-/// 频道操作菜单状态：目标频道名 + 展开锚点。
+/// 频道操作菜单的两页：操作项与通知设置。翻页复用同一个菜单卡片与遮罩，
+/// 这样 Esc / 点外部 / 切频道等既有收口逻辑无需额外状态即可同时关掉两页。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ChannelMenuPage {
+    Actions,
+    Notify,
+}
+
+/// 频道操作菜单状态：目标频道名 + 展开锚点 + 当前页。
 #[derive(Clone)]
 pub(crate) struct ChannelMenuState {
     pub(crate) name: String,
     pub(crate) anchor: MenuAnchor,
+    pub(crate) page: ChannelMenuPage,
 }
 
 /// 成员上下文菜单状态：目标成员（展示名，可能带「 —— 角色」）+ 光标锚点。
@@ -1168,6 +1178,10 @@ impl DiscordApp {
         for (server_index, server) in self.servers.iter().enumerate() {
             for category in &server.categories {
                 for channel in &category.channels {
+                    // 静音频道不进收件箱，也不产生 @提及通知（仍可正常翻消息）。
+                    if channel.notify.is_muted() {
+                        continue;
+                    }
                     if channel.unread > 0 && channel.kind == ChannelKind::Text {
                         items.push(Notification {
                             kind: NotificationKind::UnreadChannel,
@@ -1727,7 +1741,11 @@ impl DiscordApp {
 
     /// 打开频道操作菜单，并收起其它浮层，避免叠层。
     pub(crate) fn open_channel_menu(&mut self, name: String, anchor: MenuAnchor) {
-        self.channel_menu = Some(ChannelMenuState { name, anchor });
+        self.channel_menu = Some(ChannelMenuState {
+            name,
+            anchor,
+            page: ChannelMenuPage::Actions,
+        });
         self.category_menu = None;
         self.show_server_menu = false;
         self.profile_target = None;
@@ -1741,6 +1759,54 @@ impl DiscordApp {
     /// 关闭频道操作菜单。
     pub(crate) fn close_channel_menu(&mut self) {
         self.channel_menu = None;
+    }
+
+    /// 频道通知级别；没单独设过就是「跟随服务器」。
+    pub(crate) fn channel_notify_of(&self, name: &str) -> NotifyLevel {
+        self.channel_position(name)
+            .map(|(ci, chi)| self.servers[self.active_server].categories[ci].channels[chi].notify)
+            .unwrap_or(NotifyLevel::Inherit)
+    }
+
+    /// 频道是否静音：侧栏画铃铛斜线，未读角标转灰。
+    pub(crate) fn channel_muted(&self, name: &str) -> bool {
+        self.channel_notify_of(name).is_muted()
+    }
+
+    /// 把菜单翻到通知设置页（复用同一个卡片与遮罩）。
+    pub(crate) fn open_channel_notify_page(&mut self) {
+        if let Some(menu) = self.channel_menu.as_mut() {
+            menu.page = ChannelMenuPage::Notify;
+        }
+    }
+
+    /// 通知设置页返回操作页。
+    pub(crate) fn close_channel_notify_page(&mut self) {
+        if let Some(menu) = self.channel_menu.as_mut() {
+            menu.page = ChannelMenuPage::Actions;
+        }
+    }
+
+    /// 设置频道通知级别。写入后面板保持打开，方便逐项对比。
+    pub(crate) fn set_channel_notify(&mut self, level: NotifyLevel, cx: &mut Context<Self>) {
+        let Some(name) = self.channel_menu.as_ref().map(|menu| menu.name.clone()) else {
+            return;
+        };
+        if let Some((ci, chi)) = self.channel_position(&name) {
+            self.servers[self.active_server].categories[ci].channels[chi].notify = level;
+        }
+        cx.notify();
+    }
+
+    /// 标题栏铃铛：直接打开当前频道的通知设置页。
+    pub(crate) fn open_active_channel_notify(&mut self, cx: &mut Context<Self>) {
+        if self.view_mode != ViewMode::Server || self.active_channel.is_empty() {
+            return;
+        }
+        let name = self.active_channel.clone();
+        self.open_channel_menu(name, MenuAnchor::Header);
+        self.open_channel_notify_page();
+        cx.notify();
     }
 
     /// 把菜单指向的频道标记为已读（清除未读角标）。

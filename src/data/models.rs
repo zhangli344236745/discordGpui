@@ -423,6 +423,63 @@ pub enum ChannelKind {
     Voice,
 }
 
+/// 频道通知级别。`Inherit` 表示跟随服务器默认，其余三级各自生效。
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub enum NotifyLevel {
+    #[default]
+    Inherit,
+    All,
+    Mentions,
+    Nothing,
+}
+
+impl NotifyLevel {
+    /// 单选项标题。
+    pub fn label(self) -> &'static str {
+        match self {
+            NotifyLevel::Inherit => "使用服务器默认",
+            NotifyLevel::All => "全部消息",
+            NotifyLevel::Mentions => "仅 @提及",
+            NotifyLevel::Nothing => "关闭通知",
+        }
+    }
+
+    /// 单选项副标题，解释该级别具体会推什么。
+    pub fn hint(self) -> &'static str {
+        match self {
+            NotifyLevel::Inherit => "跟随时通知设置，不做单独覆盖",
+            NotifyLevel::All => "每条新消息都提醒",
+            NotifyLevel::Mentions => "只有提到你或 @所有人 时提醒",
+            NotifyLevel::Nothing => "不提醒，侧栏仅显示灰点",
+        }
+    }
+
+    /// 菜单里的一行摘要（「通知设置 · 仅 @提及」）。
+    pub fn short(self) -> &'static str {
+        match self {
+            NotifyLevel::Inherit => "跟随服务器",
+            NotifyLevel::All => "全部消息",
+            NotifyLevel::Mentions => "仅 @提及",
+            NotifyLevel::Nothing => "已静音",
+        }
+    }
+
+    /// 是否算静音：静音频道在侧栏显示铃铛斜线、未读角标置灰。
+    pub fn is_muted(self) -> bool {
+        self == NotifyLevel::Nothing
+    }
+
+    /// 稳定的索引，供单选项遍历与回调传值。
+    pub fn index(self) -> usize {
+        match self {
+            NotifyLevel::Inherit => 0,
+            NotifyLevel::All => 1,
+            NotifyLevel::Mentions => 2,
+            NotifyLevel::Nothing => 3,
+        }
+    }
+}
+
 /// 频道（文字或语音）。
 #[derive(Clone)]
 pub struct Channel {
@@ -430,6 +487,7 @@ pub struct Channel {
     pub kind: ChannelKind,
     pub unread: usize,
     pub topic: String,
+    pub notify: NotifyLevel,
 }
 
 impl Channel {
@@ -439,6 +497,7 @@ impl Channel {
             kind: ChannelKind::Text,
             unread: 0,
             topic: topic.into(),
+            notify: NotifyLevel::Inherit,
         }
     }
 
@@ -448,7 +507,14 @@ impl Channel {
             kind: ChannelKind::Voice,
             unread: 0,
             topic: String::new(),
+            notify: NotifyLevel::Inherit,
         }
+    }
+
+    /// 种子数据里给某频道预设通知级别，用来演示静音态。
+    pub fn notify(mut self, level: NotifyLevel) -> Self {
+        self.notify = level;
+        self
     }
 
     pub fn unread(mut self, count: usize) -> Self {

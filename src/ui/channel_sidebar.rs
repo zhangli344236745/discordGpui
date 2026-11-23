@@ -3,7 +3,7 @@ use gpui_kit::*;
 use crate::app::{DiscordApp, MenuAnchor};
 use crate::data::ChannelKind;
 use crate::ui::theme::palette;
-use crate::ui::{draft_badge, ico, unread_badge, user_footer};
+use crate::ui::{draft_badge, ico, unread_badge, unread_badge_muted, user_footer};
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{h_flex, v_flex, Size};
@@ -140,6 +140,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                     IconName::Volume2
                 };
                 let unread = channel.unread;
+                let muted = channel.notify.is_muted();
                 let has_draft = !is_voice && app.channel_has_draft(&name);
                 let click_name = name.clone();
                 let menu_name = name.clone();
@@ -175,8 +176,17 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                             .child(name),
                     );
 
+                if muted {
+                    row = row.child(
+                        ico(IconName::BellOff, Size::XSmall).text_color(rgb(palette::text_dim())),
+                    );
+                }
                 if unread > 0 {
-                    row = row.child(unread_badge(unread));
+                    row = row.child(if muted {
+                        unread_badge_muted(unread)
+                    } else {
+                        unread_badge(unread)
+                    });
                 }
                 if has_draft {
                     row = row.child(draft_badge());

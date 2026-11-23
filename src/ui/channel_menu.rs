@@ -1,16 +1,24 @@
 //! 频道操作菜单：右键频道行或点标题栏铃铛打开。
-//! 提供「标记为已读 / 编辑频道主题 / 删除频道」，带透明遮罩实现点击外部关闭。
+//! 两页共用一张卡片：操作页（标记已读 / 通知设置 / 编辑主题 / 删除）与通知设置页（四级单选）。
+//! 遮罩与卡片是兄弟节点，卡片内的点击不会冒泡到遮罩，所以通知设置页可以连点而不关闭。
 
 use gpui_kit::*;
 
-use crate::app::{DiscordApp, MenuAnchor};
-use crate::data::ChannelKind;
+use crate::app::{ChannelMenuPage, DiscordApp, MenuAnchor};
+use crate::data::{ChannelKind, NotifyLevel};
 use crate::ui::theme::palette;
-use crate::ui::{ico, unread_badge};
+use crate::ui::{ico, menu_divider, menu_item, radio_item, unread_badge};
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{h_flex, v_flex, Size};
-use gpui_kit::prelude::FluentBuilder as _;
+
+/// 通知级别的四级顺序，供单选列表遍历。
+const LEVELS: [NotifyLevel; 4] = [
+    NotifyLevel::Inherit,
+    NotifyLevel::All,
+    NotifyLevel::Mentions,
+    NotifyLevel::Nothing,
+];
 
 /// 渲染频道操作菜单；没有打开菜单时返回空元素。
 pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
@@ -18,21 +26,24 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
         return div().into_any_element();
     };
 
+    let page = menu.page;
     let name = menu.name.clone();
     let is_voice = app.channel_kind(&name) == Some(ChannelKind::Voice);
     let unread = app.channel_unread_of(&name);
     let topic = app.channel_topic_of(&name);
+    let level = app.channel_notify_of(&name);
 
-    // 右键菜单跟随光标；标题栏入口贴右上角展开。
+    // 右键菜单跟随光标；标题栏入口贴右上角展开。通知设置页文案更长，卡片加宽。
     let (left, top, right) = match menu.anchor {
         MenuAnchor::Point(x, y) => (Some(x), y, 0.),
         MenuAnchor::Header => (None, 54., 90.),
     };
+    let width = if page == ChannelMenuPage::Notify { 280. } else { 212. };
 
     let mut card = v_flex()
         .absolute()
         .top(px(top))
-        .w(px(212.))
+        .w(px(width))
         .p_1()
         .gap(px(2.))
         .rounded(px(6.))
@@ -45,8 +56,46 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
         None => card.right(px(right)),
     };
 
-    // 头部：图标 + 频道名 + 类型/主题提示（不可点击）。
-    card = card
+    card = match page {
+        ChannelMenuPage::Actions => {
+            actions_page(card, name.clone(), is_voice, unread, topic, level, cx)
+        }
+        ChannelMenuPage::Notify => notify_page(card, name.clone(), level, cx),
+    };
+
+    // 透明遮罩与卡片是兄弟节点：点遮罩关闭，点卡片不触发关闭。
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .id("channel-menu-backdrop")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.close_channel_menu();
+                    cx.notify();
+                })),
+        )
+        .child(card)
+        .into_any_element()
+}
+
+/// 操作页：频道信息头 + 标记已读 + 通知设置入口 + 编辑主题 + 删除。
+fn actions_page(
+    card: Div,
+    name: String,
+    is_voice: bool,
+    unread: usize,
+    topic: String,
+    level: NotifyLevel,
+    cx: &mut Context<DiscordApp>,
+) -> Div {
+    let card = card
         .child(
             v_flex()
                 .px_2()
@@ -70,7 +119,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
                                 .text_size(px(13.))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .truncate()
-                                .child(name.clone()),
+                                .child(name),
                         ),
                 )
                 .child(
@@ -83,92 +132,147 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
                         } else if topic.is_empty() {
                             String::from("暂无频道主题")
                         } else {
-                            topic.clone()
+                            topic
                         }),
                 ),
         )
-        .child(div().h(px(1.)).my(px(2.)).bg(rgb(palette::bg_divider())));
+        .child(menu_divider());
 
     // 标记为已读：仅文字频道有意义，未读为 0 时置灰但仍可点（无副作用）。
-    card = card.child(
-        div()
-            .h(px(30.))
-            .px_2()
-            .flex()
-            .items_center()
-            .gap_2()
-            .rounded(px(4.))
-            .text_size(px(13.))
-            .text_color(if unread > 0 {
-                rgb(palette::text_secondary())
-            } else {
-                rgb(palette::text_dim())
-            })
-            .hover(|el| {
-                el.bg(rgb(palette::bg_channel_hover()))
-                    .text_color(rgb(palette::text_primary()))
-            })
-            .child(ico(IconName::CheckCheck, Size::XSmall))
-            .child(div().flex_1().child("标记为已读"))
-            .when(unread > 0, |el| el.child(unread_badge(unread)))
-            .id("channel-menu-mark-read")
-            .on_click(cx.listener(|this, _, _, cx| this.mark_channel_read(cx))),
+    let mut card = card.child(
+        menu_item(
+            IconName::CheckCheck,
+            "标记为已读",
+            (unread > 0).then(|| unread_badge(unread).into_any_element()),
+            "channel-menu-mark-read",
+            Box::new(|this, _, cx| this.mark_channel_read(cx)),
+            cx,
+        )
+        .text_color(rgb(if unread > 0 {
+            palette::text_secondary()
+        } else {
+            palette::text_dim()
+        })),
     );
+
+    // 通知设置：右侧实时显示当前级别，点开翻页（不关卡片）。
+    card = card.child(menu_item(
+        if level.is_muted() {
+            IconName::BellOff
+        } else {
+            IconName::Bell
+        },
+        "通知设置",
+        Some(
+            div()
+                .text_size(px(11.))
+                .text_color(rgb(palette::text_dim()))
+                .child(level.short())
+                .into_any_element(),
+        ),
+        "channel-menu-notify",
+        Box::new(|this, _, cx| {
+            this.open_channel_notify_page();
+            cx.notify();
+        }),
+        cx,
+    ));
 
     // 编辑主题：语音频道没有主题，直接不展示该项。
     if !is_voice {
-        card = card.child(
+        card = card.child(menu_item(
+            IconName::SquarePen,
+            "编辑频道主题",
+            None,
+            "channel-menu-edit-topic",
+            Box::new(|this, window, cx| this.open_topic_editor(window, cx)),
+            cx,
+        ));
+    }
+
+    card.child(menu_divider()).child(
+        menu_item(
+            IconName::Trash,
+            "删除频道",
+            None,
+            "channel-menu-delete",
+            Box::new(|this, window, cx| this.delete_channel(window, cx)),
+            cx,
+        )
+        .text_color(rgb(palette::danger())),
+    )
+}
+
+/// 通知设置页：返回行 + 四级单选 + 说明页脚。
+fn notify_page(
+    card: Div,
+    name: String,
+    level: NotifyLevel,
+    cx: &mut Context<DiscordApp>,
+) -> Div {
+    let header = h_flex()
+        .h(px(34.))
+        .px_1()
+        .gap_1()
+        .items_center()
+        .child(
             div()
-                .h(px(30.))
-                .px_2()
+                .w(px(22.))
+                .h(px(22.))
+                .flex_shrink_0()
                 .flex()
                 .items_center()
-                .gap_2()
+                .justify_center()
                 .rounded(px(4.))
-                .text_size(px(13.))
                 .text_color(rgb(palette::text_secondary()))
                 .hover(|el| {
                     el.bg(rgb(palette::bg_channel_hover()))
                         .text_color(rgb(palette::text_primary()))
                 })
-                .child(ico(IconName::SquarePen, Size::XSmall))
-                .child("编辑频道主题")
-                .id("channel-menu-edit-topic")
-                .on_click(cx.listener(|this, _, window, cx| this.open_topic_editor(window, cx))),
+                .child(ico(IconName::ChevronLeft, Size::XSmall))
+                .id("channel-menu-notify-back")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.close_channel_notify_page();
+                    cx.notify();
+                })),
+        )
+        .child(
+            div()
+                .text_size(px(13.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(palette::text_primary()))
+                .child("通知设置"),
+        )
+        .child(div().flex_1())
+        .child(
+            div()
+                .px_1()
+                .text_size(px(11.))
+                .text_color(rgb(palette::text_dim()))
+                .truncate()
+                .child(name),
         );
+
+    let mut card = card.child(header).child(menu_divider());
+
+    for level_option in LEVELS {
+        let selected = level_option == level;
+        card = card.child(radio_item(
+            level_option.label(),
+            level_option.hint(),
+            selected,
+            format!("channel-notify-{}", level_option.index()),
+            Box::new(move |this, _, cx| this.set_channel_notify(level_option, cx)),
+            cx,
+        ));
     }
 
-    card = card.child(div().h(px(1.)).my(px(2.)).bg(rgb(palette::bg_divider()))).child(
+    card.child(menu_divider()).child(
         div()
-            .h(px(30.))
             .px_2()
-            .flex()
-            .items_center()
-            .gap_2()
-            .rounded(px(4.))
-            .text_size(px(13.))
-            .text_color(rgb(palette::danger()))
-            .hover(|el| {
-                el.bg(rgb(palette::bg_channel_hover()))
-                    .text_color(rgb(palette::danger()))
-            })
-            .child(ico(IconName::Trash, Size::XSmall))
-            .child("删除频道")
-            .id("channel-menu-delete")
-            .on_click(cx.listener(|this, _, window, cx| this.delete_channel(window, cx))),
-    );
-
-    // 透明遮罩：点菜单外任意位置关闭。
-    div()
-        .absolute()
-        .top_0()
-        .left_0()
-        .size_full()
-        .id("channel-menu-backdrop")
-        .on_click(cx.listener(|this, _, _, cx| {
-            this.close_channel_menu();
-            cx.notify();
-        }))
-        .child(card)
-        .into_any_element()
+            .py_1()
+            .text_size(px(11.))
+            .text_color(rgb(palette::text_dim()))
+            .child("覆盖只对当前频道生效；静音后未读角标转灰，仍可正常查看消息。"),
+    )
 }

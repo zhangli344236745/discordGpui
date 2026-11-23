@@ -233,16 +233,32 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                 .items_center()
                 .justify_center()
                 .rounded(px(4.))
-                .text_color(if app.notifications_on {
+                .text_color(if !is_dm && app.channel_muted(&app.active_channel) {
+                    rgb(palette::text_dim())
+                } else if app.notifications_on {
                     rgb(palette::text_message())
                 } else {
                     rgb(palette::danger())
                 })
                 .hover(|el| el.bg(rgb(palette::bg_toolbar_hover())))
-                .child(ico(IconName::BellDot, Size::Small))
+                .child(ico(
+                    if (!is_dm && app.channel_muted(&app.active_channel))
+                        || (is_dm && !app.notifications_on)
+                    {
+                        IconName::BellOff
+                    } else {
+                        IconName::BellDot
+                    },
+                    Size::Small,
+                ))
                 .id("chat-toggle-notifications")
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.toggle_notifications();
+                // 服务器频道：打开该频道的通知设置页；私信：仍按全局通知开关处理。
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if is_dm {
+                        this.toggle_notifications();
+                    } else {
+                        this.open_active_channel_notify(cx);
+                    }
                     cx.notify();
                 })),
         )

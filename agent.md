@@ -227,7 +227,7 @@ gpui_kit::application()
 ### 公共组件库约定（`ui/widgets.rs`）
 
 - 公共组件只做渲染与事件转发，不持有业务状态；交互回调统一是 `ClickHandler = dyn Fn(&mut DiscordApp, &mut Window, &mut Context<DiscordApp>) + 'static`，调用方传 `Box::new(|this, window, cx| ...)`，组件内部用 `cx.listener(move |this, _, window, cx| { handler(...); cx.notify(); })` 包装。
-- 现有 6 类交互/展示组件：`icon_button(icon, icon_size, side, id, active, handler, cx)`（幽灵按钮，`active` 只切主要/次要文字色，返回 `Stateful<Div>` 可继续 `.when()` 挂徽标）、`danger_icon_button`（危险操作，hover 变 danger + 白字）、`close_button`（弹层右上角 X，28×28）、`toggle_row`（设置页开关行）、`filter_chip`（搜索/探索页文字胶囊）、`section_label`（分组小标题，11px 加粗 muted；padding 交给调用方外层包装）。纯展示组件：`avatar` / `avatar_status` / `unread_badge` / `draft_badge`。
+- 交互组件：`icon_button(icon, icon_size, side, id, active, handler, cx)`（幽灵按钮，`active` 只切主要/次要文字色，返回 `Stateful<Div>` 可继续 `.when()` 挂徽标）、`danger_icon_button`（危险操作，hover 变 danger + 白字）、`close_button`（弹层右上角 X，28×28）、`toggle_row`（设置页开关行）、`filter_chip`（搜索/探索页文字胶囊）、`menu_item(icon, label, trailing, id, handler, cx)`（浮层菜单行：图标 + 文案 + 可选右侧补充，返回 `Stateful<Div>` 可再 `.text_color()` 覆写）、`radio_item(title, hint, selected, id, handler, cx)`（互斥单选行：左侧圆环 + 标题 + 说明两行，48px）。纯展示组件：`section_label`（分组小标题，11px 加粗 muted）、`menu_divider`（菜单分隔线）、`avatar` / `avatar_status` / `unread_badge` / `unread_badge_muted`（灰底角标，静音频道用）/ `draft_badge`。
 - `icon_button` 有 `side: Pixels` 参数覆盖 18/24/28 等尺寸；**不能**表达的颜色语义（如通知按钮的 `text_message`/`danger` 双色）保留视图内联实现，别硬塞进公共组件。
 - 接入时若回调闭包不使用 window/cx，用 `|this, _, _|` 避免 unused 警告；`impl Into<ElementId>` 参数上调用方**直接传字符串字面量**（不要写 `"xxx".into()`，多 impl Trait 参数会导致 E0283 类型歧义）。
 - 抽取边界：只抽形态同构、≥2 处复用的片段。好友页图标 tab（带 badge 与方块圆角）、通用标题栏（左侧内容异构）、成员/参与者行、server_settings 表单卡属于高风险过度泛化，保持各自私有实现。
@@ -452,12 +452,23 @@ gpui_kit::application()
 ### 频道操作菜单约定
 
 - 入口有两个：频道行**右键**（`on_mouse_down(MouseButton::Right)`，用 `event.position` 取光标坐标）与**标题栏铃铛**（`chat-channel-menu`，锚点 `MenuAnchor::Header`）。两者都调 `app::open_channel_menu(name, anchor)`。
-- 菜单状态：`app.channel_menu: Option<ChannelMenuState { name, anchor }>`；`MenuAnchor::Point(x, y)` 时 `.left(x).top(y)`，`Header` 时 `.right(...).top(...)`（`channel_menu.rs` 里统一换算）。
-- 菜单项：标记为已读（`mark_channel_read`）、编辑频道主题（`open_topic_editor`，仅文字频道）、删除频道（`delete_channel`，危险色）。
-- 关闭方式：透明全屏遮罩 `.id("channel-menu-backdrop")` 点击关闭 + 每个动作执行后 `self.channel_menu.take()`/`None`。菜单打开时会收起资料卡、消息菜单、置顶/收件箱/状态菜单、表情层，避免叠层。
+- 菜单状态：`app.channel_menu: Option<ChannelMenuState { name, anchor, page }>`；`MenuAnchor::Point(x, y)` 时 `.left(x).top(y)`，`Header` 时 `.right(...).top(...)`（`channel_menu.rs` 里统一换算）。
+- **两页复用一张卡片**：`ChannelMenuPage::{Actions, Notify}`。`open_channel_notify_page` / `close_channel_notify_page` 只翻 `page`，不新建浮层状态，所以 Esc、点外部、切频道的既有收口逻辑天然同时关两页；通知页宽 280，操作页 212。
+- 菜单项：标记为已读（`mark_channel_read`）、通知设置（右侧显示当前级别短文案，翻页）、编辑频道主题（`open_topic_editor`，仅文字频道）、删除频道（`delete_channel`，危险色）。操作页统一用公共组件 `menu_item`，不要在视图里重写行样式。
+- 关闭方式：透明全屏遮罩 `.id("channel-menu-backdrop")` 点击关闭 + 每个动作执行后 `self.channel_menu.take()`/`None`。**遮罩与卡片必须是兄弟节点**（根 `div` 下两个子节点），否则卡片内的点击会冒泡到遮罩，通知页点一下单选就整层关掉。
+- 菜单打开时会收起资料卡、消息菜单、置顶/收件箱/状态菜单、表情层，避免叠层。
 - `delete_channel` 的硬约束：至少保留一个文字频道；删掉的若是当前频道就回退到 `first_text_channel()`；删掉的若是正在连接的语音频道先断开；空分类一并移除；同时清掉 `messages` 里 `服务器/频道` 的历史键。
 - 主题编辑走 `topic_dialog.rs`，复用 `create_dialog::dialog()`（该函数已 `pub(crate)`），输入 `topic_input`，Enter/保存写回 `Channel.topic`，标题栏的 `active_topic()` 立即刷新。
 - 频道定位统一用 `channel_position(name) -> Option<(分类下标, 频道下标)>`，不要在 UI 层自己遍历服务器。
+
+### 频道通知设置约定
+
+- 模型：`NotifyLevel { Inherit, All, Mentions, Nothing }`（`data/models.rs`，`Default = Inherit`），挂在 `Channel.notify`；`label()` 是行标题、`hint()` 是行说明、`short()` 是菜单右侧摘要、`is_muted()` 统一判断静音、`index()` 用作 Element ID。
+- 状态只在 `Channel` 上，不另设 app 字段；读取走 `channel_notify_of(name)` / `channel_muted(name)`，写入走 `set_channel_notify(level, cx)`（按 `channel_position` 定位，写后不关面板，方便连点对比）。
+- 入口两个：频道右键菜单的「通知设置」项、标题栏铃铛（`chat-toggle-notifications` → `open_active_channel_notify(cx)`，以 `MenuAnchor::Header` 打开并直接翻到通知页）。私信标题栏的同一按钮仍是全局通知开关 `toggle_notifications()`，不要混。
+- 视觉反馈三处：侧栏频道行在 `is_muted()` 时加 `BellOff`（12px，dim 色）、未读角标换成 `unread_badge_muted`（灰底）；标题栏铃铛静音时变 `BellOff` + dim 色；菜单「通知设置」右侧显示 `short()`。
+- 静音语义（演示范围内）：`app::notifications()` 聚合时 `continue` 跳过静音频道，所以它既不进收件箱、也不产生 @提及通知、不计入 `unread_notification_count()`；频道未读数本身不清零，进频道仍能看到未读分隔线。
+- 种子数据刻意留了两个对照：`#闲聊` 是 `Mentions` + 3 条未读（红色角标），`#作品展示` 是 `Nothing` + 2 条未读（灰角标 + 铃铛斜线）。
 
 ### 服务器菜单约定
 
@@ -595,7 +606,8 @@ cargo run       # 启动确认窗口创建正常
 6. 私信通话回归：切到与 Nova 的私信 → 标题栏电话按钮打开右下浮窗显示「正在呼叫」→ 点「模拟接通」显示四组控制 → 依次点麦克风、摄像头、屏幕分享确认图标/文案切换且开分享会带开摄像头 → 点挂断浮窗消失；再从资料卡点视频按钮可发起视频通话；通话中点底部齿轮进设置页，浮窗仍可见；返回后点语音频道连接，通话浮窗自动消失。
 7. 帮助中心回归：点标题栏 `?` → 弹出帮助面板，左侧列出「全部 / 入门 / 消息 / 会话 / 语音 / 设置」与各自篇数；点「消息」只剩消息类文档；在搜索框输入「话题」立刻命中并自动回到全部分类，结果计数文案跟着变；点任意文档进入详情（返回列表 / 分类标签 / 标题 / 正文段落 / 要点）→ 点「返回列表」或 Esc 回上一层，再按 Esc 整体关闭；点空白遮罩关闭，点卡片内部不会误关；打开设置或探索页后返回，帮助层不会残留。
 8. 账户资料回归：打开设置 → 账户，顶部预览显示当前头像 / 名称 / 用户名 / 关于我 / 在线状态；在「显示名称」输入 `Riven Chen`、邮箱留空、点「保存改动」→ 提示「已保存」，预览与侧栏底部用户栏同步更新；把显示名称清空再保存 → 提示「显示名称与用户名不能为空」且不生效；点任意色块 → 头像立刻换色并提示「头像颜色已更新」；点「重置」→ 表单恢复成当前资料；不保存直接关设置再打开，表单回到已保存的值。
-9. 测试结束后**必须关闭应用进程**，不要留后台残留：
+9. 频道通知回归：右键 `#作品展示` → 菜单「通知设置」右侧显示「已静音」→ 点进通知页，四行单选当前选中「关闭通知」；改选「全部消息」后菜单摘要变「全部消息」、侧栏铃铛斜线与灰角标消失；再改回「关闭通知」→ 打开收件箱确认列表里没有 `#作品展示` 的通知且 header 未读数不含它；点返回箭头回到操作页、点「标记为已读」菜单关闭；点标题栏铃铛直接进通知页且锚点在右上；Esc 与点空白处都能整层关闭；切频道后菜单不残留。
+10. 测试结束后**必须关闭应用进程**，不要留后台残留：
 
 ```bash
 pgrep -fl 'target/debug/discord-gpui'   # 确认无残留

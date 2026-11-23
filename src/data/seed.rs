@@ -27,10 +27,14 @@ pub fn seed_servers() -> Vec<Server> {
                 Category {
                     name: "文字频道".into(),
                     channels: vec![
-                        Channel::text("闲聊", "日常摸鱼、随便聊聊").unread(3),
+                        Channel::text("闲聊", "日常摸鱼、随便聊聊")
+                            .unread(3)
+                            .notify(crate::data::NotifyLevel::Mentions),
                         Channel::text("前端开发", "React / Vue / CSS 话题"),
                         Channel::text("Rust 讨论", "所有权、异步与生态"),
-                        Channel::text("作品展示", "晒一晒最近做的东西"),
+                        Channel::text("作品展示", "晒一晒最近做的东西")
+                            .unread(2)
+                            .notify(crate::data::NotifyLevel::Nothing),
                     ],
                 },
                 Category {

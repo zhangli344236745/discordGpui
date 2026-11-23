@@ -29,5 +29,6 @@ pub mod widgets;
 pub use theme::ico;
 pub use widgets::{
     avatar, avatar_status, close_button, danger_icon_button, draft_badge, filter_chip, icon_button,
-    section_label, toggle_row, unread_badge,
+    menu_divider, menu_item, radio_item, section_label, toggle_row, unread_badge,
+    unread_badge_muted,
 };

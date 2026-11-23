@@ -276,3 +276,120 @@ pub fn filter_chip(
             cx.notify();
         }))
 }
+
+/// 浮层菜单里的分组分隔线（1px，上下各留 2px）。
+pub fn menu_divider() -> Div {
+    div().h(px(1.)).my(px(2.)).bg(rgb(palette::bg_divider()))
+}
+
+/// 浮层菜单行：左侧图标 + 文案 + 可选右侧补充（角标 / 当前值），整行可点。
+/// 菜单类浮层（频道、分类、服务器、消息）统一用它，避免每处复制一份行样式。
+pub fn menu_item(
+    icon: IconName,
+    label: impl Into<SharedString>,
+    trailing: Option<AnyElement>,
+    id: impl Into<ElementId>,
+    handler: Box<ClickHandler>,
+    cx: &mut Context<DiscordApp>,
+) -> Stateful<Div> {
+    let mut row = h_flex()
+        .h(px(30.))
+        .px_2()
+        .gap_2()
+        .rounded(px(4.))
+        .text_size(px(13.))
+        .text_color(rgb(palette::text_secondary()))
+        .hover(|el| {
+            el.bg(rgb(palette::bg_channel_hover()))
+                .text_color(rgb(palette::text_primary()))
+        })
+        .child(ico(icon, Size::XSmall))
+        .child(div().flex_1().truncate().child(label.into()));
+    if let Some(trailing) = trailing {
+        row = row.child(trailing);
+    }
+    row.id(id).on_click(cx.listener(move |this, _, window, cx| {
+        handler(this, window, cx);
+        cx.notify();
+    }))
+}
+
+/// 单选行：左侧圆环指示选中，标题 + 说明两行文案，用于通知级别等互斥选项。
+pub fn radio_item(
+    title: impl Into<SharedString>,
+    hint: impl Into<SharedString>,
+    selected: bool,
+    id: impl Into<ElementId>,
+    handler: Box<ClickHandler>,
+    cx: &mut Context<DiscordApp>,
+) -> Stateful<Div> {
+    // 外圈 16px 圆环，选中时描边换成强调色并填充中心圆点。
+    let mut ring = div()
+        .w(px(16.))
+        .h(px(16.))
+        .flex_shrink_0()
+        .rounded_full()
+        .border_2()
+        .border_color(rgb(if selected {
+            palette::accent()
+        } else {
+            palette::text_dim()
+        }));
+    if selected {
+        ring = ring.child(
+            div()
+                .size(px(8.))
+                .m_auto()
+                .rounded_full()
+                .bg(rgb(palette::accent())),
+        );
+    }
+
+    h_flex()
+        .h(px(48.))
+        .px_2()
+        .gap_2()
+        .rounded(px(4.))
+        .hover(|el| el.bg(rgb(palette::bg_channel_hover())))
+        .child(ring)
+        .child(
+            v_flex()
+                .flex_1()
+                .gap(px(1.))
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .text_color(rgb(palette::text_primary()))
+                        .child(title.into()),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(rgb(palette::text_dim()))
+                        .truncate()
+                        .child(hint.into()),
+                ),
+        )
+        .id(id)
+        .on_click(cx.listener(move |this, _, window, cx| {
+            handler(this, window, cx);
+            cx.notify();
+        }))
+}
+
+/// 静音频道的未读角标：同尺寸但灰底，表示「有未读但不提醒」。
+pub fn unread_badge_muted(count: usize) -> Div {
+    div()
+        .min_w(px(16.))
+        .h(px(16.))
+        .px_1()
+        .rounded_full()
+        .bg(rgb(palette::text_dim()))
+        .text_color(rgb(palette::bg_sidebar()))
+        .text_size(px(10.))
+        .font_weight(FontWeight::BOLD)
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(count.to_string())
+}
