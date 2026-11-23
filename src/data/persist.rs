@@ -15,8 +15,8 @@ use gpui_kit::{rgb, Rgba};
 use serde::{Deserialize, Serialize, Serializer};
 
 use super::models::{
-    ChatThread, DmConversation, Friend, FriendRequest, Invite, InviteExpiry, Message, MyProfile,
-    Server, UserStatus,
+    ChatThread, DmConversation, Friend, FriendRequest, Invite, InviteExpiry, Member, Message,
+    MyProfile, Role, Server, UserStatus,
 };
 
 /// 快照版本号；字段语义变化时递增，加载端按需丢弃旧数据。
@@ -40,6 +40,11 @@ pub struct Snapshot {
     pub threads: HashMap<String, Vec<ChatThread>>,
     #[serde(default)]
     pub friends: Vec<Friend>,
+    /// 成员与角色。用 Option 区分「旧快照没有」与「用户清空了」：前者保留种子。
+    #[serde(default)]
+    pub members: Option<Vec<Member>>,
+    #[serde(default)]
+    pub roles: Option<Vec<Role>>,
     /// 服务器邀请列表（按 `Invite.server` 归属服务器）。
     /// 用 `Option` 区分「旧快照没有这个字段」与「用户把邀请全删了」：前者保留种子数据。
     #[serde(default)]
@@ -84,6 +89,21 @@ pub mod leaked_str {
 
     pub fn serialize<S: Serializer>(value: &&'static str, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(value)
+    }
+}
+
+/// `Option<&'static str>` 的序列化适配器：Some 写字符串、None 写 null。
+pub mod opt_leaked_str {
+    use super::*;
+
+    pub fn serialize<S: Serializer>(
+        value: &Option<&'static str>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        match value {
+            Some(text) => serializer.serialize_some(text),
+            None => serializer.serialize_none(),
+        }
     }
 }
 
@@ -389,6 +409,8 @@ pub struct MemberOwned {
     pub color: u32,
     #[serde(default)]
     pub online: bool,
+    #[serde(default)]
+    pub role: Option<String>,
 }
 
 impl From<MemberOwned> for super::models::Member {
@@ -397,6 +419,7 @@ impl From<MemberOwned> for super::models::Member {
             name: leak(value.name),
             color: value.color,
             online: value.online,
+            role: value.role.map(leak),
         }
     }
 }
@@ -507,6 +530,8 @@ mod tests {
             friends: crate::data::seed_friends(),
             friend_groups: crate::data::seed_friend_groups(),
             invites: Some(crate::data::seed_invites()),
+            members: Some(crate::data::seed_members()),
+            roles: Some(crate::data::seed_roles()),
             me: crate::data::seed_me(),
             ..Default::default()
         };
@@ -551,5 +576,17 @@ mod tests {
         assert_eq!(after_invites[0].inviter, before_invites[0].inviter);
         assert_eq!(after_invites[0].expiry, before_invites[0].expiry);
         assert_eq!(after_invites[0].max_uses, before_invites[0].max_uses);
+
+        // 成员与角色：角色名（静态串）+ 角色表的顺序都要能恢复。
+        let before_members = snapshot.members.clone().unwrap_or_default();
+        let after_members = back.members.clone().unwrap_or_default();
+        assert_eq!(after_members.len(), before_members.len());
+        assert_eq!(after_members[0].name, before_members[0].name);
+        assert_eq!(after_members[0].role, before_members[0].role);
+        let before_roles = snapshot.roles.clone().unwrap_or_default();
+        let after_roles = back.roles.clone().unwrap_or_default();
+        assert_eq!(after_roles.len(), before_roles.len());
+        assert_eq!(after_roles[0].name, before_roles[0].name);
+        assert_eq!(after_roles[0].color, before_roles[0].color);
     }
 }

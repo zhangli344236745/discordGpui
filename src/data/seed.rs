@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use super::models::{
     Attachment, Category, Channel, ChatThread, DiscoverServer, DmConversation, Friend,
     FriendRequest, Gif, HelpArticle, Invite, InviteExpiry, Member, Message, MyProfile, NotifyLevel,
-    ReadReceipt, Server, Sticker, ThreadReply,
+    ReadReceipt, Role, Server, Sticker, ThreadReply,
 };
 
 /// 前端模拟服务器数据。
@@ -251,38 +251,53 @@ pub fn seed_messages() -> HashMap<String, Vec<Message>> {
     all
 }
 
-/// 前端模拟成员数据。
+/// 服务器角色（顺序即成员栏分组顺序，也是角色列表的展示顺序）。
+pub fn seed_roles() -> Vec<Role> {
+    vec![
+        Role::new("管理员", 0xf23f43),
+        Role::new("版主", 0x57f287),
+        Role::new("贡献者", 0x00a8fc),
+    ]
+}
+
+/// 前端模拟成员数据。角色按名称归属 `seed_roles()`，None 表示无角色。
 pub fn seed_members() -> Vec<Member> {
     vec![
         Member {
-            name: "Nova —— 管理员",
+            name: "Nova",
             color: 0x00a8fc,
             online: true,
+            role: Some("管理员"),
         },
         Member {
-            name: "阿哲 —— 管理员",
+            name: "阿哲",
             color: 0x5865f2,
             online: true,
+            role: Some("管理员"),
         },
         Member {
-            name: "小满 —— 版主",
+            name: "小满",
             color: 0xfaa61c,
             online: true,
+            role: Some("版主"),
         },
         Member {
             name: "Lin",
             color: 0x57f287,
             online: true,
+            role: Some("贡献者"),
         },
         Member {
             name: "Mia",
             color: 0xeb459e,
             online: false,
+            role: None,
         },
         Member {
             name: "Kai",
             color: 0x80848e,
             online: false,
+            role: None,
         },
     ]
 }

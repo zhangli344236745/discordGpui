@@ -9,14 +9,14 @@ use crate::data::{
     persist,
     seed_discover_servers, seed_dm_conversations, seed_dm_messages, seed_friend_requests,
     gif_categories, help_categories, seed_friend_groups, seed_friends, seed_gifs,
-    seed_help_articles, seed_invites, seed_me,
+    seed_help_articles, seed_invites, seed_me, seed_roles,
     seed_members, seed_messages, seed_servers,
     seed_stickers, seed_threads, sticker_packs, Attachment, Category, Channel, ChannelKind,
     ChatThread, DiscoverServer,     DmConversation, EditRevision, ForwardOrigin, ForwardTarget, Friend, FriendRequest,
     FriendTab, Gif, HelpArticle, Invite, InviteExpiry, Member, MyProfile,
     MemberGroup, Message, Notification, NotificationKind, NotificationTarget, NotifyLevel, Reaction,
     ReadReceipt,
-    ReplyRef, SearchHit, Server, Sticker, ThreadReply, UserStatus, VoiceParticipant,
+    ReplyRef, Role, SearchHit, Server, Sticker, ThreadReply, UserStatus, VoiceParticipant,
 };
 use crate::ui::theme::palette;
 use crate::ui::{
@@ -93,7 +93,7 @@ pub(crate) struct ChannelMenuState {
     pub(crate) page: ChannelMenuPage,
 }
 
-/// 成员上下文菜单状态：目标成员（展示名，可能带「 —— 角色」）+ 光标锚点。
+/// 成员上下文菜单状态：目标成员名 + 光标锚点。
 #[derive(Clone)]
 pub(crate) struct MemberMenuState {
     pub(crate) name: &'static str,
@@ -179,6 +179,9 @@ pub(crate) enum ServerSettingsSection {
     Emoji,
     Invites,
 }
+
+/// 新建角色时轮换使用的颜色（与种子角色的取色一致）。
+pub(crate) const ROLE_COLORS: [u32; 6] = [0xf23f43, 0x57f287, 0x00a8fc, 0xfaa61c, 0xeb459e, 0x5865f2];
 
 /// 搜索中心的范围筛选。
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -344,6 +347,12 @@ pub struct DiscordApp {
     /// 服务器自定义表情（Demo：可移除与恢复，不做上传）。
     pub(crate) server_emojis: Vec<&'static str>,
     pub(crate) removed_server_emojis: Vec<&'static str>,
+    // 角色管理：角色表（顺序即展示顺序）+ 选中的角色 + 名称输入 + 保存提示。
+    pub(crate) roles: Vec<Role>,
+    pub(crate) selected_role: Option<String>,
+    pub(crate) role_name_edit: Entity<InputState>,
+    pub(crate) role_notice: Option<&'static str>,
+
     // 邀请管理：全部邀请 + 新建表单（频道 / 有效期 / 次数上限）+ 最近复制的邀请码。
     pub(crate) invites: Vec<Invite>,
     pub(crate) invite_channel: String,
@@ -448,7 +457,8 @@ pub(crate) struct ProfileInfo {
     pub(crate) role: &'static str,
 }
 
-/// 成员显示名形如「Nova —— 管理员」，取前缀得到基础用户名。
+/// 取基础用户名：兼容早期「Nova —— 管理员」这种把角色写进名字的展示格式。
+/// 现在角色独立存在 `Member.role` 上，名称本身已经不含后缀。
 fn base_name(display: &'static str) -> &'static str {
     display.split(" —— ").next().unwrap_or(display)
 }
@@ -622,6 +632,7 @@ impl DiscordApp {
             cx.new(|cx| InputState::new(window, cx).placeholder("一句话介绍自己"));
         let server_name_edit =
             cx.new(|cx| InputState::new(window, cx).placeholder("服务器名称"));
+        let role_name_edit = cx.new(|cx| InputState::new(window, cx).placeholder("角色名称"));
         let server_desc_edit =
             cx.new(|cx| InputState::new(window, cx).placeholder("用一两句话介绍这个服务器"));
         let discover_search =
@@ -804,6 +815,14 @@ impl DiscordApp {
         })
         .detach();
 
+        // 角色名称输入框按 Enter 保存重命名。
+        cx.subscribe_in(&role_name_edit, window, |this, _, event: &InputEvent, _, cx| {
+            if matches!(event, InputEvent::PressEnter { secondary: false, .. }) {
+                this.save_role_name(cx);
+            }
+        })
+        .detach();
+
         cx.subscribe_in(&topic_input, window, |this, _, event: &InputEvent, window, cx| {
             if matches!(event, InputEvent::PressEnter { secondary: false, .. }) {
                 this.save_channel_topic(window, cx);
@@ -917,6 +936,10 @@ impl DiscordApp {
                 "🎨", "🚀", "🔥", "✅", "👀", "🦀", "🎧", "🎮", "🍜", "🌙", "💡", "🐧",
             ],
             removed_server_emojis: Vec::new(),
+            roles: seed_roles(),
+            selected_role: None,
+            role_name_edit,
+            role_notice: None,
             invites: seed_invites(),
             invite_channel: String::new(),
             invite_expiry: InviteExpiry::OneDay,
@@ -1119,7 +1142,7 @@ impl DiscordApp {
             .unwrap_or(false)
     }
 
-    /// 根据显示名（可能是「Nova」或「Nova —— 管理员」）聚合资料卡信息。
+    /// 按名字聚合资料卡信息（角色取自成员身上的 `role`）。
     pub(crate) fn profile_info(&self, display: &'static str) -> ProfileInfo {
         let base = base_name(display);
         let friend = self.friends.iter().find(|f| f.name == base);
@@ -1133,9 +1156,7 @@ impl DiscordApp {
         let activity = friend
             .map(|f| f.activity)
             .unwrap_or(if online { "正在使用 GPUI Kit" } else { "离线" });
-        let role = member
-            .and_then(|m| m.name.split_once(" —— ").map(|(_, role)| role))
-            .unwrap_or("成员");
+        let role = member.and_then(|m| m.role).unwrap_or("成员");
 
         ProfileInfo {
             name: base,
@@ -1146,35 +1167,37 @@ impl DiscordApp {
         }
     }
 
-    /// 角色名对应的分组高亮色；未知角色给默认强调色。
-    fn role_group_color(role: &str) -> u32 {
-        match role {
-            "管理员" => 0xf23f43,
-            "版主" => 0x57f287,
-            "贡献者" => 0x00a8fc,
-            _ => palette::accent(),
-        }
+    /// 角色名对应的颜色；角色表里找不到时给默认强调色。
+    pub(crate) fn role_color(&self, name: &str) -> u32 {
+        self.roles
+            .iter()
+            .find(|role| role.name == name)
+            .map(|role| role.color)
+            .unwrap_or(palette::accent())
     }
 
-    /// 按角色聚合成员栏：有角色的按角色名分组（首次出现顺序），
-    /// 再补「在线」「离线」兜底组。返回顺序稳定，供视图直接渲染。
+    /// 按角色聚合成员栏：顺序跟随角色表（角色表即层级），再补「在线」「离线」兜底组。
+    /// 空角色不出现在成员栏（但仍可以在服务器设置里管理）。
     pub(crate) fn member_groups(&self) -> Vec<MemberGroup> {
         let mut groups: Vec<MemberGroup> = Vec::new();
 
-        for (index, member) in self.members.iter().enumerate() {
-            if let Some((_, role)) = member.name.split_once(" —— ") {
-                let key = format!("role-{role}");
-                if let Some(group) = groups.iter_mut().find(|g| g.key == key) {
-                    group.member_indices.push(index);
-                } else {
-                    groups.push(MemberGroup {
-                        title: role.to_string(),
-                        color: Self::role_group_color(role),
-                        key,
-                        member_indices: vec![index],
-                    });
-                }
+        for role in &self.roles {
+            let member_indices: Vec<usize> = self
+                .members
+                .iter()
+                .enumerate()
+                .filter(|(_, member)| member.role == Some(role.name.as_str()))
+                .map(|(index, _)| index)
+                .collect();
+            if member_indices.is_empty() {
+                continue;
             }
+            groups.push(MemberGroup {
+                title: role.name.clone(),
+                color: role.color,
+                key: format!("role-{}", role.name),
+                member_indices,
+            });
         }
 
         // 无角色成员按在线状态归入兜底组。
@@ -1182,15 +1205,15 @@ impl DiscordApp {
             .members
             .iter()
             .enumerate()
-            .filter(|(_, m)| m.online && !m.name.contains(" —— "))
-            .map(|(i, _)| i)
+            .filter(|(_, member)| member.online && member.role.is_none())
+            .map(|(index, _)| index)
             .collect();
         let offline: Vec<usize> = self
             .members
             .iter()
             .enumerate()
-            .filter(|(_, m)| !m.online && !m.name.contains(" —— "))
-            .map(|(i, _)| i)
+            .filter(|(_, member)| !member.online && member.role.is_none())
+            .map(|(index, _)| index)
             .collect();
 
         if !online.is_empty() {
@@ -4233,10 +4256,13 @@ impl DiscordApp {
         cx.notify();
     }
 
-    /// 菜单目标成员的角色名（取「 —— 」后的部分），视图只读这一份解析结果。
+    /// 菜单目标成员的角色名，视图只读这一份解析结果。
     pub(crate) fn member_menu_role(&self) -> Option<&'static str> {
         let name = self.member_menu.as_ref()?.name;
-        name.split(" —— ").nth(1)
+        self.members
+            .iter()
+            .find(|member| member.name == name)
+            .and_then(|member| member.role)
     }
 
     /// 是否已被屏蔽（屏蔽名单按基础名存，成员展示名要先去后缀）。
@@ -4695,10 +4721,19 @@ impl DiscordApp {
     pub(crate) fn select_server_settings_section(
         &mut self,
         section: ServerSettingsSection,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.server_settings_section = section;
         self.invite_copied_code = None;
+        self.role_notice = None;
+        // 进角色页时默认选中第一个角色，右侧详情不至于空白。
+        if section == ServerSettingsSection::Roles
+            && self.selected_role.is_none()
+            && let Some(first) = self.roles.first().map(|role| role.name.clone())
+        {
+            self.select_role(first, window, cx);
+        }
         cx.notify();
     }
 
@@ -4779,6 +4814,141 @@ impl DiscordApp {
         {
             self.removed_server_emojis.remove(position);
             self.server_emojis.push(emoji);
+        }
+        cx.notify();
+    }
+
+    // ---------------------------- 角色管理 ----------------------------
+
+    /// 角色下的成员数。
+    pub(crate) fn role_member_count(&self, role: &str) -> usize {
+        self.members
+            .iter()
+            .filter(|member| member.role == Some(role))
+            .count()
+    }
+
+    /// 选中角色并把名称预填到输入框。
+    pub(crate) fn select_role(
+        &mut self,
+        name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let role_name = name.clone();
+        self.role_name_edit
+            .update(cx, |input, cx| input.set_value(role_name, window, cx));
+        self.selected_role = Some(name);
+        self.role_notice = None;
+        cx.notify();
+    }
+
+    /// 新建角色：名称自动去重、颜色按角色表轮换，建完直接选中。
+    pub(crate) fn create_role(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let mut serial = self.roles.len() + 1;
+        let mut name = format!("新角色 {serial}");
+        while self.roles.iter().any(|role| role.name == name) {
+            serial += 1;
+            name = format!("新角色 {serial}");
+        }
+        let color = ROLE_COLORS[self.roles.len() % ROLE_COLORS.len()];
+        self.roles.push(Role::new(name.clone(), color));
+        self.select_role(name, window, cx);
+        self.role_notice = Some("已新建角色，改名后回车保存");
+        cx.notify();
+    }
+
+    /// 保存角色名称：非空、不与其它角色重名；成员身上的角色名与折叠键一起迁移。
+    pub(crate) fn save_role_name(&mut self, cx: &mut Context<Self>) {
+        let Some(current) = self.selected_role.clone() else {
+            return;
+        };
+        let new_name = self.role_name_edit.read(cx).value().trim().to_string();
+        if new_name.is_empty() {
+            self.role_notice = Some("角色名不能为空");
+            cx.notify();
+            return;
+        }
+        if new_name == current {
+            self.role_notice = Some("角色名未变化");
+            cx.notify();
+            return;
+        }
+        if self.roles.iter().any(|role| role.name == new_name) {
+            self.role_notice = Some("已有同名角色");
+            cx.notify();
+            return;
+        }
+
+        // 角色名是成员的归属键：改名要同步成员与成员栏的折叠 key。
+        let leaked = persist::leak(new_name.clone());
+        for role in self.roles.iter_mut() {
+            if role.name == current {
+                role.name = new_name.clone();
+            }
+        }
+        for member in self.members.iter_mut() {
+            if member.role == Some(current.as_str()) {
+                member.role = Some(leaked);
+            }
+        }
+        let old_key = format!("role-{current}");
+        let new_key = format!("role-{new_name}");
+        for key in self.collapsed_roles.iter_mut() {
+            if *key == old_key {
+                *key = new_key.clone();
+            }
+        }
+
+        self.selected_role = Some(new_name);
+        self.role_notice = Some("角色名已更新");
+        cx.notify();
+    }
+
+    /// 改角色颜色（点色块即生效）。
+    pub(crate) fn set_role_color(&mut self, color: u32, cx: &mut Context<Self>) {
+        let Some(current) = self.selected_role.clone() else {
+            return;
+        };
+        if let Some(role) = self.roles.iter_mut().find(|role| role.name == current) {
+            role.color = color;
+        }
+        self.role_notice = Some("颜色已更新");
+        cx.notify();
+    }
+
+    /// 删除角色：成员回到「无角色」，对应的折叠 key 一并清掉。
+    pub(crate) fn delete_role(&mut self, cx: &mut Context<Self>) {
+        let Some(current) = self.selected_role.clone() else {
+            return;
+        };
+        self.roles.retain(|role| role.name != current);
+        for member in self.members.iter_mut() {
+            if member.role == Some(current.as_str()) {
+                member.role = None;
+            }
+        }
+        let key = format!("role-{current}");
+        self.collapsed_roles.retain(|item| item != &key);
+        self.selected_role = None;
+        self.role_notice = Some("角色已删除，相关成员回到「无角色」");
+        cx.notify();
+    }
+
+    /// 在「当前角色 / 无角色」之间切换某个成员的归属。
+    ///
+    /// 角色名是 `&'static str`，这里按次 leak 一份（每次点击几十字节，Demo 量级可忽略）。
+    pub(crate) fn toggle_member_role(&mut self, member_name: &str, cx: &mut Context<Self>) {
+        let Some(current) = self.selected_role.clone() else {
+            return;
+        };
+        let leaked = persist::leak(current.clone());
+        if let Some(member) = self.members.iter_mut().find(|m| m.name == member_name) {
+            member.role = if member.role == Some(current.as_str()) {
+                None
+            } else {
+                Some(leaked)
+            };
         }
         cx.notify();
     }
@@ -5024,6 +5194,8 @@ impl DiscordApp {
             friends: self.friends.clone(),
             friend_groups: self.friend_groups.clone(),
             invites: Some(self.invites.clone()),
+            members: Some(self.members.clone()),
+            roles: Some(self.roles.clone()),
             friend_requests: self.friend_requests.clone(),
             blocked_users: self.blocked_users.clone(),
             me: self.me.clone(),
@@ -5084,6 +5256,20 @@ impl DiscordApp {
         // 旧快照没有 invites 字段时保留种子邀请，而不是清空。
         if let Some(invites) = saved.invites {
             self.invites = invites;
+        }
+        // 成员与角色：旧快照没有就保留种子；选中角色若已不存在则清空。
+        if let Some(members) = saved.members {
+            self.members = members;
+        }
+        if let Some(roles) = saved.roles {
+            self.roles = roles;
+        }
+        if let Some(selected) = self.selected_role.take() {
+            self.selected_role = self
+                .roles
+                .iter()
+                .any(|role| role.name == selected)
+                .then_some(selected);
         }
         self.sync_invite_channel();
         if !saved.me.display_name.is_empty() {
@@ -5150,6 +5336,9 @@ impl DiscordApp {
         self.active_dm = self.dm_conversations.first().map(|c| c.friend.to_string());
         self.friends = seed_friends();
         self.friend_groups = seed_friend_groups();
+        self.roles = seed_roles();
+        self.selected_role = None;
+        self.role_notice = None;
         self.invites = seed_invites();
         self.invite_copied_code = None;
         self.sync_invite_channel();

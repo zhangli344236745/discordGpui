@@ -43,7 +43,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
     };
 
     let name = menu.name;
-    // 展示名形如「Nova —— 管理员」：角色统一由 app 解析，这里只取短名。
+    // 角色已独立到 Member.role；这里取短名并兼容旧的「名字 —— 角色」展示格式。
     let short = name.split(" —— ").next().unwrap_or(name);
     let role = app.member_menu_role();
     let member = app.members.iter().find(|item| item.name == name);

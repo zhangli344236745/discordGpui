@@ -5,10 +5,10 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::input::Input;
 use gpui_kit::component::{h_flex, v_flex, Size, Sizable};
 
-use crate::app::{DiscordApp, ServerSettingsSection};
+use crate::app::{DiscordApp, ROLE_COLORS, ServerSettingsSection};
 use crate::data::InviteExpiry;
 use crate::ui::theme::palette;
-use crate::ui::{danger_icon_button, filter_chip, ico};
+use crate::ui::{avatar, danger_icon_button, filter_chip, ico};
 
 /// 可选的服务器图标颜色。
 const SERVER_COLORS: [u32; 6] = [
@@ -19,7 +19,7 @@ const SERVER_COLORS: [u32; 6] = [
 pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
     match app.server_settings_section {
         ServerSettingsSection::Overview => overview(app, cx),
-        ServerSettingsSection::Roles => roles(app),
+        ServerSettingsSection::Roles => roles(app, cx),
         ServerSettingsSection::Emoji => emoji(app, cx),
         ServerSettingsSection::Invites => invites(app, cx),
     }
@@ -244,66 +244,298 @@ fn overview(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
 // 角色
 // ---------------------------------------------------------------------------
 
-fn roles(app: &DiscordApp) -> Div {
-    let groups = app.member_groups();
-    let mut list = v_flex().w_full().gap(px(8.));
+fn roles(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
+    let selected = app.selected_role.clone();
 
-    for group in &groups {
-        let names: Vec<&str> = group
-            .member_indices
-            .iter()
-            .filter_map(|index| app.members.get(*index))
-            .map(|member| member.name.split(" —— ").next().unwrap_or(member.name))
-            .collect();
-
+    // 左栏：角色列表（顺序即成员栏分组顺序）+ 新建。
+    let mut list = v_flex().w_full().gap(px(2.));
+    for (index, role) in app.roles.iter().enumerate() {
+        let name = role.name.clone();
+        let is_selected = selected.as_deref() == Some(role.name.as_str());
+        let count = app.role_member_count(&role.name);
         list = list.child(
             h_flex()
                 .w_full()
-                .px(px(16.))
-                .py(px(12.))
-                .gap_3()
+                .h(px(40.))
+                .px_2()
+                .gap_2()
                 .items_center()
-                .rounded(px(8.))
-                .bg(rgb(palette::bg_sidebar()))
-                .child(div().w(px(8.)).h(px(8.)).rounded_full().bg(rgb(group.color)))
-                .child(
-                    div()
-                        .w(px(96.))
-                        .flex_shrink_0()
-                        .truncate()
-                        .text_size(px(13.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(group.color))
-                        .child(group.title.clone()),
-                )
+                .rounded(px(6.))
+                .bg(rgb(if is_selected {
+                    palette::bg_rail()
+                } else {
+                    palette::bg_sidebar()
+                }))
+                .hover(|el| el.bg(rgb(palette::bg_channel_hover())))
+                .child(div().w(px(8.)).h(px(8.)).rounded_full().bg(rgb(role.color)))
                 .child(
                     div()
                         .flex_1()
                         .min_w_0()
                         .truncate()
-                        .text_size(px(12.))
-                        .text_color(rgb(palette::text_secondary()))
-                        .child(if names.is_empty() {
-                            "暂无成员".to_string()
-                        } else {
-                            names.join("、")
-                        }),
+                        .text_size(px(13.))
+                        .text_color(rgb(role.color))
+                        .child(role.name.clone()),
                 )
                 .child(
-                    h_flex()
-                        .gap_1()
-                        .px_2()
-                        .h(px(20.))
-                        .rounded_full()
-                        .bg(rgb(palette::bg_rail()))
+                    div()
                         .text_size(px(11.))
                         .text_color(rgb(palette::text_muted()))
-                        .child(format!("{} 人", group.member_indices.len())),
-                ),
+                        .child(format!("{count} 人")),
+                )
+                .id(format!("role-row-{index}"))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.select_role(name.clone(), window, cx);
+                })),
         );
     }
 
-    shell("角色", "角色按成员名后缀「 —— 角色」聚合，Demo 中只读写视图状态。").child(list)
+    let left = v_flex()
+        .w(px(228.))
+        .flex_shrink_0()
+        .gap_2()
+        .child(
+            h_flex()
+                .w_full()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(palette::text_primary()))
+                        .child("角色"),
+                )
+                .child(
+                    h_flex()
+                        .h(px(24.))
+                        .px_2()
+                        .gap_1()
+                        .items_center()
+                        .rounded(px(4.))
+                        .bg(rgb(palette::accent()))
+                        .text_size(px(11.))
+                        .text_color(rgb(palette::WHITE))
+                        .hover(|el| el.bg(rgb(palette::accent_hover())))
+                        .child(ico(IconName::Plus, Size::XSmall))
+                        .child("新建")
+                        .id("role-create")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.create_role(window, cx);
+                        })),
+                ),
+        )
+        .child(list);
+
+    // 右栏：选中角色的详情（名称 / 颜色 / 成员归属 / 删除）。
+    let mut detail = card();
+    match selected.as_deref() {
+        None => {
+            detail = detail.child(hint("左侧选择一个角色，或点「新建」创建一个新角色"));
+        }
+        Some(current) => {
+            let color = app.role_color(current);
+            let count = app.role_member_count(current);
+
+            let mut swatches = h_flex().flex_wrap().gap_2();
+            for (index, value) in ROLE_COLORS.iter().enumerate() {
+                let picked = *value;
+                let active = picked == color;
+                swatches = swatches.child(
+                    div()
+                        .w(px(26.))
+                        .h(px(26.))
+                        .rounded_full()
+                        .bg(rgb(picked))
+                        .border_2()
+                        .border_color(rgb(if active {
+                            palette::text_primary()
+                        } else {
+                            palette::bg_sidebar()
+                        }))
+                        .hover(|el| el.border_color(rgb(palette::text_secondary())))
+                        .id(format!("role-color-{index}"))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.set_role_color(picked, cx);
+                        })),
+                );
+            }
+
+            // 成员归属：点一行即在「当前角色 / 无角色」之间切换。
+            let mut members = v_flex().w_full().gap(px(2.));
+            for (index, member) in app.members.iter().enumerate() {
+                let member_name = member.name;
+                let assigned = member.role == Some(current);
+                let current_role = member.role.unwrap_or("无角色");
+
+                let mut check = div()
+                    .w(px(16.))
+                    .h(px(16.))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(4.))
+                    .bg(rgb(if assigned {
+                        color
+                    } else {
+                        palette::bg_rail()
+                    }))
+                    .text_color(rgb(palette::WHITE));
+                if assigned {
+                    check = check.child(ico(IconName::Check, Size::XSmall));
+                }
+
+                members = members.child(
+                    h_flex()
+                        .w_full()
+                        .h(px(38.))
+                        .px_2()
+                        .gap_3()
+                        .items_center()
+                        .rounded(px(6.))
+                        .hover(|el| el.bg(rgb(palette::bg_rail())))
+                        .child(avatar(
+                            member.name.chars().next().unwrap_or('?'),
+                            member.color,
+                            px(24.),
+                            member.online,
+                        ))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(px(13.))
+                                .text_color(rgb(palette::text_primary()))
+                                .child(member.name),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(rgb(palette::text_muted()))
+                                .child(current_role),
+                        )
+                        .child(check)
+                        .id(format!("role-member-{index}"))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.toggle_member_role(member_name, cx);
+                        })),
+                );
+            }
+
+            detail = detail
+                .child(
+                    v_flex()
+                        .gap_1()
+                        .child(field_label("角色名称"))
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .items_center()
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .rounded(px(6.))
+                                        .bg(rgb(palette::bg_rail()))
+                                        .child(
+                                            <Input as Sizable>::with_size(
+                                                Input::new(&app.role_name_edit),
+                                                Size::Small,
+                                            )
+                                            .w_full(),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .h(px(32.))
+                                        .px_4()
+                                        .flex()
+                                        .items_center()
+                                        .rounded(px(6.))
+                                        .bg(rgb(palette::accent()))
+                                        .text_size(px(13.))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(rgb(palette::WHITE))
+                                        .hover(|el| el.bg(rgb(palette::accent_hover())))
+                                        .child("保存")
+                                        .id("role-name-save")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.save_role_name(cx);
+                                        })),
+                                ),
+                        )
+                        .child(hint(app.role_notice.unwrap_or(
+                            "按 Enter 或点保存生效；改名会同步到成员与成员栏分组",
+                        ))),
+                )
+                .child(
+                    v_flex()
+                        .gap_2()
+                        .child(chip_label("角色颜色"))
+                        .child(swatches),
+                )
+                .child(
+                    v_flex()
+                        .gap_2()
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .items_center()
+                                .child(chip_label("成员"))
+                                .child(
+                                    div()
+                                        .px_2()
+                                        .h(px(18.))
+                                        .flex()
+                                        .items_center()
+                                        .rounded_full()
+                                        .bg(rgb(palette::bg_rail()))
+                                        .text_size(px(11.))
+                                        .text_color(rgb(palette::text_muted()))
+                                        .child(format!("{count} 人")),
+                                ),
+                        )
+                        .child(members)
+                        .child(hint("点成员行加入 / 移除该角色；未分配角色的成员归入「在线 / 离线」")),
+                )
+                .child(
+                    h_flex()
+                        .h(px(32.))
+                        .px_3()
+                        .gap_1()
+                        .items_center()
+                        .rounded(px(6.))
+                        .bg(rgb(palette::bg_rail()))
+                        .text_size(px(12.))
+                        .text_color(rgb(palette::danger()))
+                        .hover(|el| {
+                            el.bg(rgb(palette::danger()))
+                                .text_color(rgb(palette::WHITE))
+                        })
+                        .child(ico(IconName::Trash, Size::XSmall))
+                        .child("删除角色")
+                        .id("role-delete")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.delete_role(cx);
+                        })),
+                );
+        }
+    }
+
+    shell(
+        "角色",
+        "角色决定成员栏的分组与颜色；改名会同步到所有成员。",
+    )
+    .child(
+        h_flex()
+            .w_full()
+            .gap_4()
+            .items_start()
+            .child(left)
+            .child(div().flex_1().min_w_0().child(detail)),
+    )
 }
 
 // ---------------------------------------------------------------------------

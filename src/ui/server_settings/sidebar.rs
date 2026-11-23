@@ -68,8 +68,8 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                     )
                 })
                 .id(id)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.select_server_settings_section(value, cx);
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.select_server_settings_section(value, window, cx);
                 })),
         );
     }

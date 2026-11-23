@@ -790,7 +790,23 @@ impl DiscoverServer {
     }
 }
 
-/// 成员栏条目。name 可形如「Nova —— 管理员」，后缀为角色名。
+/// 服务器角色：名称 + 颜色。成员按**角色名**归属，改名时由 app 层同步所有成员。
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Role {
+    pub name: String,
+    pub color: u32,
+}
+
+impl Role {
+    pub fn new(name: impl Into<String>, color: u32) -> Self {
+        Self {
+            name: name.into(),
+            color,
+        }
+    }
+}
+
+/// 成员栏条目。`role` 存角色名，None 表示无角色（归入在线 / 离线兜底组）。
 #[derive(Clone, Copy, Serialize)]
 #[serde(from = "crate::data::persist::MemberOwned")]
 pub struct Member {
@@ -798,6 +814,8 @@ pub struct Member {
     pub name: &'static str,
     pub color: u32,
     pub online: bool,
+    #[serde(with = "crate::data::persist::opt_leaked_str")]
+    pub role: Option<&'static str>,
 }
 
 /// 语音房间里的其他参与者（Demo：连接语音时从在线成员里抽几位）。
