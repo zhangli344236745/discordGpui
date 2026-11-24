@@ -1529,6 +1529,8 @@ impl MessageRequestState {
 /// 陌生人发来的私信请求。接受后转为正常私信会话，忽略后仅保留记录。
 #[derive(Clone, Serialize, Deserialize)]
 pub struct MessageRequest {
+    #[serde(default)]
+    pub id: String,
     pub sender: String,
     pub color: u32,
     /// 首条消息预览。
@@ -1543,6 +1545,7 @@ pub struct MessageRequest {
 impl MessageRequest {
     pub fn new(sender: impl Into<String>, color: u32, preview: impl Into<String>, minutes_ago: u32) -> Self {
         Self {
+            id: String::new(),
             sender: sender.into(),
             color,
             preview: preview.into(),

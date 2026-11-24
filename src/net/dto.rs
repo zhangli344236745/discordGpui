@@ -257,6 +257,26 @@ pub struct FriendRequestPageDto {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct MessageRequestDto {
+    pub id: String,
+    pub from_user: FriendRequestUserDto,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub first_message: String,
+    #[serde(default)]
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+pub struct MessageRequestPageDto {
+    #[serde(default)]
+    pub items: Vec<MessageRequestDto>,
+    #[serde(default)]
+    pub count: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct BlockDto {
     pub user_id: String,
     #[serde(default)]

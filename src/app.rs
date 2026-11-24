@@ -171,6 +171,7 @@ pub(crate) struct DmCall {
     pub(crate) mic_on: bool,
     pub(crate) camera_on: bool,
     pub(crate) screen_sharing: bool,
+    pub(crate) call_id: Option<String>,
 }
 
 /// 频道操作菜单的锚点：鼠标右键位置或标题栏铃铛入口。
@@ -452,6 +453,7 @@ pub struct DiscordApp {
     pub(crate) structure_refreshing: bool,
     pub(crate) has_more_messages: HashMap<String, bool>,
     pub(crate) loading_older: bool,
+    pub(crate) loaded_dms: std::collections::HashSet<String>,
 
     // 当前用户资料：账户页可编辑，底部用户栏与设置页预览共用。
     pub(crate) me: MyProfile,
@@ -1318,6 +1320,7 @@ impl DiscordApp {
             structure_refreshing: false,
             has_more_messages: HashMap::new(),
             loading_older: false,
+            loaded_dms: std::collections::HashSet::new(),
             my_status: UserStatus::Online,
             show_status_menu: false,
             me: seed_me(),
@@ -2037,8 +2040,9 @@ impl DiscordApp {
         cx: &mut Context<Self>,
     ) {
         self.view_mode = ViewMode::DirectMessage;
-        self.active_dm = Some(friend);
+        self.active_dm = Some(friend.clone());
         self.reset_session(window, cx);
+        self.ensure_dm_loaded(friend, cx);
     }
 
     /// 从好友发起新私信：若还没有会话则补建会话条目与空消息列表，再切入。
@@ -2049,6 +2053,54 @@ impl DiscordApp {
         cx: &mut Context<Self>,
     ) {
         if !self.dm_conversations.iter().any(|c| c.friend == friend) {
+            if self.is_online()
+                && !self.remote.dms.contains_key(friend)
+                && let Some(net) = self.net.clone()
+            {
+                let user_id = self
+                    .remote
+                    .friends
+                    .get(friend)
+                    .or_else(|| {
+                        self.remote
+                            .members
+                            .get(&format!("{}/{}", self.active_server_name(), friend))
+                    })
+                    .cloned();
+                if let Some(user_id) = user_id {
+                    let friend_name = friend.to_string();
+                    cx.spawn(async move |this, cx| {
+                        let result = net.execute(api::open_dm(&user_id, None), true).await;
+                        let _ = this.update(cx, |app, cx| {
+                            match result {
+                                Ok(value) => {
+                                    if value.get("kind").and_then(|kind| kind.as_str()) == Some("dm") {
+                                        if let Some(dm_id) = value
+                                            .get("dm")
+                                            .and_then(|dm| dm.get("id"))
+                                            .and_then(|id| id.as_str())
+                                        {
+                                            app.remote
+                                                .dms
+                                                .insert(friend_name.clone(), dm_id.to_string());
+                                        }
+                                    } else {
+                                        app.message_request_notice =
+                                            Some("对方不是好友，已发送消息请求".into());
+                                    }
+                                    app.refresh_structure(cx);
+                                }
+                                Err(error) => {
+                                    app.friend_notice = Some(error.user_message());
+                                    cx.notify();
+                                }
+                            }
+                        });
+                    })
+                    .detach();
+                    return;
+                }
+            }
             let (color, online) = self
                 .friends
                 .iter()
@@ -3092,6 +3144,40 @@ impl DiscordApp {
                     .await;
                 let _ = this.update(cx, |app, cx| {
                     app.finish_send(&key_for_send, &nonce, result);
+                    cx.notify();
+                });
+            })
+            .detach();
+        } else if self.is_online()
+            && self.view_mode == ViewMode::DirectMessage
+            && !text.is_empty()
+            && let Some(friend) = self.active_dm.clone()
+            && let Some(dm_id) = self.remote.dms.get(&friend).cloned()
+            && let Some(net) = self.net.clone()
+        {
+            let nonce = format!(
+                "d-{}-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|duration| duration.as_millis())
+                    .unwrap_or_default(),
+                self.dm_messages.get(&friend).map_or(0, Vec::len)
+            );
+            if let Some(message) = self
+                .dm_messages
+                .get_mut(&friend)
+                .and_then(|messages| messages.last_mut())
+            {
+                message.client_nonce = Some(nonce.clone());
+                message.delivery = DeliveryStatus::Sending;
+            }
+            let friend_for_send = friend.clone();
+            cx.spawn(async move |this, cx| {
+                let result = net
+                    .execute(api::send_dm_message(&dm_id, &text, Some(&nonce)), true)
+                    .await;
+                let _ = this.update(cx, |app, cx| {
+                    app.finish_dm_send(&friend_for_send, &nonce, result);
                     cx.notify();
                 });
             })
@@ -4265,6 +4351,32 @@ impl DiscordApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.is_online()
+            && let Some(request_id) = self
+                .message_requests
+                .iter()
+                .find(|request| request.sender == sender && request.visible)
+                .map(|request| request.id.clone())
+                .filter(|id| !id.is_empty())
+            && let Some(net) = self.net.clone()
+        {
+            let notify_sender = sender.clone();
+            cx.spawn(async move |this, cx| {
+                let result = net.execute(api::accept_message_request(&request_id), true).await;
+                let _ = this.update(cx, |app, cx| match result {
+                    Ok(_) => {
+                        app.message_request_notice = Some(format!("已接受 {notify_sender} 的私信请求"));
+                        app.refresh_structure(cx);
+                    }
+                    Err(error) => {
+                        app.message_request_notice = Some(error.user_message());
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+            return;
+        }
         // 先把请求里的字段取成 owned，释放可变借用后再调用其它 &mut self 方法。
         let (color, preview) = {
             let Some(request) = self
@@ -4298,6 +4410,31 @@ impl DiscordApp {
 
     /// 忽略请求：标记已忽略，不再计入待处理角标。
     pub(crate) fn ignore_message_request(&mut self, sender: String, cx: &mut Context<Self>) {
+        if self.is_online()
+            && let Some(request_id) = self
+                .message_requests
+                .iter()
+                .find(|request| request.sender == sender && request.visible)
+                .map(|request| request.id.clone())
+                .filter(|id| !id.is_empty())
+            && let Some(net) = self.net.clone()
+        {
+            cx.spawn(async move |this, cx| {
+                let result = net.execute(api::ignore_message_request(&request_id), true).await;
+                let _ = this.update(cx, |app, cx| match result {
+                    Ok(_) => {
+                        app.message_request_notice = Some("已忽略消息请求".into());
+                        app.refresh_structure(cx);
+                    }
+                    Err(error) => {
+                        app.message_request_notice = Some(error.user_message());
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+            return;
+        }
         {
             let Some(request) = self
                 .message_requests
@@ -4315,6 +4452,31 @@ impl DiscordApp {
 
     /// 删除请求：标记不可见（不物理删除，保留审计一致性）。
     pub(crate) fn delete_message_request(&mut self, sender: String, cx: &mut Context<Self>) {
+        if self.is_online()
+            && let Some(request_id) = self
+                .message_requests
+                .iter()
+                .find(|request| request.sender == sender && request.visible)
+                .map(|request| request.id.clone())
+                .filter(|id| !id.is_empty())
+            && let Some(net) = self.net.clone()
+        {
+            cx.spawn(async move |this, cx| {
+                let result = net.execute(api::delete_message_request(&request_id), true).await;
+                let _ = this.update(cx, |app, cx| match result {
+                    Ok(_) => {
+                        app.message_request_notice = Some("请求已删除".into());
+                        app.refresh_structure(cx);
+                    }
+                    Err(error) => {
+                        app.message_request_notice = Some(error.user_message());
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+            return;
+        }
         {
             let Some(request) = self
                 .message_requests
@@ -6282,7 +6444,7 @@ impl DiscordApp {
 
         self.leave_voice();
         self.dm_call = Some(DmCall {
-            friend: base,
+            friend: base.clone(),
             color,
             online,
             mode,
@@ -6290,17 +6452,76 @@ impl DiscordApp {
             mic_on: self.mic_on,
             camera_on: mode == CallMode::Video,
             screen_sharing: false,
+            call_id: None,
         });
         self.close_profile();
         self.close_quick_switcher();
         self.show_inbox = false;
         self.show_pins = false;
         self.close_message_menu();
+        if self.is_online()
+            && let (Some(dm_id), Some(net)) = (
+                self.remote.dms.get(&base).cloned(),
+                self.net.clone(),
+            )
+        {
+            let kind = match mode {
+                CallMode::Voice => "voice",
+                CallMode::Video => "video",
+            };
+            let friend_for_call = base.clone();
+            cx.spawn(async move |this, cx| {
+                let result = net.execute(api::start_dm_call(&dm_id, kind), true).await;
+                let _ = this.update(cx, |app, cx| match result {
+                    Ok(value) => {
+                        if let Some(call_id) = value.get("id").and_then(|id| id.as_str())
+                            && let Some(call) = app.dm_call.as_mut()
+                            && call.friend == friend_for_call
+                        {
+                            call.call_id = Some(call_id.to_string());
+                        }
+                    }
+                    Err(error) => {
+                        app.dm_call = None;
+                        app.automod_notice = Some(format!("呼叫失败：{}", error.user_message()));
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
         cx.notify();
     }
 
     /// Demo：把「正在呼叫」推进为「已接通」。
     pub(crate) fn connect_dm_call(&mut self, cx: &mut Context<Self>) {
+        let Some(friend) = self.dm_call.as_ref().map(|call| call.friend.clone()) else {
+            return;
+        };
+        if self.is_online()
+            && let (Some(dm_id), Some(net)) = (
+                self.remote.dms.get(&friend).cloned(),
+                self.net.clone(),
+            )
+        {
+            cx.spawn(async move |this, cx| {
+                let result = net.execute(api::accept_dm_call(&dm_id), true).await;
+                let _ = this.update(cx, |app, cx| match result {
+                    Ok(_) => {
+                        if let Some(call) = app.dm_call.as_mut() {
+                            call.connected = true;
+                        }
+                        cx.notify();
+                    }
+                    Err(error) => {
+                        app.automod_notice = Some(format!("接听失败：{}", error.user_message()));
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+            return;
+        }
         if let Some(call) = self.dm_call.as_mut() {
             call.connected = true;
         }
@@ -6309,7 +6530,17 @@ impl DiscordApp {
 
     /// 挂断私信通话（面板由 `dm_call.is_some()` 决定是否渲染）。
     pub(crate) fn end_dm_call(&mut self, cx: &mut Context<Self>) {
+        let friend = self.dm_call.as_ref().map(|call| call.friend.clone());
         self.dm_call = None;
+        if self.is_online()
+            && let (Some(friend), Some(net)) = (friend, self.net.clone())
+            && let Some(dm_id) = self.remote.dms.get(&friend).cloned()
+        {
+            cx.spawn(async move |_this, _cx| {
+                let _ = net.execute(api::hangup_dm_call(&dm_id), true).await;
+            })
+            .detach();
+        }
         cx.notify();
     }
 
@@ -8301,6 +8532,50 @@ impl DiscordApp {
                     self.show_typing(name, cx);
                 }
             }
+            "CALL_RING" => {
+                if let Some(call_id) = data.get("id").and_then(|value| value.as_str()) {
+                    let caller = data.get("caller").cloned().unwrap_or_default();
+                    let friend = caller
+                        .get("display_name")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("来电")
+                        .to_string();
+                    let color = caller
+                        .get("avatar_color")
+                        .and_then(|value| value.as_u64())
+                        .unwrap_or(0x5865f2) as u32;
+                    self.dm_call = Some(DmCall {
+                        friend,
+                        color,
+                        online: true,
+                        mode: if data.get("kind").and_then(|value| value.as_str()) == Some("video") {
+                            CallMode::Video
+                        } else {
+                            CallMode::Voice
+                        },
+                        connected: false,
+                        mic_on: self.mic_on,
+                        camera_on: false,
+                        screen_sharing: false,
+                        call_id: Some(call_id.to_string()),
+                    });
+                }
+            }
+            "CALL_ACCEPT" => {
+                if let Some(call) = self.dm_call.as_mut()
+                    && call.call_id.as_deref()
+                        == data.get("id").and_then(|value| value.as_str())
+                {
+                    call.connected = true;
+                }
+            }
+            "CALL_DECLINE" | "CALL_END" => {
+                if self.dm_call.as_ref().and_then(|call| call.call_id.as_deref())
+                    == data.get("id").and_then(|value| value.as_str())
+                {
+                    self.dm_call = None;
+                }
+            }
             "CHANNEL_CREATE" | "CHANNEL_UPDATE" | "CHANNEL_DELETE"
             | "CATEGORY_CREATE" | "CATEGORY_UPDATE" | "CATEGORY_DELETE"
             | "SERVER_UPDATE" | "MEMBER_JOIN" | "MEMBER_LEAVE" | "MEMBER_UPDATE"
@@ -8422,6 +8697,88 @@ impl DiscordApp {
     }
 
     fn close_thread_if_deleted(&mut self, _message_id: &str) {}
+
+    fn ensure_dm_loaded(&mut self, friend: String, cx: &mut Context<Self>) {
+        if !self.is_online() || self.loaded_dms.contains(&friend) {
+            return;
+        }
+        let Some(dm_id) = self.remote.dms.get(&friend).cloned() else {
+            return;
+        };
+        let Some(net) = self.net.clone() else {
+            return;
+        };
+        self.loaded_dms.insert(friend.clone());
+        cx.spawn(async move |this, cx| {
+            let result = net
+                .execute_as::<PageDto<crate::net::dto::DmMessageDto>>(
+                    api::dm_messages(&dm_id, None, 50),
+                    true,
+                )
+                .await;
+            if result.is_ok() {
+                let _ = net.execute(api::mark_dm_read(&dm_id), true).await;
+            }
+            let _ = this.update(cx, |app, _cx| match result {
+                Ok(page) => {
+                    let mut messages: Vec<Message> = page
+                        .items
+                        .iter()
+                        .map(|dto| {
+                            let mut message = hydrate::dm_message_from(dto);
+                            if dto.author.id == app.remote.me_id {
+                                message.author = "你";
+                            }
+                            message
+                        })
+                        .collect();
+                    messages.sort_by(|a, b| a.id.cmp(&b.id));
+                    app.dm_messages.insert(friend.clone(), messages);
+                }
+                Err(error) => {
+                    app.loaded_dms.remove(&friend);
+                    app.message_request_notice = Some(format!("加载私信失败：{}", error.user_message()));
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn finish_dm_send(
+        &mut self,
+        friend: &str,
+        nonce: &str,
+        result: Result<serde_json::Value, NetError>,
+    ) {
+        match result {
+            Ok(value) => {
+                let Ok(dto) = serde_json::from_value::<crate::net::dto::DmMessageDto>(value) else {
+                    return;
+                };
+                let mut message = hydrate::dm_message_from(&dto);
+                if dto.author.id == self.remote.me_id {
+                    message.author = "你";
+                }
+                if let Some(list) = self.dm_messages.get_mut(friend)
+                    && let Some(existing) = list
+                        .iter_mut()
+                        .find(|item| item.client_nonce.as_deref() == Some(nonce))
+                {
+                    *existing = message;
+                }
+            }
+            Err(error) => {
+                if let Some(list) = self.dm_messages.get_mut(friend)
+                    && let Some(existing) = list
+                        .iter_mut()
+                        .find(|item| item.client_nonce.as_deref() == Some(nonce))
+                {
+                    existing.delivery = DeliveryStatus::Failed;
+                }
+                self.automod_notice = Some(format!("发送失败：{}", error.user_message()));
+            }
+        }
+    }
 
     fn finish_send(&mut self, key: &str, nonce: &str, result: Result<serde_json::Value, NetError>) {
         match result {
@@ -8571,6 +8928,8 @@ impl DiscordApp {
         let request_page: crate::net::dto::FriendRequestPageDto =
             net.execute_as(api::friend_requests(), true).await?;
         let blocks: Vec<crate::net::dto::BlockDto> = net.execute_as(api::blocks(), true).await?;
+        let requests: crate::net::dto::MessageRequestPageDto =
+            net.execute_as(api::all_message_requests(), true).await?;
         let dms: Vec<DmDto> = net.execute_as(api::dms(), true).await?;
         let counts: UnreadCountsDto = net
             .execute_as(api::unread_counts(), true)
@@ -8608,6 +8967,7 @@ impl DiscordApp {
             friends,
             friend_requests: request_page.items.into_iter().chain(request_page.outgoing).collect(),
             blocks,
+            message_requests: requests.items,
             groups,
             dms,
             counts,
@@ -8670,6 +9030,7 @@ impl DiscordApp {
         self.friend_groups = data.friend_groups;
         self.friend_requests = data.friend_requests;
         self.blocked_users = data.blocked_users;
+        self.message_requests = data.message_requests;
         self.dm_conversations = data.dm_conversations;
         self.active_dm = self.dm_conversations.first().map(|dm| dm.friend.to_string());
 
@@ -8692,7 +9053,6 @@ impl DiscordApp {
         self.welcome_screens.clear();
         self.welcome_joined.clear();
         self.boosts.clear();
-        self.message_requests.clear();
         self.blocked_users.clear();
 
         if !keep_view {
@@ -8761,6 +9121,7 @@ impl DiscordApp {
         self.dm_conversations.clear();
         self.active_dm = None;
         self.loaded_channels.clear();
+        self.loaded_dms.clear();
         self.has_more_messages.clear();
         self.bookmarks.clear();
         self.notifications_on = true;

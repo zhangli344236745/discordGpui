@@ -298,12 +298,51 @@ pub fn send_dm_message(dm_id: &str, content: &str, client_nonce: Option<&str>) -
     }))
 }
 
+pub fn start_dm_call(dm_id: &str, kind: &str) -> ApiRequest {
+    ApiRequest::new(Method::Post, format!("/api/v1/dms/{dm_id}/call"))
+        .with_body(json!({ "kind": kind }))
+}
+
+pub fn accept_dm_call(dm_id: &str) -> ApiRequest {
+    ApiRequest::new(Method::Post, format!("/api/v1/dms/{dm_id}/call/accept"))
+}
+
+pub fn decline_dm_call(dm_id: &str) -> ApiRequest {
+    ApiRequest::new(Method::Post, format!("/api/v1/dms/{dm_id}/call/decline"))
+}
+
+pub fn hangup_dm_call(dm_id: &str) -> ApiRequest {
+    ApiRequest::new(Method::Post, format!("/api/v1/dms/{dm_id}/call/hangup"))
+}
+
 pub fn mark_dm_read(dm_id: &str) -> ApiRequest {
     ApiRequest::new(Method::Patch, format!("/api/v1/dms/{dm_id}/read")).with_body(json!({}))
 }
 
 pub fn message_requests() -> ApiRequest {
     ApiRequest::new(Method::Get, "/api/v1/message-requests?state=pending")
+}
+
+pub fn all_message_requests() -> ApiRequest {
+    ApiRequest::new(Method::Get, "/api/v1/message-requests?state=all")
+}
+
+pub fn ignore_message_request(request_id: &str) -> ApiRequest {
+    ApiRequest::new(
+        Method::Post,
+        format!("/api/v1/message-requests/{request_id}/ignore"),
+    )
+}
+
+pub fn delete_message_request(request_id: &str) -> ApiRequest {
+    ApiRequest::new(
+        Method::Delete,
+        format!("/api/v1/message-requests/{request_id}"),
+    )
+}
+
+pub fn mark_channel_read_api(channel_id: &str, message_id: &str) -> ApiRequest {
+    mark_channel_read(channel_id, message_id)
 }
 
 pub fn accept_message_request(request_id: &str) -> ApiRequest {

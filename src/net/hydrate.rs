@@ -9,13 +9,13 @@ use std::collections::HashMap;
 
 use crate::data::{
     Attachment, AttachmentKind, Category, Channel, ChannelKind, DmConversation, Friend,
-    FriendRequest, Member, Message, MyProfile, NotifyLevel, PermissionGrant, PermissionState, Role,
+    FriendRequest, Member, Message, MessageRequest, MyProfile, NotifyLevel, PermissionGrant, PermissionState, Role,
     Server,
 };
 
 use super::dto::{
     ChannelDto, ChannelUnreadDto, DmDto, DmMessageDto, FriendDto, FriendGroupDto, FriendRequestDto,
-    MemberDto, MessageDto,
+    MemberDto, MessageDto, MessageRequestDto,
     PermissionMatrixDto, RoleDto, ServerDto, ServerTreeDto, UnreadCountsDto, UserDto,
 };
 
@@ -42,6 +42,7 @@ pub struct BootData {
     pub friends: Vec<FriendDto>,
     pub friend_requests: Vec<FriendRequestDto>,
     pub blocks: Vec<super::dto::BlockDto>,
+    pub message_requests: Vec<MessageRequestDto>,
     pub groups: Vec<FriendGroupDto>,
     pub dms: Vec<DmDto>,
     pub counts: UnreadCountsDto,
@@ -64,6 +65,7 @@ pub struct Hydrated {
     pub friend_groups: Vec<String>,
     pub friend_requests: Vec<FriendRequest>,
     pub blocked_users: Vec<String>,
+    pub message_requests: Vec<MessageRequest>,
     pub dm_conversations: Vec<DmConversation>,
     pub messages: Vec<Message>,
     pub index: RemoteIndex,
@@ -429,6 +431,28 @@ pub fn hydrate(data: BootData) -> Hydrated {
     }
     friends.sort_by(|a, b| a.name.cmp(b.name));
 
+    let message_requests = data
+        .message_requests
+        .iter()
+        .map(|request| MessageRequest {
+            id: request.id.clone(),
+            sender: if request.from_user.display_name.is_empty() {
+                request.from_user.username.clone()
+            } else {
+                request.from_user.display_name.clone()
+            },
+            color: request.from_user.avatar_color,
+            preview: request.first_message.clone(),
+            minutes_ago: 0,
+            state: match request.state.as_str() {
+                "accepted" => crate::data::MessageRequestState::Accepted,
+                "ignored" => crate::data::MessageRequestState::Ignored,
+                _ => crate::data::MessageRequestState::Pending,
+            },
+            visible: request.state != "deleted",
+        })
+        .collect();
+
     let dm_unread: HashMap<&str, u32> = data
         .counts
         .dms
@@ -478,6 +502,7 @@ pub fn hydrate(data: BootData) -> Hydrated {
         friend_groups: groups,
         friend_requests,
         blocked_users,
+        message_requests,
         dm_conversations: dms,
         messages,
         index,
@@ -542,6 +567,7 @@ mod tests {
             friends: vec![],
             friend_requests: vec![],
             blocks: vec![],
+            message_requests: vec![],
             groups: vec![],
             dms: vec![],
             counts: dto(json!({"channels":[{"channel_id":"ch1","server_id":"s1","unread":3}]})),
