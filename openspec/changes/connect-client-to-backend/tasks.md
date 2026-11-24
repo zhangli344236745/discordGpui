@@ -2,14 +2,14 @@
 
 ## 1. 网络底座与认证基础
 
-- [ ] 1.1 添加 `ureq`、`tungstenite`、`async-channel` 依赖并验证 `cargo check` 通过；确认 rustls 特性不引入 tokio
-- [ ] 1.2 新增 `net/mod.rs`：`AppMode`、`NetHandle`、`Command`、`NetEvent`、`NetError` 类型；写单测验证错误码映射（401/403/404/409/422/429/500/超时）
-- [ ] 1.3 实现 `net/worker.rs`：专用线程串行执行 HTTP、10s 超时、JSON 解析、`request_id` 回传；单测用本地 mock 响应验证成功/超时/非 JSON
-- [ ] 1.4 实现 `net/auth.rs`：登录/注册/刷新/登出命令、30s 提前刷新、并发刷新锁；单测覆盖过期刷新、刷新失败、并发只刷一次
-- [ ] 1.5 实现“记住我”token 文件（0600）与删除逻辑；单测验证权限位、退出清理、不写密码
-- [ ] 1.6 实现 `DISCORD_API_BASE`/`DISCORD_HTTP_TIMEOUT`/`DISCORD_DEMO` 配置读取与设置项覆盖；验证非法 URL 被拒绝且回退默认
-- [ ] 1.7 实现 `net/dto.rs` 与 `net/api.rs`：认证、用户、服务器、频道、消息、好友、私信 DTO 与 typed 请求构造；单测用后端响应 fixture 反序列化
-- [ ] 1.8 在 `agent.md` 增加客户端网络层职责与线程规则，README 增加“先起 server”的运行说明；验证文档命令可执行
+- [x] 1.1 添加 `ureq`、`tungstenite`、`async-channel` 依赖并验证 `cargo check` 通过；确认 rustls 特性不引入 tokio
+- [x] 1.2 新增 `net/mod.rs`：`AppMode`、`NetHandle`、`Command`、`NetEvent`、`NetError` 类型；写单测验证错误码映射（401/403/404/409/422/429/500/超时）
+- [x] 1.3 实现 `net/worker.rs`：专用线程串行执行 HTTP、10s 超时、JSON 解析、`request_id` 回传；单测用本地 mock 响应验证成功/超时/非 JSON
+- [x] 1.4 实现 `net/auth.rs`：登录/注册/刷新/登出命令、30s 提前刷新、并发刷新锁；单测覆盖过期刷新、刷新失败、并发只刷一次
+- [x] 1.5 实现“记住我”token 文件（0600）与删除逻辑；单测验证权限位、退出清理、不写密码
+- [x] 1.6 实现 `DISCORD_API_BASE`/`DISCORD_HTTP_TIMEOUT`/`DISCORD_DEMO` 配置读取与设置项覆盖；验证非法 URL 被拒绝且回退默认
+- [x] 1.7 实现 `net/dto.rs` 与 `net/api.rs`：认证、用户、服务器、频道、消息、好友、私信 DTO 与 typed 请求构造；单测用后端响应 fixture 反序列化
+- [x] 1.8 在 `agent.md` 增加客户端网络层职责与线程规则，README 增加“先起 server”的运行说明；验证文档命令可执行
 
 ## 2. 登录、启动同步与离线回退
 

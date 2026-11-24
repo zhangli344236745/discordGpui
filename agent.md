@@ -811,6 +811,15 @@ pgrep -fl 'target/debug/discord-gpui'   # 确认无残留
 
 ---
 
+### 客户端网络层（src/net）
+
+- **线程边界**：所有 HTTP/WS I/O 只在 `net::worker` / `net::ws` 的专用线程；UI 通过 `async-channel` 收发，禁止在 `cx.spawn` 或渲染路径里做同步网络调用。
+- **请求构造**：URL 与 body 统一走 `net/api.rs`，UI 不拼字符串；后端字段保持 snake_case，DTO 在 `net/dto.rs`。
+- **认证**：access 只在内存，`SessionStore` 提前 30 秒刷新；401 `TOKEN_EXPIRED` 只重放一次。密码不落盘，“记住我”的 refresh token 文件权限必须是 `0600`。
+- **错误**：统一 `NetError`，保留后端 `code/field/request_id/retry_after`；UI 只展示 `user_message()` 并提供重试，不 panic。
+- **离线回退**：`DISCORD_DEMO=1` 或 health 失败进入 `AppMode::Demo`；在线与离线互斥，不合并数据。
+- **测试**：网络逻辑用 `Transport` mock + `pollster::block_on` 单测；不依赖真实后端。改 DTO 时同步补 fixture。
+
 ### 后端（server/）验证
 
 ```bash
@@ -833,7 +842,7 @@ uv run alembic upgrade head    # 建表（首次或改模型后）
 - **rustfmt 未安装**：本机 `cargo fmt` 会报 `cargo-fmt is not installed`。如需统一格式化，先 `rustup component add rustfmt`；在此之前手工保持格式一致。
 - **截图限制**：GPUI 窗口常处于其他 macOS Space，`screencapture` 和 `CGWindowListCreateImage` 都可能抓不到像素。验证以「窗口存在 + 进程正常 + 编译通过」为准，不要因为截图失败误判为渲染异常。
 - **不要使用过时文档**：遇到 API 不确定时，直接读本地 registry 里的 `gpui-kit-0.10.0` / `gpui-component-0.10.0` / `gpui-base-0.10.0` 源码，不要搜索 0.7 时代的教程。
-- **依赖锁定**：`Cargo.toml` 保持只有 `gpui-kit = "0.10.0"`。升级版本前必须完整回归编译与交互验证。
+- **依赖锁定**：除 `gpui-kit = "0.10.0"` 外，网络层只允许 `ureq`（REST）、`tungstenite`（WS）、`async-channel`（线程通信）与测试用 `pollster`；不要引入 tokio/reqwest。升级版本前完整回归编译与交互验证。
 
 ---
 

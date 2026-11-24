@@ -269,11 +269,27 @@ uv run uvicorn app.main:app --reload --port 8080   # 文档在 /docs
 uv run python scripts/smoke.py http://127.0.0.1:8080
 ```
 
+### 客户端接后端（进行中）
+
+网络底座（`src/net/`）已落地：REST worker、token 刷新、DTO、typed 请求与 0600 会话文件。登录界面与首屏同步在后续阶段接入；当前客户端仍默认离线演示。
+
+```bash
+# 在线模式（登录页接入后生效）
+DISCORD_API_BASE=http://127.0.0.1:8080 cargo run
+
+# 强制离线演示
+DISCORD_DEMO=1 cargo run
+```
+
+- `DISCORD_HTTP_TIMEOUT`：请求超时秒数（1–120，默认 10）。
+- `DISCORD_SESSION_FILE`：覆盖“记住我”的 token 文件路径。
+- 计划与任务见 `openspec/changes/connect-client-to-backend/`。
+
 ---
 
 ## 已知限制
 
-- **客户端还没接后端**：`server/` 已经能跑，但 Rust 客户端仍走本机 JSON 快照（路径见「数据与存储」）；下一步是把 `data/seed.rs` 的读数据与 `app.rs` 的写方法换成 HTTP 调用。删除快照文件即恢复种子数据。设计见 [`docs/backend-api.md`](docs/backend-api.md)
+- **客户端正在接后端**：`server/` 已全部可用；客户端网络底座（`src/net/`）已落地，登录/首屏同步/写路径按 OpenSpec `connect-client-to-backend` 分阶段接入。当前界面仍走本机 JSON 快照，删除快照即恢复种子数据。
 - **权限位只是演示配置**：13 项权限可切换继承 / 允许 / 拒绝并写入快照与审核日志，但不校验任何真实操作（消息发送、频道访问等不受影响）
 - **无真实文件**：附件选择器是模拟清单，图片卡是占位色块，不读取磁盘、不上传
 - **通话是演示态**：私信语音/视频只切换界面状态，不采集麦克风、摄像头或屏幕内容
