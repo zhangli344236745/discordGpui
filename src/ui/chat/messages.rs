@@ -707,6 +707,31 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
         .track_scroll(&app.scroll_handle)
         .pb_2();
 
+    if app.has_more_messages() && query.is_empty() {
+        scroll = scroll.child(
+            h_flex()
+                .w_full()
+                .justify_center()
+                .py_2()
+                .child(
+                    div()
+                        .px_3()
+                        .py_1()
+                        .rounded(px(4.))
+                        .bg(rgb(palette::bg_channel_selected()))
+                        .text_size(px(12.))
+                        .text_color(rgb(palette::text_secondary()))
+                        .id("load-older-messages")
+                        .on_click(cx.listener(|this, _, _, cx| this.load_older_messages(cx)))
+                        .child(if app.loading_older {
+                            "加载中…"
+                        } else {
+                            "加载更早的消息"
+                        }),
+                ),
+        );
+    }
+
     if messages.is_empty() {
         scroll = scroll.child(
             v_flex()

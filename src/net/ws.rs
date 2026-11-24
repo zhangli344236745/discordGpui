@@ -29,6 +29,10 @@ pub enum NetEvent {
     NeedAuth,
 }
 
+pub fn is_duplicate(last: Option<&str>, id: &str) -> bool {
+    !id.is_empty() && last == Some(id)
+}
+
 pub struct WsClient {
     stop: Arc<AtomicBool>,
     join: Option<JoinHandle<()>>,
@@ -196,6 +200,73 @@ fn configure_read_timeout(socket: &mut WebSocket<MaybeTlsStream<std::net::TcpStr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn streams_events_in_order() {
+        use std::net::TcpListener;
+        use std::sync::Mutex;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let served = Arc::new(Mutex::new(0));
+        let served_thread = served.clone();
+        thread::spawn(move || {
+            if let Ok((stream, _)) = listener.accept() {
+                let mut socket = tungstenite::accept(stream).unwrap();
+                for (index, id) in ["1", "2", "3"].iter().enumerate() {
+                    let payload = serde_json::json!({
+                        "event": "MESSAGE_CREATE",
+                        "id": id,
+                        "data": {"index": index},
+                    });
+                    if socket
+                        .send(WsMessage::Text(payload.to_string()))
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                *served_thread.lock().unwrap() = 3;
+                thread::sleep(Duration::from_millis(300));
+            }
+        });
+
+        let config = NetConfig::new(
+            format!("http://127.0.0.1:{port}"),
+            Duration::from_secs(2),
+            false,
+            std::path::PathBuf::from("/tmp/dgpui-ws-test.json"),
+        );
+        let store = Arc::new(SessionStore::new());
+        store.set(super::super::auth::Tokens {
+            access_token: "token".into(),
+            refresh_token: "refresh".into(),
+            token_type: "Bearer".into(),
+            expires_in: 900,
+        });
+        let (tx, rx) = async_channel::unbounded();
+        let mut client = WsClient::start(config, store, tx, None);
+
+        assert!(matches!(
+            pollster::block_on(rx.recv()).unwrap(),
+            NetEvent::Connected
+        ));
+        for expected in ["1", "2", "3"] {
+            match pollster::block_on(rx.recv()).unwrap() {
+                NetEvent::Gateway { id, .. } => assert_eq!(id, expected),
+                other => panic!("unexpected event: {other:?}"),
+            }
+        }
+        client.stop();
+        assert_eq!(*served.lock().unwrap(), 3);
+    }
+
+    #[test]
+    fn duplicate_cursor_is_detected() {
+        assert!(is_duplicate(Some("10"), "10"));
+        assert!(!is_duplicate(Some("10"), "11"));
+        assert!(!is_duplicate(None, ""));
+    }
 
     #[test]
     fn builds_ws_url_with_since() {

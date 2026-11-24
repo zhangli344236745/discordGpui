@@ -449,6 +449,9 @@ pub struct DiscordApp {
     pub(crate) typing_until: Option<std::time::Instant>,
     pub(crate) typing_name: Option<String>,
     pub(crate) last_typing_sent: Option<std::time::Instant>,
+    pub(crate) structure_refreshing: bool,
+    pub(crate) has_more_messages: HashMap<String, bool>,
+    pub(crate) loading_older: bool,
 
     // 当前用户资料：账户页可编辑，底部用户栏与设置页预览共用。
     pub(crate) me: MyProfile,
@@ -1311,6 +1314,9 @@ impl DiscordApp {
             typing_until: None,
             typing_name: None,
             last_typing_sent: None,
+            structure_refreshing: false,
+            has_more_messages: HashMap::new(),
+            loading_older: false,
             my_status: UserStatus::Online,
             show_status_menu: false,
             me: seed_me(),
@@ -7713,6 +7719,76 @@ impl DiscordApp {
         .detach();
     }
 
+    pub(crate) fn has_more_messages(&self) -> bool {
+        self.has_more_messages
+            .get(&self.session_key())
+            .copied()
+            .unwrap_or(false)
+    }
+
+    pub(crate) fn load_older_messages(&mut self, cx: &mut Context<Self>) {
+        if !self.is_online() || self.loading_older || !self.has_more_messages() {
+            return;
+        }
+        let key = self.session_key();
+        let Some(channel_id) = self.remote.channels.get(&key).cloned() else {
+            return;
+        };
+        let Some(before) = self
+            .messages
+            .get(&key)
+            .and_then(|messages| messages.first())
+            .map(|message| message.id.clone())
+            .filter(|id| !id.is_empty())
+        else {
+            return;
+        };
+        let Some(net) = self.net.clone() else {
+            return;
+        };
+        self.loading_older = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = net
+                .execute_as::<PageDto<MessageDto>>(api::messages(&channel_id, Some(&before), 50), true)
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                app.loading_older = false;
+                match result {
+                    Ok(page) => {
+                        let mut older: Vec<Message> = page
+                            .items
+                            .iter()
+                            .map(|dto| {
+                                let mut message = hydrate::message_from(dto);
+                                if dto.author.id == app.remote.me_id {
+                                    message.author = "你";
+                                }
+                                message
+                            })
+                            .collect();
+                        let existing = app.messages.entry(key.clone()).or_default();
+                        older.retain(|message| {
+                            !existing.iter().any(|item| {
+                                (!message.id.is_empty() && item.id == message.id)
+                                    || (message.client_nonce.is_some()
+                                        && item.client_nonce == message.client_nonce)
+                            })
+                        });
+                        older.append(existing);
+                        *existing = older;
+                        app.has_more_messages.insert(key, page.has_more);
+                    }
+                    Err(error) => {
+                        app.automod_notice = Some(format!("加载更早消息失败：{}", error.user_message()));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     pub(crate) fn typing_active(&self) -> bool {
         self.typing_until
             .is_some_and(|until| std::time::Instant::now() < until)
@@ -7838,6 +7914,7 @@ impl DiscordApp {
                             }
                         }
                         existing.sort_by(|a, b| a.id.cmp(&b.id));
+                        app.has_more_messages.insert(key.clone(), page.has_more);
                         app.messages.insert(key, existing);
                         app.mark_active_channel_read(cx);
                     }
@@ -7917,10 +7994,10 @@ impl DiscordApp {
             }
             NetEvent::NeedAuth => self.refresh_for_gateway(cx),
             NetEvent::Gateway { event, id, data } => {
+                if crate::net::ws::is_duplicate(self.last_event_id.as_deref(), &id) {
+                    return;
+                }
                 if !id.is_empty() {
-                    if self.last_event_id.as_deref() == Some(id.as_str()) {
-                        return;
-                    }
                     self.last_event_id = Some(id);
                 }
                 if event == "READY" {
@@ -8013,6 +8090,16 @@ impl DiscordApp {
                         .unwrap_or_else(|| "有人".into());
                     self.show_typing(name, cx);
                 }
+            }
+            "CHANNEL_CREATE" | "CHANNEL_UPDATE" | "CHANNEL_DELETE"
+            | "CATEGORY_CREATE" | "CATEGORY_UPDATE" | "CATEGORY_DELETE"
+            | "SERVER_UPDATE" | "MEMBER_JOIN" | "MEMBER_LEAVE" | "MEMBER_UPDATE"
+            | "ROLE_CREATE" | "ROLE_UPDATE" | "ROLE_DELETE" | "PERMISSIONS_UPDATE"
+            | "FRIEND_REQUEST_CREATE" | "FRIEND_REQUEST_ACCEPT" | "FRIEND_REQUEST_REJECT"
+            | "FRIEND_REQUEST_DELETE" | "FRIEND_GROUP_CREATE" | "FRIEND_GROUP_UPDATE"
+            | "FRIEND_GROUP_DELETE" | "DM_CREATE" | "INVITE_CREATE" | "INVITE_DELETE"
+            | "AUTOMOD_RULE_CREATE" | "AUTOMOD_RULE_UPDATE" | "AUTOMOD_RULE_DELETE" => {
+                self.refresh_structure(cx);
             }
             "PRESENCE_UPDATE" => {
                 if let Some(user_id) = data.get("user_id").and_then(|value| value.as_str()) {
@@ -8316,6 +8403,16 @@ impl DiscordApp {
     }
 
     fn apply_hydrated(&mut self, data: hydrate::Hydrated, cx: &mut Context<Self>) {
+        self.apply_hydrated_inner(data, false, true, cx);
+    }
+
+    fn apply_hydrated_inner(
+        &mut self,
+        data: hydrate::Hydrated,
+        keep_view: bool,
+        restart_gateway: bool,
+        cx: &mut Context<Self>,
+    ) {
         self.me = data.me;
         self.remote = data.index;
         self.servers = data.servers;
@@ -8382,18 +8479,44 @@ impl DiscordApp {
         self.friend_requests.clear();
         self.blocked_users.clear();
 
-        self.view_mode = ViewMode::Server;
-        self.show_settings = false;
-        self.show_server_settings = false;
-        self.show_search_center = false;
-        self.show_help_center = false;
+        if !keep_view {
+            self.view_mode = ViewMode::Server;
+            self.show_settings = false;
+            self.show_server_settings = false;
+            self.show_search_center = false;
+            self.show_help_center = false;
+        }
         self.auth_status = AuthStatus::Ready;
         self.boot_message.clear();
         self.login_error = None;
         self.current_session = self.session_key();
         self.sync_invite_channel();
-        self.start_gateway(cx);
+        if restart_gateway {
+            self.start_gateway(cx);
+        }
+        self.structure_refreshing = false;
         cx.notify();
+    }
+
+    fn refresh_structure(&mut self, cx: &mut Context<Self>) {
+        if !self.is_online() || self.structure_refreshing {
+            return;
+        }
+        let Some(net) = self.net.clone() else {
+            return;
+        };
+        self.structure_refreshing = true;
+        cx.spawn(async move |this, cx| {
+            let result = Self::fetch_boot(net).await;
+            let _ = this.update(cx, |app, cx| match result {
+                Ok(data) => app.apply_hydrated_inner(data, true, false, cx),
+                Err(_) => {
+                    app.structure_refreshing = false;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     pub(crate) fn retry_boot(&mut self, cx: &mut Context<Self>) {
@@ -8422,6 +8545,7 @@ impl DiscordApp {
         self.dm_conversations.clear();
         self.active_dm = None;
         self.loaded_channels.clear();
+        self.has_more_messages.clear();
         self.bookmarks.clear();
         self.notifications_on = true;
         cx.notify();
