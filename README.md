@@ -218,7 +218,10 @@ src/
 
 63 个 Rust 文件、约 2.9 万行代码，全部手写布局。
 
-`docs/backend-api.md` 是与之配套的后端接口清单与架构设计（只有设计，不含实现）。
+配套的两个目录：
+
+- `docs/backend-api.md`：后端接口清单与架构设计（167 个端点 / 50 张表 / Gateway 事件 / LiveKit 接入）
+- `server/`：上述设计的可运行骨架（FastAPI + SQLite + alembic + pytest，详见 `server/README.md`）
 
 ---
 
@@ -246,21 +249,31 @@ main → app → data
 
 ---
 
-## 后端接口设计（规划）
+## 后端骨架（server/，已落地）
 
-界面已经跑通的交互全部对应到一份可实施的后端方案：**[`docs/backend-api.md`](docs/backend-api.md)**。
+设计文档是 [`docs/backend-api.md`](docs/backend-api.md)，可运行实现在 [`server/`](server/)。
 
-- 技术栈：**uv + FastAPI + SQLite（WAL）+ LiveKit（语音 SFU）**
-- **167 个 REST 端点**（GET 58 / POST 55 / PATCH 21 / DELETE 22 / PUT 11），每条都标注了对应的界面文件与方法
-- **30 类 Gateway 下行事件** + 完整 DDL（50 张表）+ FastAPI 工程结构 + LiveKit token 签发与 webhook 回流
-- 分期：P0「登录→服务器→频道→聊天」55 个 → P1「好友/私信/权限/语音」+64 → P2「论坛/日程/加成/搜索」+48
-- 顺带修掉现存限制：书签改用 `message_id` 引用、自动审核与权限位在服务端真正执行、草稿与折叠状态跨设备
+| 状态 | 内容 |
+| --- | --- |
+| **已实现 70 个端点** | 认证（argon2 + JWT 轮换）、用户与偏好、服务器与模板、分类/频道、消息（分页·幂等·编辑历史·置顶·软删）、回应、转发、附件上传、语音 token 与 LiveKit webhook、Gateway 实时通道、系统信息 |
+| **占位 101 个** | 其余 P1/P2 端点已注册进 OpenAPI，统一 `501` 并在 summary 标注对应文档小节，替换时只需删掉一条 |
+| 数据层 | **50 张表**（SQLAlchemy 2.0 + alembic 初版迁移），SQLite 开 WAL / busy_timeout |
+| 服务端真正执行的规则 | 13 项权限矩阵、自动审核（block 返 422 且不落库 / warn 带 warnings）、至少保留一个文字频道、owner 不能直接离开 |
+| 验证 | `ruff check` 0 error、`pytest` 21 passed、真实起服务跑通「注册→建服→加入→WS 收消息→语音 token」 |
+
+```bash
+cd server
+uv sync
+uv run alembic upgrade head
+uv run uvicorn app.main:app --reload --port 8080   # 文档在 /docs
+uv run python scripts/smoke.py http://127.0.0.1:8080
+```
 
 ---
 
 ## 已知限制
 
-- **无后端**：当前代码没有服务端与多端同步，只有本机 JSON 快照（路径见「数据与存储」）；删除该文件即恢复种子数据。**接入方案见 [`docs/backend-api.md`](docs/backend-api.md)**
+- **客户端还没接后端**：`server/` 已经能跑，但 Rust 客户端仍走本机 JSON 快照（路径见「数据与存储」）；下一步是把 `data/seed.rs` 的读数据与 `app.rs` 的写方法换成 HTTP 调用。删除快照文件即恢复种子数据。设计见 [`docs/backend-api.md`](docs/backend-api.md)
 - **权限位只是演示配置**：13 项权限可切换继承 / 允许 / 拒绝并写入快照与审核日志，但不校验任何真实操作（消息发送、频道访问等不受影响）
 - **无真实文件**：附件选择器是模拟清单，图片卡是占位色块，不读取磁盘、不上传
 - **通话是演示态**：私信语音/视频只切换界面状态，不采集麦克风、摄像头或屏幕内容

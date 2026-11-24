@@ -1,0 +1,65 @@
+"""单进程 WebSocket Hub。
+
+订阅粒度是 server / dm：客户端连上后只收到自己订阅范围内的事件，
+跨服务器的事件不会泄露。多 worker 部署时把 broadcast 换成 Redis pub/sub。
+"""
+
+import asyncio
+import contextlib
+from dataclasses import dataclass, field
+
+from fastapi import WebSocket
+
+from app.ids import new_id
+from app.realtime.events import envelope
+
+
+@dataclass
+class Connection:
+    ws: WebSocket
+    user_id: str
+    key: str = field(default_factory=new_id)
+    servers: set[str] = field(default_factory=set)
+    dms: set[str] = field(default_factory=set)
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    async def send(self, event: str, data: dict) -> None:
+        async with self.lock:
+            with contextlib.suppress(Exception):
+                await self.ws.send_text(envelope(event, data))
+
+
+class Hub:
+    def __init__(self) -> None:
+        self._conns: dict[str, Connection] = {}
+
+    def add(self, conn: Connection) -> None:
+        self._conns[conn.key] = conn
+
+    def remove(self, conn: Connection) -> None:
+        self._conns.pop(conn.key, None)
+
+    @property
+    def size(self) -> int:
+        return len(self._conns)
+
+    def _all(self) -> list[Connection]:
+        return list(self._conns.values())
+
+    async def to_user(self, user_id: str, event: str, data: dict) -> None:
+        for conn in self._all():
+            if conn.user_id == user_id:
+                await conn.send(event, data)
+
+    async def to_server(self, server_id: str, event: str, data: dict) -> None:
+        for conn in self._all():
+            if server_id in conn.servers:
+                await conn.send(event, data)
+
+    async def to_dm(self, dm_id: str, event: str, data: dict) -> None:
+        for conn in self._all():
+            if dm_id in conn.dms:
+                await conn.send(event, data)
+
+
+hub = Hub()
