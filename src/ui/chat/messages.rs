@@ -555,8 +555,10 @@ fn delivery_row(
 
     let readers = message.readers.len();
     let (icon, label) = match message.delivery {
+        DeliveryStatus::Sending => (IconName::Loader, "发送中".to_string()),
         DeliveryStatus::Sent => (IconName::Check, "已发送".to_string()),
         DeliveryStatus::Delivered => (IconName::CheckCheck, "已送达".to_string()),
+        DeliveryStatus::Failed => (IconName::TriangleAlert, "发送失败".to_string()),
         DeliveryStatus::Read => (
             IconName::CheckCheck,
             if readers > 0 {
@@ -1101,22 +1103,25 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
         );
     }
 
-    list.child(scroll).child(
-        h_flex()
-            .h(px(24.))
-            .flex_shrink_0()
-            .px_4()
-            .gap_2()
-            .text_size(px(12.))
-            .text_color(rgb(palette::text_muted()))
-            .child(
-                div()
-                    .w(px(6.))
-                    .h(px(6.))
-                    .rounded_full()
-                    .bg(rgb(palette::success())),
+    list.child(scroll)
+        .when(app.typing_active(), |el| {
+            el.child(
+                h_flex()
+                    .h(px(24.))
+                    .flex_shrink_0()
+                    .px_4()
+                    .gap_2()
+                    .text_size(px(12.))
+                    .text_color(rgb(palette::text_muted()))
+                    .child(
+                        div()
+                            .w(px(6.))
+                            .h(px(6.))
+                            .rounded_full()
+                            .bg(rgb(palette::success())),
+                    )
+                    .child(app.typing_label()),
             )
-            .child(format!("{} 正在输入…", app.session_title())),
-    )
-    .when(unread > 0, |el| el.child(jump_latest_pill(unread, cx)))
+        })
+        .when(unread > 0, |el| el.child(jump_latest_pill(unread, cx)))
 }

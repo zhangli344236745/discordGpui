@@ -9,6 +9,7 @@ pub mod auth;
 pub mod dto;
 pub mod hydrate;
 pub mod worker;
+pub mod ws;
 
 pub use worker::NetClient;
 

@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use async_channel::Receiver;
+
 use gpui_kit::*;
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::{v_flex, Theme, ThemeMode};
@@ -15,7 +17,7 @@ use crate::data::{
     seed_members, seed_messages, seed_servers,
     seed_automod_rules, seed_bans, seed_permissions, seed_stickers, seed_threads, sticker_packs,
     Attachment, AuditEntry, AuditKind, AutoModAction, AutoModRule, BannedUser, Bookmark, Category,
-    Channel, ChannelKind,
+    Channel, ChannelKind, DeliveryStatus,
     ChatThread, DiscoverServer,     DmConversation, EditRevision, EventCategory, ForwardOrigin, ForwardTarget, ForumPost, ForumReply, ForumSort, Friend, FriendRequest,
     FriendTab, Gif, HelpArticle, Invite, InviteExpiry, Member, MessageRequest,
     MessageRequestState, MyProfile,
@@ -30,6 +32,8 @@ use crate::net::dto::{
     ServerDto, ServerTreeDto, UnreadCountsDto, UserDto,
 };
 use crate::net::hydrate::{self, RemoteIndex};
+use crate::net::auth;
+use crate::net::ws::{NetEvent, WsClient};
 use crate::net::{api, NetClient, NetConfig, NetError};
 use crate::ui::theme::palette;
 use crate::ui::{
@@ -106,6 +110,31 @@ impl MessageRequestFilter {
 }
 
 /// 请求状态是否落入某个筛选（供计数与列表共用）。
+fn apply_reaction(message: &mut Message, emoji: &str, add: bool, by_me: bool) {
+    if add {
+        if let Some(reaction) = message.reactions.iter_mut().find(|item| item.emoji == emoji) {
+            reaction.count += 1;
+            if by_me {
+                reaction.mine = true;
+            }
+            return;
+        }
+        message.reactions.push(Reaction {
+            emoji: Box::leak(emoji.to_string().into_boxed_str()),
+            count: 1,
+            mine: by_me,
+        });
+    } else if let Some(reaction) = message.reactions.iter_mut().find(|item| item.emoji == emoji) {
+        reaction.count = reaction.count.saturating_sub(1);
+        if by_me {
+            reaction.mine = false;
+        }
+        if reaction.count == 0 {
+            message.reactions.retain(|item| item.emoji != emoji);
+        }
+    }
+}
+
 fn state_matches_filter(state: MessageRequestState, filter: MessageRequestFilter) -> bool {
     match filter {
         MessageRequestFilter::Pending => state == MessageRequestState::Pending,
@@ -412,6 +441,14 @@ pub struct DiscordApp {
     pub(crate) members_by_server: HashMap<String, Vec<Member>>,
     pub(crate) roles_by_server: HashMap<String, Vec<Role>>,
     pub(crate) permissions_by_server: HashMap<String, Vec<PermissionGrant>>,
+    pub(crate) gateway: Option<WsClient>,
+    pub(crate) gateway_tx: async_channel::Sender<NetEvent>,
+    pub(crate) gateway_connected: bool,
+    pub(crate) last_event_id: Option<String>,
+    pub(crate) loaded_channels: std::collections::HashSet<String>,
+    pub(crate) typing_until: Option<std::time::Instant>,
+    pub(crate) typing_name: Option<String>,
+    pub(crate) last_typing_sent: Option<std::time::Instant>,
 
     // 当前用户资料：账户页可编辑，底部用户栏与设置页预览共用。
     pub(crate) me: MyProfile,
@@ -886,7 +923,10 @@ impl DiscordApp {
         cx.subscribe_in(&composer, window, |this, _, event: &InputEvent, window, cx| {
             match event {
                 InputEvent::PressEnter { secondary: false, .. } => this.send_message(window, cx),
-                InputEvent::Change => this.refresh_mention(cx),
+                InputEvent::Change => {
+                    this.refresh_mention(cx);
+                    this.maybe_send_typing(cx);
+                }
                 _ => {}
             }
         })
@@ -1170,6 +1210,7 @@ impl DiscordApp {
             Ok(config) if !config.demo => (Some(Arc::new(NetClient::spawn(config))), AuthStatus::Checking),
             _ => (None, AuthStatus::Demo),
         };
+        let (gateway_tx, gateway_rx) = async_channel::unbounded();
 
         let mut this = Self {
             view_mode: ViewMode::Server,
@@ -1262,6 +1303,14 @@ impl DiscordApp {
             members_by_server: HashMap::new(),
             roles_by_server: HashMap::new(),
             permissions_by_server: HashMap::new(),
+            gateway: None,
+            gateway_tx,
+            gateway_connected: false,
+            last_event_id: None,
+            loaded_channels: std::collections::HashSet::new(),
+            typing_until: None,
+            typing_name: None,
+            last_typing_sent: None,
             my_status: UserStatus::Online,
             show_status_menu: false,
             me: seed_me(),
@@ -1412,6 +1461,7 @@ impl DiscordApp {
         if this.auth_status == AuthStatus::Checking {
             this.check_health(cx);
         }
+        this.start_event_loop(gateway_rx, cx);
         window.focus(&this.root_focus, cx);
         this
     }
@@ -1952,6 +2002,7 @@ impl DiscordApp {
         self.active_channel = self.first_text_channel().unwrap_or_default();
         self.sync_invite_channel();
         self.reset_session(window, cx);
+        self.ensure_channel_loaded(cx);
     }
 
     /// 切换当前服务器的频道。
@@ -1967,6 +2018,7 @@ impl DiscordApp {
         self.view_mode = ViewMode::Server;
         self.active_channel = name;
         self.reset_session(window, cx);
+        self.ensure_channel_loaded(cx);
     }
 
     /// 打开与某好友的私信。
@@ -2434,6 +2486,7 @@ impl DiscordApp {
         if let Some((ci, chi)) = self.channel_position(&name) {
             self.servers[self.active_server].categories[ci].channels[chi].unread = 0;
         }
+        self.mark_active_channel_read(cx);
         cx.notify();
     }
 
@@ -2990,7 +3043,7 @@ impl DiscordApp {
         // 已发送的文本不再算草稿，清掉侧栏可能的草稿标记。
         let sent_session = self.current_session.clone();
         self.drafts.remove(&sent_session);
-        let mut message = Message::new("你", "刚刚", text, palette::accent());
+        let mut message = Message::new("你", "刚刚", text.clone(), palette::accent());
         if let Some(attachment) = self.attachment_draft.take() {
             message = message.attachment(attachment);
         }
@@ -2998,8 +3051,43 @@ impl DiscordApp {
         if let Some(reply) = self.reply_to.take() {
             message = message.replying_to(reply.author, reply.excerpt);
         }
+
+        let key = self.session_key();
+        let channel_id = self.remote.channels.get(&key).cloned();
+        let online_send = self.is_online() && channel_id.is_some() && !text.is_empty();
+        let nonce = if online_send {
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_millis())
+                .unwrap_or_default();
+            Some(format!("c-{stamp}-{}", self.messages.get(&key).map_or(0, Vec::len)))
+        } else {
+            None
+        };
+        if let Some(nonce) = nonce.clone() {
+            message.client_nonce = Some(nonce);
+            message.delivery = DeliveryStatus::Sending;
+        }
         if let Some(messages) = self.current_messages_mut() {
             messages.push(message);
+        }
+        if let (true, Some(channel_id), Some(nonce), Some(net)) = (
+            online_send,
+            channel_id,
+            nonce,
+            self.net.clone(),
+        ) {
+            let key_for_send = key.clone();
+            cx.spawn(async move |this, cx| {
+                let result = net
+                    .execute(api::send_message(&channel_id, &text, None, Some(&nonce)), true)
+                    .await;
+                let _ = this.update(cx, |app, cx| {
+                    app.finish_send(&key_for_send, &nonce, result);
+                    cx.notify();
+                });
+            })
+            .detach();
         }
         self.mention_prefix = None;
         self.mention_candidates.clear();
@@ -3506,6 +3594,7 @@ impl DiscordApp {
         reaction_index: usize,
         cx: &mut Context<Self>,
     ) {
+        let mut request = None;
         if let Some(messages) = self.current_messages_mut() {
             if let Some(message) = messages.get_mut(index) {
                 if let Some(reaction) = message.reactions.get_mut(reaction_index) {
@@ -3515,8 +3604,27 @@ impl DiscordApp {
                     } else {
                         reaction.count.saturating_sub(1)
                     };
+                    if !message.id.is_empty() {
+                        request = Some((message.id.clone(), reaction.emoji, reaction.mine));
+                    }
                 }
             }
+        }
+        if let (Some((message_id, emoji, mine)), Some(net)) = (request, self.net.clone()) {
+            cx.spawn(async move |this, cx| {
+                let call = if mine {
+                    api::add_reaction(&message_id, emoji)
+                } else {
+                    api::remove_reaction(&message_id, emoji)
+                };
+                if let Err(error) = net.execute(call, true).await {
+                    let _ = this.update(cx, |app, cx| {
+                        app.automod_notice = Some(format!("回应失败：{}", error.user_message()));
+                        cx.notify();
+                    });
+                }
+            })
+            .detach();
         }
         cx.notify();
     }
@@ -3694,8 +3802,23 @@ impl DiscordApp {
 
     /// 置顶/取消置顶当前会话的第 index 条消息。
     pub(crate) fn toggle_pin(&mut self, index: usize, cx: &mut Context<Self>) {
+        let mut request = None;
         if let Some(message) = self.current_messages_mut().and_then(|m| m.get_mut(index)) {
             message.pinned = !message.pinned;
+            if !message.id.is_empty() {
+                request = Some((message.id.clone(), message.pinned));
+            }
+        }
+        if let (Some((id, pinned)), Some(net)) = (request, self.net.clone()) {
+            cx.spawn(async move |this, cx| {
+                if let Err(error) = net.execute(api::pin_message(&id, pinned), true).await {
+                    let _ = this.update(cx, |app, cx| {
+                        app.automod_notice = Some(format!("置顶失败：{}", error.user_message()));
+                        cx.notify();
+                    });
+                }
+            })
+            .detach();
         }
         self.close_message_menu();
         cx.notify();
@@ -4927,6 +5050,11 @@ impl DiscordApp {
     /// 删除当前会话的第 index 条消息；同时迁移该会话里话题的根消息下标。
     pub(crate) fn delete_message(&mut self, index: usize, cx: &mut Context<Self>) {
         let key = self.session_key();
+        let message_id = self
+            .current_messages()
+            .get(index)
+            .map(|message| message.id.clone())
+            .filter(|id| !id.is_empty());
         let removed = self
             .current_messages_mut()
             .is_some_and(|messages| index < messages.len());
@@ -4964,6 +5092,17 @@ impl DiscordApp {
             }
         }
         self.close_message_menu();
+        if let (Some(id), Some(net)) = (message_id, self.net.clone()) {
+            cx.spawn(async move |this, cx| {
+                if let Err(error) = net.execute(api::delete_message(&id), true).await {
+                    let _ = this.update(cx, |app, cx| {
+                        app.automod_notice = Some(format!("删除失败：{}", error.user_message()));
+                        cx.notify();
+                    });
+                }
+            })
+            .detach();
+        }
         cx.notify();
     }
 
@@ -5452,8 +5591,10 @@ impl DiscordApp {
             None => return,
         };
         let text = self.editor.read(cx).value().trim().to_string();
+        let mut target_id = None;
         if !text.is_empty() {
             if let Some(message) = self.current_messages_mut().and_then(|m| m.get_mut(index)) {
+                target_id = (!message.id.is_empty()).then(|| message.id.clone());
                 if message.text != text {
                     // 编辑前先留存旧正文，供消息旁的「已编辑」历史浮层查看。
                     let previous = message.text.clone();
@@ -5461,9 +5602,21 @@ impl DiscordApp {
                         text: previous,
                         time: "刚刚",
                     });
-                    message.text = text;
+                    message.text = text.clone();
                 }
             }
+        }
+        if let (Some(id), Some(net)) = (target_id, self.net.clone()) {
+            let body = text.clone();
+            cx.spawn(async move |this, cx| {
+                if let Err(error) = net.execute(api::edit_message(&id, &body, None), true).await {
+                    let _ = this.update(cx, |app, cx| {
+                        app.automod_notice = Some(format!("编辑失败：{}", error.user_message()));
+                        cx.notify();
+                    });
+                }
+            })
+            .detach();
         }
         self.cancel_edit();
         self.clear_search(window, cx);
@@ -7523,18 +7676,485 @@ impl DiscordApp {
             self.auth_status = AuthStatus::Demo;
             return;
         };
+        let session_file = self
+            .net
+            .as_ref()
+            .map(|net| net.config().session_file.clone());
+        let base = self.net.as_ref().map(|net| net.config().base.clone());
         cx.spawn(async move |this, cx| {
-            let result = net.execute(api::health(), false).await;
+            let health = net.execute(api::health(), false).await;
+            if health.is_err() {
+                let _ = this.update(cx, |app, cx| {
+                    app.auth_status = AuthStatus::Demo;
+                    cx.notify();
+                });
+                return;
+            }
+            let saved = session_file
+                .as_deref()
+                .zip(base.as_deref())
+                .and_then(|(path, base)| auth::load_refresh_token(path, base));
+            if let Some(refresh_token) = saved {
+                net.session().set_refresh_only(refresh_token);
+                if net.refresh().await.is_ok() {
+                    let _ = this.update(cx, |app, cx| {
+                        app.auth_status = AuthStatus::Login;
+                        app.login_busy = false;
+                        app.begin_boot(cx);
+                    });
+                    return;
+                }
+            }
             let _ = this.update(cx, |app, cx| {
-                app.auth_status = if result.is_ok() {
-                    AuthStatus::Login
-                } else {
-                    AuthStatus::Demo
-                };
+                app.auth_status = AuthStatus::Login;
                 cx.notify();
             });
         })
         .detach();
+    }
+
+    pub(crate) fn typing_active(&self) -> bool {
+        self.typing_until
+            .is_some_and(|until| std::time::Instant::now() < until)
+    }
+
+    pub(crate) fn typing_label(&self) -> String {
+        match &self.typing_name {
+            Some(name) => format!("{name} 正在输入…"),
+            None => format!("{} 正在输入…", self.session_title()),
+        }
+    }
+
+    fn maybe_send_typing(&mut self, cx: &mut Context<Self>) {
+        if !self.is_online() || self.view_mode != ViewMode::Server {
+            return;
+        }
+        if self
+            .last_typing_sent
+            .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(3))
+        {
+            return;
+        }
+        let Some(channel_id) = self.remote.channels.get(&self.active_key()).cloned() else {
+            return;
+        };
+        let Some(net) = self.net.clone() else {
+            return;
+        };
+        self.last_typing_sent = Some(std::time::Instant::now());
+        cx.spawn(async move |_this, _cx| {
+            let _ = net.execute(api::typing(&channel_id), true).await;
+        })
+        .detach();
+    }
+
+    fn show_typing(&mut self, name: String, cx: &mut Context<Self>) {
+        self.typing_name = Some(name);
+        self.typing_until = Some(std::time::Instant::now() + std::time::Duration::from_secs(4));
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(4))
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                if !app.typing_active() {
+                    app.typing_until = None;
+                    app.typing_name = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn mark_active_channel_read(&self, cx: &mut Context<Self>) {
+        if !self.is_online() {
+            return;
+        }
+        let Some(net) = self.net.clone() else {
+            return;
+        };
+        let Some(channel_id) = self.remote.channels.get(&self.active_key()).cloned() else {
+            return;
+        };
+        let Some(message_id) = self
+            .current_messages()
+            .last()
+            .map(|message| message.id.clone())
+            .filter(|id| !id.is_empty())
+        else {
+            return;
+        };
+        cx.spawn(async move |_this, _cx| {
+            let _ = net
+                .execute(api::mark_channel_read(&channel_id, &message_id), true)
+                .await;
+        })
+        .detach();
+    }
+
+    fn ensure_channel_loaded(&mut self, cx: &mut Context<Self>) {
+        if !self.is_online() || self.view_mode != ViewMode::Server {
+            return;
+        }
+        let key = self.active_key();
+        if self.loaded_channels.contains(&key) {
+            return;
+        }
+        let Some(channel_id) = self.remote.channels.get(&key).cloned() else {
+            return;
+        };
+        let Some(net) = self.net.clone() else {
+            return;
+        };
+        self.loaded_channels.insert(key.clone());
+        cx.spawn(async move |this, cx| {
+            let result = net
+                .execute_as::<PageDto<MessageDto>>(api::messages(&channel_id, None, 50), true)
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                match result {
+                    Ok(page) => {
+                        let mut incoming: Vec<Message> = page
+                            .items
+                            .iter()
+                            .map(|dto| {
+                                let mut message = hydrate::message_from(dto);
+                                if dto.author.id == app.remote.me_id {
+                                    message.author = "你";
+                                }
+                                message
+                            })
+                            .collect();
+                        let mut existing = app.messages.remove(&key).unwrap_or_default();
+                        for message in incoming.drain(..) {
+                            if !message.id.is_empty()
+                                && let Some(index) =
+                                    existing.iter().position(|item| item.id == message.id)
+                            {
+                                existing[index] = message;
+                            } else {
+                                existing.push(message);
+                            }
+                        }
+                        existing.sort_by(|a, b| a.id.cmp(&b.id));
+                        app.messages.insert(key, existing);
+                        app.mark_active_channel_read(cx);
+                    }
+                    Err(error) => {
+                        app.loaded_channels.remove(&key);
+                        app.automod_notice = Some(format!("加载消息失败：{}", error.user_message()));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn start_event_loop(&mut self, rx: Receiver<NetEvent>, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            while let Ok(event) = rx.recv().await {
+                let _ = this.update(cx, |app, cx| app.handle_net_event(event, cx));
+            }
+        })
+        .detach();
+    }
+
+    fn start_gateway(&mut self, cx: &mut Context<Self>) {
+        self.stop_gateway();
+        let Some(net) = self.net.clone() else {
+            return;
+        };
+        if !net.is_logged_in() {
+            return;
+        }
+        self.gateway = Some(WsClient::start(
+            net.config().clone(),
+            net.session(),
+            self.gateway_tx.clone(),
+            self.last_event_id.clone(),
+        ));
+        cx.notify();
+    }
+
+    fn stop_gateway(&mut self) {
+        if let Some(mut gateway) = self.gateway.take() {
+            gateway.stop();
+        }
+        self.gateway_connected = false;
+    }
+
+    fn refresh_for_gateway(&mut self, cx: &mut Context<Self>) {
+        let Some(net) = self.net.clone() else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let result = net.refresh().await;
+            let _ = this.update(cx, |app, cx| {
+                if result.is_ok() {
+                    app.start_gateway(cx);
+                } else {
+                    app.logout(cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn handle_net_event(&mut self, event: NetEvent, cx: &mut Context<Self>) {
+        match event {
+            NetEvent::Connected => {
+                self.gateway_connected = true;
+                cx.notify();
+            }
+            NetEvent::Disconnected { reason } => {
+                self.gateway_connected = false;
+                if reason.contains("4001") || reason.to_ascii_lowercase().contains("unauthorized") {
+                    self.refresh_for_gateway(cx);
+                }
+                cx.notify();
+            }
+            NetEvent::NeedAuth => self.refresh_for_gateway(cx),
+            NetEvent::Gateway { event, id, data } => {
+                if !id.is_empty() {
+                    if self.last_event_id.as_deref() == Some(id.as_str()) {
+                        return;
+                    }
+                    self.last_event_id = Some(id);
+                }
+                if event == "READY" {
+                    self.gateway_connected = true;
+                    cx.notify();
+                    return;
+                }
+                self.apply_gateway_event(&event, &data, cx);
+            }
+        }
+    }
+
+    fn apply_gateway_event(&mut self, event: &str, data: &serde_json::Value, cx: &mut Context<Self>) {
+        match event {
+            "MESSAGE_CREATE" => {
+                if let Some(dm_id) = data.get("dm_id").and_then(|value| value.as_str()) {
+                    if let Ok(dto) = serde_json::from_value::<crate::net::dto::DmMessageDto>(data.clone()) {
+                        self.insert_dm_message(dm_id, &dto);
+                    }
+                } else if let Ok(dto) = serde_json::from_value::<MessageDto>(data.clone())
+                    && let Some(key) = self.channel_key_for_id(&dto.channel_id)
+                {
+                    self.insert_message(&key, &dto);
+                }
+            }
+            "MESSAGE_UPDATE" => {
+                if let Some(message) = data.get("message")
+                    && let Ok(dto) = serde_json::from_value::<MessageDto>(message.clone())
+                {
+                    if let Some(key) = self.channel_key_for_id(&dto.channel_id) {
+                        self.insert_message(&key, &dto);
+                    } else {
+                        self.replace_message(&dto);
+                    }
+                }
+            }
+            "MESSAGE_DELETE" => {
+                if let Some(id) = data.get("id").and_then(|value| value.as_str()) {
+                    for messages in self.messages.values_mut() {
+                        messages.retain(|message| message.id != id);
+                    }
+                    for messages in self.dm_messages.values_mut() {
+                        messages.retain(|message| message.id != id);
+                    }
+                    self.close_thread_if_deleted(id);
+                }
+            }
+            "MESSAGE_REACTION_ADD" | "MESSAGE_REACTION_REMOVE" => {
+                let Some(message_id) = data.get("message_id").and_then(|value| value.as_str()) else {
+                    return;
+                };
+                let Some(emoji) = data.get("emoji").and_then(|value| value.as_str()) else {
+                    return;
+                };
+                let by_me = data
+                    .get("user_id")
+                    .and_then(|value| value.as_str())
+                    .is_some_and(|user_id| user_id == self.remote.me_id);
+                let add = event == "MESSAGE_REACTION_ADD";
+                for messages in self.messages.values_mut() {
+                    if let Some(message) = messages.iter_mut().find(|message| message.id == message_id) {
+                        apply_reaction(message, emoji, add, by_me);
+                    }
+                }
+                for messages in self.dm_messages.values_mut() {
+                    if let Some(message) = messages.iter_mut().find(|message| message.id == message_id) {
+                        apply_reaction(message, emoji, add, by_me);
+                    }
+                }
+            }
+            "TYPING_START" => {
+                let channel_id = data.get("channel_id").and_then(|value| value.as_str());
+                let active = self.remote.channels.get(&self.active_key()).map(String::as_str);
+                if channel_id.is_some() && channel_id == active {
+                    let user_id = data.get("user_id").and_then(|value| value.as_str()).unwrap_or("");
+                    let name = self
+                        .members
+                        .iter()
+                        .find(|member| {
+                            self.remote
+                                .members
+                                .get(&format!(
+                                    "{}/{}",
+                                    self.servers[self.active_server].name, member.name
+                                ))
+                                .map(String::as_str)
+                                == Some(user_id)
+                        })
+                        .map(|member| member.display().to_string())
+                        .unwrap_or_else(|| "有人".into());
+                    self.show_typing(name, cx);
+                }
+            }
+            "PRESENCE_UPDATE" => {
+                if let Some(user_id) = data.get("user_id").and_then(|value| value.as_str()) {
+                    let status = data
+                        .get("status")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("offline");
+                    let online = !matches!(status, "offline" | "invisible");
+                    let server_name = self
+                        .servers
+                        .get(self.active_server)
+                        .map(|server| server.name.clone())
+                        .unwrap_or_default();
+                    for member in &mut self.members {
+                        let key = format!("{server_name}/{}", member.name);
+                        if self.remote.members.get(&key).map(String::as_str) == Some(user_id) {
+                            member.online = online;
+                        }
+                    }
+                    for friend in &mut self.friends {
+                        if self.remote.friends.get(friend.name).map(String::as_str) == Some(user_id) {
+                            friend.online = online;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        cx.notify();
+    }
+
+    fn channel_key_for_id(&self, channel_id: &str) -> Option<String> {
+        self.remote
+            .channels
+            .iter()
+            .find(|(_, id)| id.as_str() == channel_id)
+            .map(|(key, _)| key.clone())
+    }
+
+    fn insert_message(&mut self, key: &str, dto: &MessageDto) {
+        let mut message = hydrate::message_from(dto);
+        if dto.author.id == self.remote.me_id {
+            message.author = "你";
+        }
+        self.upsert_message(key, message);
+    }
+
+    fn upsert_message(&mut self, key: &str, message: Message) {
+        let list = self.messages.entry(key.to_string()).or_default();
+        if !message.id.is_empty()
+            && let Some(existing) = list.iter_mut().find(|item| item.id == message.id)
+        {
+            *existing = message;
+            return;
+        }
+        if let Some(nonce) = message.client_nonce.clone()
+            && let Some(existing) = list
+                .iter_mut()
+                .find(|item| item.client_nonce.as_deref() == Some(nonce.as_str()))
+        {
+            *existing = message;
+            return;
+        }
+        list.push(message);
+    }
+
+    fn replace_message(&mut self, dto: &MessageDto) {
+        let mut message = hydrate::message_from(dto);
+        if dto.author.id == self.remote.me_id {
+            message.author = "你";
+        }
+        for list in self.messages.values_mut() {
+            if let Some(existing) = list.iter_mut().find(|item| item.id == message.id) {
+                *existing = message;
+                return;
+            }
+        }
+    }
+
+    fn insert_dm_message(&mut self, dm_id: &str, dto: &crate::net::dto::DmMessageDto) {
+        let Some(friend) = self
+            .remote
+            .dms
+            .iter()
+            .find(|(_, id)| id.as_str() == dm_id)
+            .map(|(name, _)| name.clone())
+        else {
+            return;
+        };
+        let mut message = hydrate::dm_message_from(dto);
+        if dto.author.id == self.remote.me_id {
+            message.author = "你";
+        }
+        let list = self.dm_messages.entry(friend.clone()).or_default();
+        if let Some(existing) = list.iter_mut().find(|item| item.id == message.id) {
+            *existing = message;
+        } else {
+            list.push(message);
+        }
+        if let Some(conversation) = self
+            .dm_conversations
+            .iter_mut()
+            .find(|conversation| conversation.friend == friend)
+        {
+            conversation.preview = Box::leak(dto.content.clone().into_boxed_str());
+            if self.active_dm.as_deref() != Some(friend.as_str()) && dto.author.id != self.remote.me_id {
+                conversation.unread += 1;
+            }
+        }
+    }
+
+    fn close_thread_if_deleted(&mut self, _message_id: &str) {}
+
+    fn finish_send(&mut self, key: &str, nonce: &str, result: Result<serde_json::Value, NetError>) {
+        match result {
+            Ok(value) => {
+                let Ok(dto) = serde_json::from_value::<MessageDto>(value) else {
+                    return;
+                };
+                let mut message = hydrate::message_from(&dto);
+                if dto.author.id == self.remote.me_id {
+                    message.author = "你";
+                }
+                if let Some(list) = self.messages.get_mut(key)
+                    && let Some(existing) = list
+                        .iter_mut()
+                        .find(|item| item.client_nonce.as_deref() == Some(nonce))
+                {
+                    *existing = message;
+                }
+            }
+            Err(error) => {
+                if let Some(list) = self.messages.get_mut(key)
+                    && let Some(existing) = list
+                        .iter_mut()
+                        .find(|item| item.client_nonce.as_deref() == Some(nonce))
+                {
+                    existing.delivery = DeliveryStatus::Failed;
+                }
+                self.automod_notice = Some(format!("发送失败：{}", error.user_message()));
+            }
+        }
     }
 
     pub(crate) fn toggle_login_mode(&mut self, cx: &mut Context<Self>) {
@@ -7742,6 +8362,8 @@ impl DiscordApp {
         // 在线模式不展示种子内容；后续阶段逐域填充。
         self.messages.clear();
         let key = self.active_key();
+        self.loaded_channels.clear();
+        self.loaded_channels.insert(key.clone());
         self.messages.insert(key, data.messages);
         self.dm_messages.clear();
         self.threads.clear();
@@ -7770,6 +8392,7 @@ impl DiscordApp {
         self.login_error = None;
         self.current_session = self.session_key();
         self.sync_invite_channel();
+        self.start_gateway(cx);
         cx.notify();
     }
 
@@ -7780,6 +8403,7 @@ impl DiscordApp {
     }
 
     pub(crate) fn logout(&mut self, cx: &mut Context<Self>) {
+        self.stop_gateway();
         let net = self.net.clone();
         self.auth_status = AuthStatus::Login;
         self.login_busy = false;
@@ -7797,6 +8421,7 @@ impl DiscordApp {
         self.friend_groups.clear();
         self.dm_conversations.clear();
         self.active_dm = None;
+        self.loaded_channels.clear();
         self.bookmarks.clear();
         self.notifications_on = true;
         cx.notify();
@@ -8453,3 +9078,4 @@ impl Render for DiscordApp {
             .into_any_element()
     }
 }
+

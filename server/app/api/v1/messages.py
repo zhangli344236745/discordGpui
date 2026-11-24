@@ -165,6 +165,7 @@ async def serialize(db: AsyncSession, msgs: list[Message], viewer_id: str) -> li
                 type=m.msg_type,
                 payload=m.payload,
                 reply_to=m.reply_to,
+                client_nonce=m.client_nonce,
                 pinned=m.pinned,
                 edited_at=m.edited_at.isoformat() if m.edited_at else None,
                 created_at=m.created_at.isoformat(),

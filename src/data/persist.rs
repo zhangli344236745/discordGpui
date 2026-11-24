@@ -378,6 +378,10 @@ impl From<ThreadReplyOwned> for super::models::ThreadReply {
 #[derive(Deserialize)]
 pub struct MessageOwned {
     #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub client_nonce: Option<String>,
+    #[serde(default)]
     pub author: String,
     #[serde(default)]
     pub time: String,
@@ -418,6 +422,8 @@ fn default_delivery() -> super::models::DeliveryStatus {
 impl From<MessageOwned> for super::models::Message {
     fn from(value: MessageOwned) -> Self {
         Self {
+            id: value.id,
+            client_nonce: value.client_nonce,
             author: leak(value.author),
             time: leak(value.time),
             text: value.text,

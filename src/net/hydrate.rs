@@ -14,7 +14,7 @@ use crate::data::{
 };
 
 use super::dto::{
-    ChannelDto, ChannelUnreadDto, DmDto, FriendDto, FriendGroupDto, MemberDto, MessageDto,
+    ChannelDto, ChannelUnreadDto, DmDto, DmMessageDto, FriendDto, FriendGroupDto, MemberDto, MessageDto,
     PermissionMatrixDto, RoleDto, ServerDto, ServerTreeDto, UnreadCountsDto, UserDto,
 };
 
@@ -115,13 +115,14 @@ fn size_label(size: u64) -> &'static str {
     leak(text)
 }
 
-fn message_from(dto: &MessageDto) -> Message {
+pub(crate) fn message_from(dto: &MessageDto) -> Message {
     let mut message = Message::new(
         leak(dto.author.name.clone()),
         short_time(&dto.created_at),
         dto.content.clone(),
         dto.author.color,
     );
+    message.id = dto.id.clone();
     message.pinned = dto.pinned;
     if let Some(attachment) = dto.attachments.first() {
         let kind = if attachment.mime.starts_with("image/") {
@@ -147,6 +148,17 @@ fn message_from(dto: &MessageDto) -> Message {
             });
         }
     }
+    message
+}
+
+pub(crate) fn dm_message_from(dto: &DmMessageDto) -> Message {
+    let mut message = Message::new(
+        leak(dto.author.name.clone()),
+        short_time(&dto.created_at),
+        dto.content.clone(),
+        dto.author.color,
+    );
+    message.id = dto.id.clone();
     message
 }
 
@@ -503,6 +515,7 @@ mod tests {
         assert_eq!(hydrated.members_active[1].display(), "小鲍");
         assert_eq!(hydrated.roles_active.len(), 1);
         assert_eq!(hydrated.permissions_by_server["开发"][0].permission, "MANAGE_ROLES");
+        assert_eq!(hydrated.messages[0].id, "m1");
         assert_eq!(hydrated.messages[0].text, "hello");
         assert_eq!(hydrated.messages[0].time, "10:30");
         assert_eq!(hydrated.index.channels.get("开发/一般").map(String::as_str), Some("ch1"));

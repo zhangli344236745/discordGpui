@@ -208,9 +208,11 @@ pub struct ReplyRef {
 /// 自己发出的消息的送达状态：已发送 → 已送达 → 已读。
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DeliveryStatus {
+    Sending,
     Sent,
     Delivered,
     Read,
+    Failed,
 }
 
 /// 已读回执中的一位读者（Demo 用静态名与时间，不接后端）。
@@ -285,6 +287,12 @@ impl ChatThread {
 #[derive(Clone, Serialize)]
 #[serde(from = "crate::data::persist::MessageOwned")]
 pub struct Message {
+    /// 后端消息 id；本地乐观消息为空，成功后替换。
+    #[serde(default)]
+    pub id: String,
+    /// 幂等重试用的客户端 nonce；仅本地乐观消息使用。
+    #[serde(default)]
+    pub client_nonce: Option<String>,
     #[serde(with = "crate::data::persist::leaked_str")]
     pub author: &'static str,
     #[serde(with = "crate::data::persist::leaked_str")]
@@ -317,6 +325,8 @@ pub struct Message {
 impl Message {
     pub fn new(author: &'static str, time: &'static str, text: impl Into<String>, color: u32) -> Self {
         Self {
+            id: String::new(),
+            client_nonce: None,
             author,
             time,
             text: text.into(),

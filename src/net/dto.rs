@@ -133,6 +133,8 @@ pub struct MessageDto {
     #[serde(default)]
     pub reply_to: Option<String>,
     #[serde(default)]
+    pub client_nonce: Option<String>,
+    #[serde(default)]
     pub pinned: bool,
     #[serde(default)]
     pub edited_at: Option<String>,

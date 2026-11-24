@@ -76,6 +76,7 @@ class MessageOut(BaseModel):
     type: str
     payload: dict | None = None
     reply_to: str | None = None
+    client_nonce: str | None = None
     pinned: bool
     edited_at: str | None
     created_at: str

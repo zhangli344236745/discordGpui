@@ -71,6 +71,17 @@ impl SessionStore {
         *self.inner.lock().expect("session mutex poisoned") = None;
     }
 
+    /// 只有 refresh token（启动自动登录）：access 置空、立即过期，等 worker 刷新。
+    pub fn set_refresh_only(&self, refresh_token: String) {
+        let stored = StoredTokens {
+            access_token: String::new(),
+            refresh_token,
+            token_type: "Bearer".into(),
+            expires_at: Instant::now(),
+        };
+        *self.inner.lock().expect("session mutex poisoned") = Some(stored);
+    }
+
     pub fn is_logged_in(&self) -> bool {
         self.inner.lock().expect("session mutex poisoned").is_some()
     }

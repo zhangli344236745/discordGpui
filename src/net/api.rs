@@ -217,6 +217,11 @@ pub fn edit_message(message_id: &str, content: &str, version: Option<i32>) -> Ap
         .with_body(json!({ "content": content, "version": version }))
 }
 
+pub fn pin_message(message_id: &str, pinned: bool) -> ApiRequest {
+    ApiRequest::new(Method::Put, format!("/api/v1/messages/{message_id}/pin"))
+        .with_body(json!({ "pinned": pinned }))
+}
+
 pub fn delete_message(message_id: &str) -> ApiRequest {
     ApiRequest::new(Method::Delete, format!("/api/v1/messages/{message_id}"))
 }
