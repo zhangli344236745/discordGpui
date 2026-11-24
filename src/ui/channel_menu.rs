@@ -28,7 +28,9 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
 
     let page = menu.page;
     let name = menu.name.clone();
-    let is_voice = app.channel_kind(&name) == Some(ChannelKind::Voice);
+    let kind = app.channel_kind(&name);
+    let is_voice = kind == Some(ChannelKind::Voice);
+    let is_forum = kind == Some(ChannelKind::Forum);
     let unread = app.channel_unread_of(&name);
     let topic = app.channel_topic_of(&name);
     let level = app.channel_notify_of(&name);
@@ -59,7 +61,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
 
     card = match page {
         ChannelMenuPage::Actions => {
-            actions_page(card, name.clone(), is_voice, unread, topic, level, cx)
+            actions_page(card, name.clone(), is_voice, is_forum, unread, topic, level, cx)
         }
         ChannelMenuPage::Notify => notify_page(card, name.clone(), level, resolved, cx),
     };
@@ -91,6 +93,7 @@ fn actions_page(
     card: Div,
     name: String,
     is_voice: bool,
+    is_forum: bool,
     unread: usize,
     topic: String,
     level: NotifyLevel,
@@ -110,6 +113,8 @@ fn actions_page(
                         .child(ico(
                             if is_voice {
                                 IconName::Volume2
+                            } else if is_forum {
+                                IconName::MessageSquare
                             } else {
                                 IconName::Hash
                             },
@@ -130,6 +135,8 @@ fn actions_page(
                         .truncate()
                         .child(if is_voice {
                             String::from("语音频道")
+                        } else if is_forum {
+                            String::from("论坛频道")
                         } else if topic.is_empty() {
                             String::from("暂无频道主题")
                         } else {

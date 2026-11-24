@@ -8,13 +8,14 @@ use gpui_kit::prelude::FluentBuilder as _;
 use crate::data::{
     persist,
     seed_discover_servers, seed_dm_conversations, seed_dm_messages, seed_friend_requests,
-    seed_message_requests, gif_categories, help_categories, seed_friend_groups, seed_friends, seed_gifs,
+    seed_forum_posts, seed_message_requests, gif_categories, help_categories, seed_friend_groups,
+    seed_friends, seed_gifs,
     seed_audit, seed_events, seed_help_articles, seed_invites, seed_me, seed_roles,
     seed_members, seed_messages, seed_servers,
     seed_automod_rules, seed_bans, seed_permissions, seed_stickers, seed_threads, sticker_packs,
     Attachment, AuditEntry, AuditKind, AutoModAction, AutoModRule, BannedUser, Category, Channel,
     ChannelKind,
-    ChatThread, DiscoverServer,     DmConversation, EditRevision, EventCategory, ForwardOrigin, ForwardTarget, Friend, FriendRequest,
+    ChatThread, DiscoverServer,     DmConversation, EditRevision, EventCategory, ForwardOrigin, ForwardTarget, ForumPost, ForumReply, ForumSort, Friend, FriendRequest,
     FriendTab, Gif, HelpArticle, Invite, InviteExpiry, Member, MessageRequest,
     MessageRequestState, MyProfile,
     MemberGroup, Message, Notification, NotificationKind, NotificationTarget, NotifyLevel,
@@ -26,8 +27,8 @@ use crate::data::{
 use crate::ui::theme::palette;
 use crate::ui::{
     category_dialog, category_menu, channel_menu, channel_sidebar, chat, create_dialog, dm_call_panel,
-    dm_sidebar, discover, events_panel, friend_group_dialog, friend_group_menu, friends, help_center,
-    invite_dialog, member_list, member_nick_dialog, message_requests_panel, profile_card,
+    dm_sidebar, discover, events_panel, friend_group_dialog, friend_group_menu, forum, friends,
+    help_center, invite_dialog, member_list, member_nick_dialog, message_requests_panel, profile_card,
     server_menu, server_rail,
     member_menu, search_center, server_settings, settings, status_menu, topic_dialog, voice_room,
     voice_status,
@@ -333,6 +334,20 @@ pub struct DiscordApp {
     pub(crate) show_message_requests: bool,
     pub(crate) message_request_filter: MessageRequestFilter,
     pub(crate) message_request_notice: Option<String>,
+
+    // 论坛频道：帖子表 + 当前打开的帖子 + 搜索/排序 + 发帖/回帖草稿。
+    pub(crate) forum_posts: Vec<ForumPost>,
+    pub(crate) forum_open: Option<String>,
+    pub(crate) forum_sort: ForumSort,
+    pub(crate) forum_query: String,
+    pub(crate) forum_search: Entity<InputState>,
+    pub(crate) show_forum_composer: bool,
+    pub(crate) forum_title_edit: Entity<InputState>,
+    pub(crate) forum_body_edit: Entity<InputState>,
+    pub(crate) forum_tag_edit: Entity<InputState>,
+    pub(crate) forum_tags_draft: Vec<String>,
+    pub(crate) forum_reply_edit: Entity<InputState>,
+    pub(crate) forum_notice: Option<String>,
 
     /// 当前语音连接：(服务器索引, 频道名)；跨会话保持，符合 Discord 行为。
     pub(crate) voice_channel: Option<(usize, String)>,
@@ -777,6 +792,12 @@ impl DiscordApp {
         let poll_option_edit = cx.new(|cx| InputState::new(window, cx).placeholder("添加一个选项"));
         let event_title_edit = cx.new(|cx| InputState::new(window, cx).placeholder("活动标题"));
         let event_desc_edit = cx.new(|cx| InputState::new(window, cx).placeholder("简单介绍一下这个活动…"));
+        // 论坛：搜索 / 发帖标题正文标签 / 回帖输入。
+        let forum_search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索帖子"));
+        let forum_title_edit = cx.new(|cx| InputState::new(window, cx).placeholder("帖子标题"));
+        let forum_body_edit = cx.new(|cx| InputState::new(window, cx).placeholder("详细描述你的问题或想法…"));
+        let forum_tag_edit = cx.new(|cx| InputState::new(window, cx).placeholder("输入标签后回车添加"));
+        let forum_reply_edit = cx.new(|cx| InputState::new(window, cx).placeholder("写下你的回复…"));
         let thread_input = cx.new(|cx| InputState::new(window, cx).placeholder("回复话题…"));
         let root_focus = cx.focus_handle();
 
@@ -891,6 +912,27 @@ impl DiscordApp {
             if matches!(event, InputEvent::Change) {
                 this.forward_query = this.forward_search.read(cx).value().to_string();
                 cx.notify();
+            }
+        })
+        .detach();
+
+        // 论坛：搜索框实时过滤；标签框回车加标签；回帖框回车发送。
+        cx.subscribe_in(&forum_search, window, |this, _, event: &InputEvent, _, cx| {
+            if matches!(event, InputEvent::Change) {
+                this.forum_query = this.forum_search.read(cx).value().trim().to_string();
+                cx.notify();
+            }
+        })
+        .detach();
+        cx.subscribe_in(&forum_tag_edit, window, |this, _, event: &InputEvent, window, cx| {
+            if matches!(event, InputEvent::PressEnter { secondary: false, .. }) {
+                this.add_forum_tag(window, cx);
+            }
+        })
+        .detach();
+        cx.subscribe_in(&forum_reply_edit, window, |this, _, event: &InputEvent, window, cx| {
+            if matches!(event, InputEvent::PressEnter { secondary: false, .. }) {
+                this.send_forum_reply(window, cx);
             }
         })
         .detach();
@@ -1077,6 +1119,18 @@ impl DiscordApp {
             show_message_requests: false,
             message_request_filter: MessageRequestFilter::Pending,
             message_request_notice: None,
+            forum_posts: seed_forum_posts(),
+            forum_open: None,
+            forum_sort: ForumSort::Recent,
+            forum_query: String::new(),
+            forum_search,
+            show_forum_composer: false,
+            forum_title_edit,
+            forum_body_edit,
+            forum_tag_edit,
+            forum_tags_draft: Vec::new(),
+            forum_reply_edit,
+            forum_notice: None,
             voice_channel: None,
             my_status: UserStatus::Online,
             show_status_menu: false,
@@ -1865,6 +1919,11 @@ impl DiscordApp {
         self.event_notice = None;
         self.show_message_requests = false;
         self.message_request_notice = None;
+        self.forum_open = None;
+        self.clear_forum_search(window, cx);
+        self.show_forum_composer = false;
+        self.forum_tags_draft.clear();
+        self.forum_notice = None;
         self.attachment_preview = None;
         self.member_menu = None;
         self.cancel_edit();
@@ -2184,7 +2243,10 @@ impl DiscordApp {
         let Some(name) = self.channel_menu.take().map(|menu| menu.name) else {
             return;
         };
-        if self.channel_kind(&name) != Some(ChannelKind::Text) {
+        if !matches!(
+            self.channel_kind(&name),
+            Some(ChannelKind::Text) | Some(ChannelKind::Forum)
+        ) {
             cx.notify();
             return;
         }
@@ -2266,6 +2328,9 @@ impl DiscordApp {
         let server_name = self.servers[self.active_server].name.clone();
         let key = format!("{server_name}/{}", menu.name);
         self.messages.remove(&key);
+        // 论坛频道的帖子随频道一起清掉。
+        self.forum_posts
+            .retain(|post| !(post.server == server_name && post.channel == menu.name));
         // 指向该频道的邀请失效：撤销掉，免得列表里留下死链接。
         self.invites
             .retain(|invite| !(invite.server == server_name && invite.channel == menu.name));
@@ -2669,6 +2734,7 @@ impl DiscordApp {
         let prefix = format!("{name}/");
         self.messages.retain(|key, _| !key.starts_with(&prefix));
         self.remove_events_of_server(&name);
+        self.remove_forum_posts_of_server(&name);
 
         if leaving_voice {
             self.leave_voice();
@@ -3173,6 +3239,10 @@ impl DiscordApp {
             self.show_create_server = false;
         } else if self.show_create_channel {
             self.show_create_channel = false;
+        } else if self.show_forum_composer {
+            self.close_forum_composer(window, cx);
+        } else if self.forum_open.is_some() {
+            self.close_forum_post(cx);
         } else if self.show_edit_topic {
             self.close_topic_editor();
         } else if self.show_rename_category || self.show_create_category {
@@ -3919,6 +3989,266 @@ impl DiscordApp {
     pub(crate) fn dismiss_message_request_notice(&mut self, cx: &mut Context<Self>) {
         self.message_request_notice = None;
         cx.notify();
+    }
+
+    // -----------------------------------------------------------------------
+    // 论坛频道
+    // -----------------------------------------------------------------------
+
+    /// 当前是否停留在论坛频道（服务器视图 + 当前频道为 Forum）。
+    pub(crate) fn is_forum_view(&self) -> bool {
+        if self.view_mode != ViewMode::Server {
+            return false;
+        }
+        self.channel_kind(&self.active_channel) == Some(ChannelKind::Forum)
+    }
+
+    /// 当前论坛帖子的归属键：(服务器名, 频道名)。
+    fn forum_key(&self) -> (String, String) {
+        (self.active_server_name(), self.active_channel.clone())
+    }
+
+    /// 当前频道下、按搜索词与排序过滤后的帖子（置顶恒定在前）。
+    pub(crate) fn forum_visible_posts(&self) -> Vec<ForumPost> {
+        let (server, channel) = self.forum_key();
+        let query = self.forum_query.to_lowercase();
+        let mut posts: Vec<ForumPost> = self
+            .forum_posts
+            .iter()
+            .filter(|post| post.server == server && post.channel == channel && post.matches(&query))
+            .cloned()
+            .collect();
+        // 未回应筛选：只保留零回帖的帖子。
+        if self.forum_sort == ForumSort::Unanswered {
+            posts.retain(|post| post.reply_count() == 0);
+        }
+        posts.sort_by(|a, b| {
+            // 置顶优先，其次按排序方式。
+            b.pinned
+                .cmp(&a.pinned)
+                .then_with(|| match self.forum_sort {
+                    ForumSort::Recent => a.last_activity().cmp(&b.last_activity()),
+                    ForumSort::Popular => b.reply_count().cmp(&a.reply_count()),
+                    ForumSort::Unanswered => a.minutes_ago.cmp(&b.minutes_ago),
+                })
+        });
+        posts
+    }
+
+    /// 当前打开的帖子详情（按 id 精确查找）。
+    pub(crate) fn forum_open_post(&self) -> Option<ForumPost> {
+        let id = self.forum_open.as_deref()?;
+        self.forum_posts.iter().find(|post| post.id == id).cloned()
+    }
+
+    pub(crate) fn set_forum_sort(&mut self, sort: ForumSort, cx: &mut Context<Self>) {
+        self.forum_sort = sort;
+        cx.notify();
+    }
+
+    pub(crate) fn open_forum_post(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.forum_open = Some(id);
+        self.forum_notice = None;
+        self.forum_reply_edit
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        cx.notify();
+    }
+
+    pub(crate) fn close_forum_post(&mut self, cx: &mut Context<Self>) {
+        self.forum_open = None;
+        self.forum_notice = None;
+        cx.notify();
+    }
+
+    pub(crate) fn toggle_forum_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.is_forum_view() {
+            return;
+        }
+        let opening = !self.show_forum_composer;
+        self.show_forum_composer = opening;
+        self.forum_title_edit
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.forum_body_edit
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.forum_tag_edit
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.forum_tags_draft.clear();
+        self.forum_notice = None;
+        cx.notify();
+    }
+
+    pub(crate) fn close_forum_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_forum_composer = false;
+        self.forum_title_edit
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.forum_body_edit
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.forum_tag_edit
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.forum_tags_draft.clear();
+        cx.notify();
+    }
+
+    /// 发帖弹层里回车添加标签（去重，最多 5 个）。
+    pub(crate) fn add_forum_tag(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let tag = self.forum_tag_edit.read(cx).value().trim().to_string();
+        if tag.is_empty() {
+            return;
+        }
+        if !self.forum_tags_draft.iter().any(|item| item == &tag) {
+            if self.forum_tags_draft.len() >= 5 {
+                self.forum_notice = Some("最多添加 5 个标签".into());
+            } else {
+                self.forum_tags_draft.push(tag);
+            }
+        }
+        self.forum_tag_edit
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        cx.notify();
+    }
+
+    pub(crate) fn remove_forum_tag(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index < self.forum_tags_draft.len() {
+            self.forum_tags_draft.remove(index);
+            cx.notify();
+        }
+    }
+
+    /// 发帖：标题必填，写入当前服务器/频道，成功后自动打开详情。
+    pub(crate) fn create_forum_post(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.is_forum_view() {
+            return;
+        }
+        let title = self.forum_title_edit.read(cx).value().trim().to_string();
+        if title.is_empty() {
+            self.forum_notice = Some("请先填写帖子标题".into());
+            cx.notify();
+            return;
+        }
+        let body = self.forum_body_edit.read(cx).value().trim().to_string();
+        let (server, channel) = self.forum_key();
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .unwrap_or(0);
+        let id = format!("forum-{}-{stamp}", self.active_server);
+        let mut post = ForumPost::new(
+            id.clone(),
+            server,
+            channel,
+            title.clone(),
+            self.me.display_name.clone(),
+            self.me.color,
+            body,
+            0,
+        );
+        post.tags = self.forum_tags_draft.clone();
+        self.forum_posts.push(post);
+        self.log_audit(AuditKind::Channel, "发布了论坛帖子", title.clone());
+        self.close_forum_composer(window, cx);
+        self.forum_open = Some(id);
+        self.forum_notice = Some(format!("帖子「{title}」已发布"));
+        cx.notify();
+    }
+
+    /// 回帖：锁定的帖子不可回复。
+    pub(crate) fn send_forum_reply(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(id) = self.forum_open.clone() else {
+            return;
+        };
+        let body = self.forum_reply_edit.read(cx).value().trim().to_string();
+        if body.is_empty() {
+            return;
+        }
+        let Some(post) = self.forum_posts.iter_mut().find(|post| post.id == id) else {
+            return;
+        };
+        if post.locked {
+            self.forum_notice = Some("帖子已锁定，无法回复".into());
+            cx.notify();
+            return;
+        }
+        post.replies.push(ForumReply::new(
+            self.me.display_name.clone(),
+            self.me.color,
+            body,
+            0,
+        ));
+        self.forum_reply_edit
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.forum_notice = Some("回复已发布".into());
+        cx.notify();
+    }
+
+    pub(crate) fn toggle_forum_pin(&mut self, id: String, cx: &mut Context<Self>) {
+        let mut pinned = false;
+        let mut title = String::new();
+        if let Some(post) = self.forum_posts.iter_mut().find(|post| post.id == id) {
+            post.pinned = !post.pinned;
+            pinned = post.pinned;
+            title = post.title.clone();
+        }
+        if !title.is_empty() {
+            self.log_audit(
+                AuditKind::Channel,
+                if pinned { "置顶了论坛帖子" } else { "取消置顶论坛帖子" },
+                title.clone(),
+            );
+            self.forum_notice = Some(if pinned {
+                format!("已置顶「{title}」")
+            } else {
+                format!("已取消置顶「{title}」")
+            });
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn toggle_forum_lock(&mut self, id: String, cx: &mut Context<Self>) {
+        let mut locked = false;
+        let mut title = String::new();
+        if let Some(post) = self.forum_posts.iter_mut().find(|post| post.id == id) {
+            post.locked = !post.locked;
+            locked = post.locked;
+            title = post.title.clone();
+        }
+        if !title.is_empty() {
+            self.log_audit(
+                AuditKind::Channel,
+                if locked { "锁定了论坛帖子" } else { "解锁了论坛帖子" },
+                title.clone(),
+            );
+            self.forum_notice = Some(if locked {
+                format!("已锁定「{title}」，不再接受回复")
+            } else {
+                format!("已解锁「{title}」")
+            });
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn dismiss_forum_notice(&mut self, cx: &mut Context<Self>) {
+        self.forum_notice = None;
+        cx.notify();
+    }
+
+    pub(crate) fn clear_forum_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.forum_query.clear();
+        self.forum_search
+            .update(cx, |input, cx| input.set_value("", window, cx));
+    }
+
+    /// 删除服务器时清掉其名下所有帖子。
+    pub(crate) fn remove_forum_posts_of_server(&mut self, server: &str) {
+        self.forum_posts.retain(|post| post.server != server);
+    }
+
+    /// 服务器/频道改名时迁移论坛帖子的归属。
+    pub(crate) fn rename_forum_server(&mut self, old: &str, new: &str) {
+        for post in self.forum_posts.iter_mut() {
+            if post.server == old {
+                post.server = new.to_string();
+            }
+        }
     }
 
     /// 删除服务器时清掉其名下所有活动。
@@ -5566,8 +5896,9 @@ impl DiscordApp {
                 }
             }
 
-            // 活动按服务器名归属，改名后同步迁移。
+            // 活动与论坛帖子按服务器名归属，改名后同步迁移。
             self.rename_events_server(&current, &new_name);
+            self.rename_forum_server(&current, &new_name);
 
             let badge = new_name.chars().next().unwrap_or('?').to_string();
             self.servers[index].name = new_name;
@@ -6534,6 +6865,7 @@ impl DiscordApp {
             automod_rules: Some(self.automod_rules.clone()),
             events: Some(self.events.clone()),
             message_requests: Some(self.message_requests.clone()),
+            forum_posts: Some(self.forum_posts.clone()),
             friend_requests: self.friend_requests.clone(),
             blocked_users: self.blocked_users.clone(),
             me: self.me.clone(),
@@ -6633,6 +6965,20 @@ impl DiscordApp {
         if let Some(requests) = saved.message_requests {
             self.message_requests = requests;
         }
+        // 论坛帖子：旧快照没有就保留种子；丢弃指向已不存在频道/服务器的脏记录。
+        if let Some(posts) = saved.forum_posts {
+            self.forum_posts = posts;
+        }
+        self.forum_posts.retain(|post| {
+            self.servers.iter().any(|server| {
+                server.name == post.server
+                    && server.categories.iter().any(|category| {
+                        category.channels.iter().any(|channel| {
+                            channel.name == post.channel && channel.kind == ChannelKind::Forum
+                        })
+                    })
+            })
+        });
         if let Some(selected) = self.selected_automod.take() {
             self.selected_automod = self
                 .automod_rules
@@ -6730,6 +7076,15 @@ impl DiscordApp {
         self.show_message_requests = false;
         self.message_request_filter = MessageRequestFilter::Pending;
         self.message_request_notice = None;
+        self.forum_posts = seed_forum_posts();
+        self.forum_open = None;
+        self.forum_sort = ForumSort::Recent;
+        self.forum_query.clear();
+        self.forum_search
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.show_forum_composer = false;
+        self.forum_tags_draft.clear();
+        self.forum_notice = None;
         self.invites = seed_invites();
         self.invite_copied_code = None;
         self.audit = seed_audit();
@@ -6896,12 +7251,15 @@ impl DiscordApp {
         // 搜索中心接管聊天主区域（服务器栏与侧栏保留，便于边搜边切）。
         let search_open = self.show_search_center
             && matches!(view_mode, ViewMode::Server | ViewMode::DirectMessage);
+        // 论坛频道接管聊天主区域（本身是一张独立的帖子列表页）。
+        let forum_open = self.is_forum_view();
 
         let main = if search_open {
             search_center::render(self, cx).into_any_element()
         } else {
             match view_mode {
                 ViewMode::Friends => friends::render(self, cx).into_any_element(),
+                ViewMode::Server if forum_open => forum::render(self, cx).into_any_element(),
                 ViewMode::Server | ViewMode::DirectMessage | ViewMode::Discover => v_flex()
                     .flex_1()
                     .min_w_0()

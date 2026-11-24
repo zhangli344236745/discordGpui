@@ -135,10 +135,10 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                 } else {
                     name == app.active_channel && app.view_mode != crate::app::ViewMode::DirectMessage
                 };
-                let icon = if channel.kind == ChannelKind::Text {
-                    IconName::Hash
-                } else {
-                    IconName::Volume2
+                let icon = match channel.kind {
+                    ChannelKind::Text => IconName::Hash,
+                    ChannelKind::Voice => IconName::Volume2,
+                    ChannelKind::Forum => IconName::MessageSquare,
                 };
                 let unread = channel.unread;
                 let muted = channel.notify.is_muted();

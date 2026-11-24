@@ -3,9 +3,9 @@ use std::collections::HashMap;
 use super::models::{
     Attachment, AuditEntry, AuditKind, AutoModAction, AutoModRule, BannedUser, Category, Channel,
     ChatThread, DiscoverServer, DmConversation, Friend, FriendRequest, Gif, HelpArticle, Invite,
-    EventCategory, InviteExpiry, Member, Message, MessageRequest, MessageRequestState, MyProfile,
-    NotifyLevel, PermissionGrant, PermissionState, Poll, ReadReceipt, Role, Server, ServerEvent,
-    Sticker, ThreadReply,
+    EventCategory, ForumPost, ForumReply, InviteExpiry, Member, Message, MessageRequest,
+    MessageRequestState, MyProfile, NotifyLevel, PermissionGrant, PermissionState, Poll,
+    ReadReceipt, Role, Server, ServerEvent, Sticker, ThreadReply,
 };
 
 /// 前端模拟服务器数据。
@@ -37,6 +37,13 @@ pub fn seed_servers() -> Vec<Server> {
                         Channel::text("作品展示", "晒一晒最近做的东西")
                             .unread(2)
                             .notify(NotifyLevel::Nothing),
+                    ],
+                },
+                Category {
+                    name: "论坛".into(),
+                    channels: vec![
+                        Channel::forum("问题求助", "提问前先搜索，问题描述尽量完整"),
+                        Channel::forum("作品反馈", "分享作品，理性互评"),
                     ],
                 },
                 Category {
@@ -632,6 +639,80 @@ pub fn seed_message_requests() -> Vec<MessageRequest> {
             visible: false,
             ..MessageRequest::new("已删除的人", 0x80848e, "这条不应该显示", 5000)
         },
+    ]
+}
+
+/// 前端模拟论坛帖子：开发者社区的两个论坛频道，覆盖置顶、热门、未回应与锁定态。
+pub fn seed_forum_posts() -> Vec<ForumPost> {
+    vec![
+        ForumPost::new(
+            "f1",
+            "开发者社区",
+            "问题求助",
+            "GPUI 里输入框回车事件怎么区分主回车和换行？",
+            "阿哲",
+            0x5865f2,
+            "看到 InputEvent::PressEnter 有个 secondary 字段，但不确定主回车和 Shift+Enter 分别对应哪个，求解答。",
+            45,
+        )
+        .tags(&["GPUI", "输入"])
+        .pinned(true)
+        .replies(vec![
+            ForumReply::new("Riven", 0x5865f2, "secondary: false 是主回车，true 是 Shift+Enter。", 40),
+            ForumReply::new("Nova", 0x00a8fc, "项目 agent.md 里也写了这个坑，可以翻一下。", 28),
+        ]),
+        ForumPost::new(
+            "f2",
+            "开发者社区",
+            "问题求助",
+            "浅色主题下自定义控件颜色怎么跟随切换？",
+            "小满",
+            0xfaa61c,
+            "我把颜色写成常量了，切浅色完全没变化，有没有统一的做法？",
+            180,
+        )
+        .tags(&["主题"])
+        .replies(vec![ForumReply::new("Kai", 0xeb459e, "把颜色做成 palette 里的函数，渲染时读取即可。", 120)]),
+        ForumPost::new(
+            "f3",
+            "开发者社区",
+            "问题求助",
+            "有没有推荐的 Rust 异步入门资料？",
+            "Lin",
+            0x57f287,
+            "刚接触 async/await，想找一套系统一点的教程或书。",
+            30,
+        )
+        .tags(&["Rust", "资源"]),
+        ForumPost::new(
+            "f4",
+            "开发者社区",
+            "作品反馈",
+            "做了一个终端里的天气小工具，欢迎拍砖",
+            "Mira",
+            0x00a8fc,
+            "用 Rust 写的，支持 ASCII 图标和七天预报。代码在仓库里，想听听 UI 上的建议。",
+            240,
+        )
+        .tags(&["作品", "Rust"])
+        .replies(vec![
+            ForumReply::new("小满", 0xfaa61c, "配色不错，建议加个亮色模式。", 200),
+            ForumReply::new("阿哲", 0x5865f2, "可以考虑支持 JSON 输出，方便脚本调用。", 150),
+            ForumReply::new("Riven", 0x5865f2, "已收藏，晚上细看。", 90),
+        ]),
+        ForumPost::new(
+            "f5",
+            "开发者社区",
+            "作品反馈",
+            "置顶：反馈区发帖规范（锁定）",
+            "Riven",
+            0x5865f2,
+            "发作品请附上截图与复现步骤；互评请对事不对人。此帖已锁定。",
+            2880,
+        )
+        .tags(&["公告"])
+        .pinned(true)
+        .locked(true),
     ]
 }
 

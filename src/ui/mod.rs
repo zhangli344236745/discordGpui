@@ -10,6 +10,7 @@ pub mod dm_sidebar;
 pub mod events_panel;
 pub mod friend_group_dialog;
 pub mod friend_group_menu;
+pub mod forum;
 pub mod friends;
 pub mod help_center;
 pub mod invite_dialog;

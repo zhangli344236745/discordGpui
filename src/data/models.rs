@@ -465,6 +465,8 @@ impl UserStatus {
 pub enum ChannelKind {
     Text,
     Voice,
+    /// 论坛频道：不承载聊天消息，而是展示可按标签/热度排序的帖子列表。
+    Forum,
 }
 
 /// 频道通知级别。`Inherit` 表示跟随服务器默认，其余三级各自生效。
@@ -551,6 +553,16 @@ impl Channel {
             kind: ChannelKind::Voice,
             unread: 0,
             topic: String::new(),
+            notify: NotifyLevel::Inherit,
+        }
+    }
+
+    pub fn forum(name: &str, topic: &str) -> Self {
+        Self {
+            name: name.into(),
+            kind: ChannelKind::Forum,
+            unread: 0,
+            topic: topic.into(),
             notify: NotifyLevel::Inherit,
         }
     }
@@ -1686,6 +1698,156 @@ impl MyProfile {
     }
 }
 
+/// 论坛帖子的排序方式。
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub enum ForumSort {
+    /// 最近活动优先（按最后一条回帖时间）。
+    Recent,
+    /// 最多回应优先。
+    Popular,
+    /// 只看还没有回应的帖子。
+    Unanswered,
+}
+
+impl ForumSort {
+    pub fn label(self) -> &'static str {
+        match self {
+            ForumSort::Recent => "最新",
+            ForumSort::Popular => "最热",
+            ForumSort::Unanswered => "未回应",
+        }
+    }
+}
+
+/// 论坛帖子的一条回帖（纯 Demo，作者用自有字符串，不走 leak 镜像）。
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ForumReply {
+    pub author: String,
+    pub color: u32,
+    pub body: String,
+    /// 回帖距今分钟数，用于相对时间与「最后活动」排序。
+    pub minutes_ago: u32,
+}
+
+impl ForumReply {
+    pub fn new(author: impl Into<String>, color: u32, body: impl Into<String>, minutes_ago: u32) -> Self {
+        Self {
+            author: author.into(),
+            color,
+            body: body.into(),
+            minutes_ago,
+        }
+    }
+}
+
+/// 论坛频道里的一个帖子。归属用 `server` + `channel` 两个字符串标记，
+/// 字段全部为自有字符串，快照可直接派生 serde、不需要 Owned 镜像。
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ForumPost {
+    pub id: String,
+    pub server: String,
+    pub channel: String,
+    pub title: String,
+    pub author: String,
+    pub color: u32,
+    pub body: String,
+    /// 自由标签（Demo 里用逗号分隔输入）。
+    pub tags: Vec<String>,
+    pub minutes_ago: u32,
+    pub pinned: bool,
+    pub locked: bool,
+    pub replies: Vec<ForumReply>,
+}
+
+impl ForumPost {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        id: impl Into<String>,
+        server: impl Into<String>,
+        channel: impl Into<String>,
+        title: impl Into<String>,
+        author: impl Into<String>,
+        color: u32,
+        body: impl Into<String>,
+        minutes_ago: u32,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            server: server.into(),
+            channel: channel.into(),
+            title: title.into(),
+            author: author.into(),
+            color,
+            body: body.into(),
+            tags: Vec::new(),
+            minutes_ago,
+            pinned: false,
+            locked: false,
+            replies: Vec::new(),
+        }
+    }
+
+    pub fn tags(mut self, tags: &[&str]) -> Self {
+        self.tags = tags.iter().map(|tag| tag.to_string()).collect();
+        self
+    }
+
+    pub fn replies(mut self, replies: Vec<ForumReply>) -> Self {
+        self.replies = replies;
+        self
+    }
+
+    pub fn pinned(mut self, pinned: bool) -> Self {
+        self.pinned = pinned;
+        self
+    }
+
+    pub fn locked(mut self, locked: bool) -> Self {
+        self.locked = locked;
+        self
+    }
+
+    /// 相对时间标签：分钟 / 小时 / 天。
+    pub fn time_label(&self) -> String {
+        relative_label(self.minutes_ago)
+    }
+
+    pub fn reply_count(&self) -> usize {
+        self.replies.len()
+    }
+
+    /// 最后活动时间：有回帖则取最近的一条，否则用发帖时间。
+    pub fn last_activity(&self) -> u32 {
+        self.replies
+            .iter()
+            .map(|reply| reply.minutes_ago)
+            .min()
+            .unwrap_or(self.minutes_ago)
+            .min(self.minutes_ago)
+    }
+
+    /// 搜索匹配：标题、正文、作者与标签都参与（query 已转小写）。
+    pub fn matches(&self, query: &str) -> bool {
+        if query.is_empty() {
+            return true;
+        }
+        self.title.to_lowercase().contains(query)
+            || self.body.to_lowercase().contains(query)
+            || self.author.to_lowercase().contains(query)
+            || self.tags.iter().any(|tag| tag.to_lowercase().contains(query))
+    }
+}
+
+/// 分钟数转相对时间标签（发帖与回帖共用）。
+fn relative_label(minutes: u32) -> String {
+    match minutes {
+        0..=1 => "刚刚".into(),
+        2..=59 => format!("{} 分钟前", minutes),
+        60..=1439 => format!("{} 小时前", minutes / 60),
+        _ => format!("{} 天前", minutes / 1440),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 反序列化：静态字符串字段让 serde 派生会给 `Deserialize` 加上 `'de: 'static`，
 // 无法从普通字符串解析。因此这些类型手写 `Deserialize`，先解析 persist 层的
@@ -1956,5 +2118,26 @@ mod tests {
         };
         assert!(!deleted.is_pending());
         assert_eq!(deleted.time_label(), "3 天前");
+    }
+
+    #[test]
+    fn forum_post_activity_search_and_time() {
+        let mut post = ForumPost::new("p1", "S", "求助", "如何配置", "Riven", 0, "正文", 120)
+            .tags(&["Rust", "构建"]);
+        assert_eq!(post.time_label(), "2 小时前");
+        assert_eq!(post.reply_count(), 0);
+        assert_eq!(post.last_activity(), 120);
+        assert!(post.matches("rust"));
+        assert!(post.matches("构建"));
+        assert!(post.matches("riven"));
+        assert!(!post.matches("不存在"));
+
+        post.replies.push(ForumReply::new("Kai", 0, "看文档", 30));
+        assert_eq!(post.reply_count(), 1);
+        // 最后活动取最新的回帖（距今分钟数最小）。
+        assert_eq!(post.last_activity(), 30);
+        assert_eq!(ForumSort::Recent.label(), "最新");
+        assert_eq!(ForumSort::Popular.label(), "最热");
+        assert_eq!(ForumSort::Unanswered.label(), "未回应");
     }
 }

@@ -15,9 +15,9 @@ use gpui_kit::{rgb, Rgba};
 use serde::{Deserialize, Serialize, Serializer};
 
 use super::models::{
-    AuditEntry, AutoModRule, BannedUser, ChatThread, DmConversation, Friend, FriendRequest, Invite,
-    InviteExpiry, Member, Message, MessageRequest, MyProfile, PermissionGrant, Role, Server,
-    ServerEvent, UserStatus,
+    AuditEntry, AutoModRule, BannedUser, ChatThread, DmConversation, ForumPost, Friend,
+    FriendRequest, Invite, InviteExpiry, Member, Message, MessageRequest, MyProfile,
+    PermissionGrant, Role, Server, ServerEvent, UserStatus,
 };
 
 /// 快照版本号；字段语义变化时递增，加载端按需丢弃旧数据。
@@ -68,6 +68,9 @@ pub struct Snapshot {
     /// 私信消息请求。旧快照缺字段时保留种子请求。
     #[serde(default)]
     pub message_requests: Option<Vec<MessageRequest>>,
+    /// 论坛帖子。旧快照缺字段时保留种子帖子。
+    #[serde(default)]
+    pub forum_posts: Option<Vec<ForumPost>>,
     /// 好友分组的顺序（只存分组名，成员关系在 `Friend.group` 上）。
     #[serde(default)]
     pub friend_groups: Vec<String>,
@@ -564,6 +567,7 @@ mod tests {
             automod_rules: Some(crate::data::seed_automod_rules()),
             events: Some(crate::data::seed_events()),
             message_requests: Some(crate::data::seed_message_requests()),
+            forum_posts: Some(crate::data::seed_forum_posts()),
             audit: Some(crate::data::seed_audit()),
             bans: Some(crate::data::seed_bans()),
             me: crate::data::seed_me(),
@@ -619,6 +623,18 @@ mod tests {
         assert_eq!(req_after[0].state, req_before[0].state);
         assert_eq!(req_after[0].visible, req_before[0].visible);
         assert_eq!(req_after[0].minutes_ago, req_before[0].minutes_ago);
+
+        // 论坛帖子：归属频道 / 标签 / 回帖 / 置顶锁定状态都要完整往返。
+        let forum_before = snapshot.forum_posts.clone().unwrap_or_default();
+        let forum_after = back.forum_posts.clone().unwrap_or_default();
+        assert_eq!(forum_after.len(), forum_before.len());
+        assert_eq!(forum_after[0].channel, forum_before[0].channel);
+        assert_eq!(forum_after[0].title, forum_before[0].title);
+        assert_eq!(forum_after[0].tags, forum_before[0].tags);
+        assert_eq!(forum_after[0].pinned, forum_before[0].pinned);
+        assert_eq!(forum_after[0].locked, forum_before[0].locked);
+        assert_eq!(forum_after[0].replies.len(), forum_before[0].replies.len());
+        assert_eq!(forum_after[0].replies[0].body, forum_before[0].replies[0].body);
 
         // 好友分组：顺序表与成员身上的分组名都要能完整往返。
         assert_eq!(back.friend_groups, snapshot.friend_groups);

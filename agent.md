@@ -51,6 +51,7 @@ src/
     ├── dm_sidebar.rs         # 私信侧栏（真实搜索框 + 好友入口 + 会话列表 + 发起对话）
     ├── friends.rs            # 好友页（在线/待处理/全部/已屏蔽/添加好友 五个标签，点击发起私信）
     ├── help_center.rs        # 帮助中心浮层（标题栏 ? 打开：左侧分类导航 + 关键词搜索 + 文档列表 / 详情）
+    ├── forum.rs              # 论坛频道页（帖子列表/搜索排序 + 帖子详情回帖 + 发帖弹层，接管聊天主区域）
     ├── user_footer.rs        # 侧栏底部用户控制条（频道栏/私信栏共用）
     ├── member_list.rs        # 成员栏视图（按角色分组 + 折叠 + 点击成员弹资料卡 + 右键上下文菜单）
     ├── member_menu.rs        # 成员上下文菜单（资料卡/私信/提及/复制名/屏蔽，光标锚点 + 透明遮罩）
@@ -82,10 +83,12 @@ src/
 
 `app.rs` 中的 `ViewMode` 决定主布局：
 
-- `Server`：服务器栏 + 频道侧栏 + 聊天区 + 成员栏。
+- `Server`：服务器栏 + 频道侧栏 + 聊天区 + 成员栏。当前频道为 `ChannelKind::Forum` 时，聊天区由 `ui/forum.rs` 接管（帖子列表 / 详情，成员栏仍保留）。
 - `DirectMessage`：服务器栏 + 私信侧栏 + 聊天区（无成员栏），标题用 `@好友名`。
 - `Friends`：服务器栏 + 私信侧栏 + 好友页。
 - `Discover`：服务器栏 + 探索页（独立整屏页面，不渲染频道/私信侧栏与成员栏；`render_main` 在最前面单独分支返回）。
+
+论坛频道是第三种频道类型，不承载聊天消息（`messages` 表无对应键），帖子单独存在 `forum_posts` 表里，归属用 `server` + `channel` 两个字符串标记。渲染分发在 `render_main` 的 `main` 分支里通过 `is_forum_view()` 判断。
 
 另有全屏覆盖层「用户设置页」与「服务器设置页」，由 `app::show_settings` / `app::show_server_settings` 控制，都不占用 `ViewMode`：用户设置页由底部齿轮 `open_settings` 打开（X `close_settings`），服务器设置页由服务器菜单「服务器设置」`open_server_settings` 打开（X `close_server_settings`）。两者互斥，`Render::render` 的分发顺序是 `show_server_settings` → `show_settings` → 主界面。设置页状态集中在 `app.rs`（`SettingsSection` / `ThemeChoice` / 各开关字段），`ui/settings` 只渲染。`show_timestamps` / `show_emoji` / `compact_messages` 已在 `chat/messages.rs` 真正生效。
 
@@ -520,6 +523,14 @@ gpui_kit::application()
 - ⚠️ 借用坑：`accept/ignore/delete` 里持有 `message_requests.iter_mut()` 的可变引用时不能调 `self.log_audit()`——先用作用域块/元组取出 owned 字段并释放借用，再调用其它 `&mut self` 方法。`accept_message_request` 把 sender 用 `Box::leak` 转 `&'static str` 后建 `DmConversation` + 空 `dm_messages`，再 `open_dm` 切入，形成「接受→真正开始私信」闭环。
 - 互斥与清理：`toggle_message_requests` 关 pins/inbox/events；`toggle_pins`/`toggle_inbox`/`toggle_events` 反向关；`reset_session` 与 `close_top_overlay`（Esc）收起并清提示。入口在 `ui/dm_sidebar.rs` 好友入口下的 `dm-requests-entry`（`IconName::Inbox` + 待处理角标，仅常规模式显示）。
 - 视图 `ui/message_requests_panel.rs`：右侧 360px 全高浮层；`filter_chip` 三态筛选带计数；卡片展示头像/名字/状态徽标/相对时间/预览，`pending` 才有「接受/忽略」，三态都有删除；卡片自身不挂 `on_click`（避免与按钮点击冒泡冲突）。
+
+### 论坛频道约定
+- 频道类型：`ChannelKind` 新增 `Forum` 变体（第三种），`Channel::forum(name, topic)` 构造。Forum 频道不进 `messages` 表（转发/搜索/邀请落地页仍只筛 `ChannelKind::Text`），侧栏/频道菜单图标均为 `IconName::MessageSquare`。
+- 数据：`data::ForumPost { id, server, channel, title, author, color, body, tags, minutes_ago, pinned, locked, replies }` + `ForumReply { author, color, body, minutes_ago }`，字段全为自有 `String`/`u32`/`bool`，**serde 直接派生、无需 Owned 镜像**（和 `MessageRequest` 一样）。`ForumSort {Recent,Popular,Unanswered}`（label：最新/最热/未回应，⚠️ 带 `Debug` 供筛选 chip 的 `id` 格式化）。方法 `time_label/relative_label/reply_count/last_activity（有回帖取最小 minutes_ago）/matches(query 已转小写)`。
+- 种子 `seed_forum_posts()`：开发者社区两个论坛频道 5 帖，覆盖置顶、多回帖热门、未回应、锁定态。`Snapshot.forum_posts: Option<Vec<ForumPost>>`，旧快照缺字段保留种子；`restore_state` 会 `retain` 掉归属频道已不存在或不是 Forum 的脏帖。
+- app 字段：`forum_posts/forum_open(帖子 id)/forum_sort/forum_query+forum_search(Entity)/show_forum_composer/forum_title_edit+forum_body_edit+forum_tag_edit+forum_reply_edit/forum_tags_draft/forum_notice`。方法 `is_forum_view()`（Server 视图 + 当前频道 kind==Forum）/`forum_key()→(server,channel)`/`forum_visible_posts()`（按归属+搜索过滤，置顶恒定在前，再按排序）/ `forum_open_post/open_forum_post/close_forum_post/set_forum_sort/toggle_forum_composer/close_forum_composer/add_forum_tag/remove_forum_tag/create_forum_post/send_forum_reply/toggle_forum_pin/toggle_forum_lock/dismiss_forum_notice/clear_forum_search` + 迁移清理 `remove_forum_posts_of_server/rename_forum_server`。发帖/回帖/置顶/锁定写 `AuditKind::Channel` 日志。⚠️ `open_forum_post` 要传 `window` 给 `set_value`。
+- 渲染：`render_main` 的 `main` 分支里 `ViewMode::Server if is_forum_view()` → `forum::render`（在 search_center 分支之后）；成员栏仍显示。搜索中心输入订阅用 `InputEvent::Change` 同步 `forum_query`；标签/回帖框订阅 `PressEnter` 回车提交。`reset_session` 与 `close_top_overlay`（Esc：先发帖弹层→再帖子详情）清理论坛状态。
+- 视图 `ui/forum.rs`：需 `use gpui_kit::prelude::FluentBuilder as _`（`.when()`）。列表页固定 96px 头部（搜索框 + 排序 chips）+ 可滚动帖卡，`.id("forum-list-scroll")`；详情页绝对定位覆盖，含返回/置顶/锁定按钮、正文、回帖列表、回帖输入（锁定时换成只读提示条）；发帖弹层居中模态，遮罩与卡片是兄弟节点（`Rc` 复用取消闭包）。锁定/置顶图标用 `Shield`/`Pin`（assets 里无 Lock 图标，别用 `IconName::Lock`）。
 
 ### 主题切换约定
 
