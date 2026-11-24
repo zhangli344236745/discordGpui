@@ -8,14 +8,15 @@ use gpui_kit::prelude::FluentBuilder as _;
 use crate::data::{
     persist,
     seed_discover_servers, seed_dm_conversations, seed_dm_messages, seed_friend_requests,
-    gif_categories, help_categories, seed_friend_groups, seed_friends, seed_gifs,
+    seed_message_requests, gif_categories, help_categories, seed_friend_groups, seed_friends, seed_gifs,
     seed_audit, seed_events, seed_help_articles, seed_invites, seed_me, seed_roles,
     seed_members, seed_messages, seed_servers,
     seed_automod_rules, seed_bans, seed_permissions, seed_stickers, seed_threads, sticker_packs,
     Attachment, AuditEntry, AuditKind, AutoModAction, AutoModRule, BannedUser, Category, Channel,
     ChannelKind,
     ChatThread, DiscoverServer,     DmConversation, EditRevision, EventCategory, ForwardOrigin, ForwardTarget, Friend, FriendRequest,
-    FriendTab, Gif, HelpArticle, Invite, InviteExpiry, Member, MyProfile,
+    FriendTab, Gif, HelpArticle, Invite, InviteExpiry, Member, MessageRequest,
+    MessageRequestState, MyProfile,
     MemberGroup, Message, Notification, NotificationKind, NotificationTarget, NotifyLevel,
     PermissionGrant, PermissionState, Poll, Reaction,
     ReadReceipt,
@@ -26,7 +27,7 @@ use crate::ui::theme::palette;
 use crate::ui::{
     category_dialog, category_menu, channel_menu, channel_sidebar, chat, create_dialog, dm_call_panel,
     dm_sidebar, discover, events_panel, friend_group_dialog, friend_group_menu, friends, help_center,
-    invite_dialog, member_list, member_nick_dialog, profile_card,
+    invite_dialog, member_list, member_nick_dialog, message_requests_panel, profile_card,
     server_menu, server_rail,
     member_menu, search_center, server_settings, settings, status_menu, topic_dialog, voice_room,
     voice_status,
@@ -59,6 +60,33 @@ impl EventFilter {
             EventFilter::Live => "进行中",
             EventFilter::Ended => "已结束",
         }
+    }
+}
+
+/// 消息请求面板的处理状态筛选。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MessageRequestFilter {
+    Pending,
+    Accepted,
+    Ignored,
+}
+
+impl MessageRequestFilter {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            MessageRequestFilter::Pending => "待处理",
+            MessageRequestFilter::Accepted => "已接受",
+            MessageRequestFilter::Ignored => "已忽略",
+        }
+    }
+}
+
+/// 请求状态是否落入某个筛选（供计数与列表共用）。
+fn state_matches_filter(state: MessageRequestState, filter: MessageRequestFilter) -> bool {
+    match filter {
+        MessageRequestFilter::Pending => state == MessageRequestState::Pending,
+        MessageRequestFilter::Accepted => state == MessageRequestState::Accepted,
+        MessageRequestFilter::Ignored => state == MessageRequestState::Ignored,
     }
 }
 
@@ -299,6 +327,12 @@ pub struct DiscordApp {
     pub(crate) event_category: EventCategory,
     pub(crate) event_starts_in: i32,
     pub(crate) event_duration: u32,
+
+    // 私信消息请求：请求表 + 面板显隐 + 状态筛选 + 操作提示。
+    pub(crate) message_requests: Vec<MessageRequest>,
+    pub(crate) show_message_requests: bool,
+    pub(crate) message_request_filter: MessageRequestFilter,
+    pub(crate) message_request_notice: Option<String>,
 
     /// 当前语音连接：(服务器索引, 频道名)；跨会话保持，符合 Discord 行为。
     pub(crate) voice_channel: Option<(usize, String)>,
@@ -1039,6 +1073,10 @@ impl DiscordApp {
             event_category: EventCategory::Community,
             event_starts_in: 60,
             event_duration: 60,
+            message_requests: seed_message_requests(),
+            show_message_requests: false,
+            message_request_filter: MessageRequestFilter::Pending,
+            message_request_notice: None,
             voice_channel: None,
             my_status: UserStatus::Online,
             show_status_menu: false,
@@ -1564,6 +1602,7 @@ impl DiscordApp {
         if self.show_inbox {
             self.show_pins = false;
             self.show_events = false;
+            self.show_message_requests = false;
             self.close_thread(); self.close_read_receipts(); self.close_edit_history();
             self.show_status_menu = false;
         }
@@ -1824,6 +1863,8 @@ impl DiscordApp {
         self.show_events = false;
         self.show_event_create = false;
         self.event_notice = None;
+        self.show_message_requests = false;
+        self.message_request_notice = None;
         self.attachment_preview = None;
         self.member_menu = None;
         self.cancel_edit();
@@ -3153,6 +3194,8 @@ impl DiscordApp {
             self.show_pins = false;
         } else if self.show_events {
             self.close_events(cx);
+        } else if self.show_message_requests {
+            self.close_message_requests(cx);
         } else if self.show_inbox {
             self.show_inbox = false;
         } else if self.show_status_menu {
@@ -3589,6 +3632,7 @@ impl DiscordApp {
         if self.show_events {
             self.show_pins = false;
             self.show_inbox = false;
+            self.show_message_requests = false;
             self.event_notice = None;
         } else {
             self.show_event_create = false;
@@ -3744,6 +3788,136 @@ impl DiscordApp {
 
     pub(crate) fn dismiss_event_notice(&mut self, cx: &mut Context<Self>) {
         self.event_notice = None;
+        cx.notify();
+    }
+
+    // ---------------------------- 消息请求 ----------------------------
+
+    /// 待处理请求数（侧栏角标用）。
+    pub(crate) fn pending_request_count(&self) -> usize {
+        self.message_requests.iter().filter(|r| r.is_pending()).count()
+    }
+
+    /// 某个筛选下的请求数（chip 计数用）。
+    pub(crate) fn request_count_for(&self, filter: MessageRequestFilter) -> usize {
+        self.message_requests
+            .iter()
+            .filter(|r| r.visible && state_matches_filter(r.state, filter))
+            .count()
+    }
+
+    /// 当前筛选下可见的请求（按收到时间升序，越早越靠前）。
+    pub(crate) fn visible_message_requests(&self) -> Vec<&MessageRequest> {
+        let mut items: Vec<&MessageRequest> = self
+            .message_requests
+            .iter()
+            .filter(|r| r.visible && state_matches_filter(r.state, self.message_request_filter))
+            .collect();
+        items.sort_by_key(|r| r.minutes_ago);
+        items
+    }
+
+    /// 打开/关闭消息请求面板（与 pins/inbox/events 互斥）。
+    pub(crate) fn toggle_message_requests(&mut self, cx: &mut Context<Self>) {
+        self.show_message_requests = !self.show_message_requests;
+        if self.show_message_requests {
+            self.show_pins = false;
+            self.show_inbox = false;
+            self.show_events = false;
+            self.message_request_notice = None;
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn close_message_requests(&mut self, cx: &mut Context<Self>) {
+        self.show_message_requests = false;
+        self.message_request_notice = None;
+        cx.notify();
+    }
+
+    pub(crate) fn set_message_request_filter(
+        &mut self,
+        filter: MessageRequestFilter,
+        cx: &mut Context<Self>,
+    ) {
+        self.message_request_filter = filter;
+        cx.notify();
+    }
+
+    /// 接受请求：标记已接受，真正建立私信会话并切入（复用 start_dm）。
+    pub(crate) fn accept_message_request(
+        &mut self,
+        sender: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // 先把请求里的字段取成 owned，释放可变借用后再调用其它 &mut self 方法。
+        let (color, preview) = {
+            let Some(request) = self
+                .message_requests
+                .iter_mut()
+                .find(|r| r.sender == sender && r.visible)
+            else {
+                return;
+            };
+            request.state = MessageRequestState::Accepted;
+            (request.color, request.preview.clone())
+        };
+        self.log_audit(AuditKind::Member, "接受了私信请求", sender.clone());
+        self.message_request_notice = Some(format!("已接受 {sender} 的私信请求"));
+        // 把请求里的预览与颜色带入新会话（若会话不存在）。
+        if !self.dm_conversations.iter().any(|c| c.friend == sender) {
+            let friend: &'static str = Box::leak(sender.clone().into_boxed_str());
+            self.dm_conversations.push(DmConversation {
+                friend,
+                color,
+                online: false,
+                unread: 0,
+                preview: Box::leak(preview.into_boxed_str()),
+            });
+            self.dm_messages.entry(sender.clone()).or_default();
+        }
+        let friend: &'static str = Box::leak(sender.clone().into_boxed_str());
+        self.show_message_requests = false;
+        self.open_dm(friend.to_string(), window, cx);
+    }
+
+    /// 忽略请求：标记已忽略，不再计入待处理角标。
+    pub(crate) fn ignore_message_request(&mut self, sender: String, cx: &mut Context<Self>) {
+        {
+            let Some(request) = self
+                .message_requests
+                .iter_mut()
+                .find(|r| r.sender == sender && r.visible)
+            else {
+                return;
+            };
+            request.state = MessageRequestState::Ignored;
+        }
+        self.log_audit(AuditKind::Member, "忽略了私信请求", sender.clone());
+        self.message_request_notice = Some(format!("已忽略 {sender} 的私信请求"));
+        cx.notify();
+    }
+
+    /// 删除请求：标记不可见（不物理删除，保留审计一致性）。
+    pub(crate) fn delete_message_request(&mut self, sender: String, cx: &mut Context<Self>) {
+        {
+            let Some(request) = self
+                .message_requests
+                .iter_mut()
+                .find(|r| r.sender == sender && r.visible)
+            else {
+                return;
+            };
+            request.visible = false;
+        }
+        self.log_audit(AuditKind::Member, "删除了私信请求", sender.clone());
+        self.message_request_notice = Some("请求已删除".into());
+        cx.notify();
+    }
+
+    pub(crate) fn dismiss_message_request_notice(&mut self, cx: &mut Context<Self>) {
+        self.message_request_notice = None;
         cx.notify();
     }
 
@@ -4208,6 +4382,7 @@ impl DiscordApp {
         if self.show_pins {
             self.show_inbox = false;
             self.show_events = false;
+            self.show_message_requests = false;
             self.close_thread(); self.close_read_receipts(); self.close_edit_history();
         }
         self.profile_target = None;
@@ -6358,6 +6533,7 @@ impl DiscordApp {
             permissions: Some(self.role_permissions.clone()),
             automod_rules: Some(self.automod_rules.clone()),
             events: Some(self.events.clone()),
+            message_requests: Some(self.message_requests.clone()),
             friend_requests: self.friend_requests.clone(),
             blocked_users: self.blocked_users.clone(),
             me: self.me.clone(),
@@ -6453,6 +6629,10 @@ impl DiscordApp {
                 .iter()
                 .any(|server| server.name == event.server)
         });
+        // 私信请求：旧快照没有就保留种子。
+        if let Some(requests) = saved.message_requests {
+            self.message_requests = requests;
+        }
         if let Some(selected) = self.selected_automod.take() {
             self.selected_automod = self
                 .automod_rules
@@ -6546,6 +6726,10 @@ impl DiscordApp {
         self.selected_event = None;
         self.event_notice = None;
         self.show_event_create = false;
+        self.message_requests = seed_message_requests();
+        self.show_message_requests = false;
+        self.message_request_filter = MessageRequestFilter::Pending;
+        self.message_request_notice = None;
         self.invites = seed_invites();
         self.invite_copied_code = None;
         self.audit = seed_audit();
@@ -6755,6 +6939,9 @@ impl DiscordApp {
             })
             .when(self.show_events && view_mode != ViewMode::Friends, |el| {
                 el.child(events_panel::render(self, cx))
+            })
+            .when(self.show_message_requests, |el| {
+                el.child(message_requests_panel::render(self, cx))
             })
             .when(self.member_menu.is_some(), |el| {
                 el.child(member_menu::render(self, cx))

@@ -16,7 +16,8 @@ use serde::{Deserialize, Serialize, Serializer};
 
 use super::models::{
     AuditEntry, AutoModRule, BannedUser, ChatThread, DmConversation, Friend, FriendRequest, Invite,
-    InviteExpiry, Member, Message, MyProfile, PermissionGrant, Role, Server, ServerEvent, UserStatus,
+    InviteExpiry, Member, Message, MessageRequest, MyProfile, PermissionGrant, Role, Server,
+    ServerEvent, UserStatus,
 };
 
 /// 快照版本号；字段语义变化时递增，加载端按需丢弃旧数据。
@@ -64,6 +65,9 @@ pub struct Snapshot {
     /// 服务器活动。旧快照缺字段时保留种子活动。
     #[serde(default)]
     pub events: Option<Vec<ServerEvent>>,
+    /// 私信消息请求。旧快照缺字段时保留种子请求。
+    #[serde(default)]
+    pub message_requests: Option<Vec<MessageRequest>>,
     /// 好友分组的顺序（只存分组名，成员关系在 `Friend.group` 上）。
     #[serde(default)]
     pub friend_groups: Vec<String>,
@@ -559,6 +563,7 @@ mod tests {
             permissions: Some(crate::data::seed_permissions()),
             automod_rules: Some(crate::data::seed_automod_rules()),
             events: Some(crate::data::seed_events()),
+            message_requests: Some(crate::data::seed_message_requests()),
             audit: Some(crate::data::seed_audit()),
             bans: Some(crate::data::seed_bans()),
             me: crate::data::seed_me(),
@@ -605,6 +610,15 @@ mod tests {
         assert_eq!(events_after[0].starts_in_minutes, events_before[0].starts_in_minutes);
         assert_eq!(events_after[0].attendees, events_before[0].attendees);
         assert_eq!(events_after[0].category, events_before[0].category);
+
+        // 私信请求：发件人、状态、可见性与时间都要完整往返。
+        let req_before = snapshot.message_requests.clone().unwrap_or_default();
+        let req_after = back.message_requests.clone().unwrap_or_default();
+        assert_eq!(req_after.len(), req_before.len());
+        assert_eq!(req_after[0].sender, req_before[0].sender);
+        assert_eq!(req_after[0].state, req_before[0].state);
+        assert_eq!(req_after[0].visible, req_before[0].visible);
+        assert_eq!(req_after[0].minutes_ago, req_before[0].minutes_ago);
 
         // 好友分组：顺序表与成员身上的分组名都要能完整往返。
         assert_eq!(back.friend_groups, snapshot.friend_groups);

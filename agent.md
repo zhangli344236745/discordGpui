@@ -513,6 +513,14 @@ gpui_kit::application()
 - 互斥与清理：`toggle_events` 关 pins/inbox；`toggle_pins`/`toggle_inbox` 反向关 events；`reset_session` 与 `close_top_overlay`（Esc）收起面板并清提示。入口是 header 的 `chat-toggle-events`（`IconName::CalendarDays`，仅非 DM）。
 - 视图 `ui/events_panel.rs`：右侧 380px 全高浮层（同 pinned_panel 定位）；状态筛选 chips 用公共组件 `filter_chip`（带计数，⚠️ handler 是 3 参 `Fn(&mut DiscordApp,&mut Window,&mut Context)`，别写成 4 参）；内嵌创建表单（标题/描述 Input + 分类色块 + 开始/时长步进器 ±15 分钟 + 频道 chip + 创建按钮）；活动卡片显示分类色点、状态徽标、时间、频道、描述、报名人数与"你已报名/你发起"、报名按钮、未结束时可删除。新活动 id 用 `SystemTime` 毫秒戳。
 
+### 消息请求约定
+- 数据：`data::MessageRequest { sender, color, preview, minutes_ago, state, visible }` + `MessageRequestState {Pending,Accepted,Ignored}`（label），全自有字段 serde 直接派生（⚠️ 要带 `Debug`，快照往返测试 `assert_eq!` 需要）。`is_pending()` 同时要求 `state==Pending && visible`；`time_label()` 按分钟数出「刚刚/N 分钟前/N 小时前/N 天前」。独立存 `app.message_requests`，与 `FriendRequest`（好友申请）是两套东西。
+- 种子 `seed_message_requests()` 覆盖 3 待处理 + 1 已接受 + 1 已忽略 + 1 条 `visible:false` 的已删除（验证过滤）。`Snapshot.message_requests: Option<Vec<MessageRequest>>`，旧快照缺字段保留种子。
+- app 字段：`message_requests/show_message_requests/message_request_filter(MessageRequestFilter::Pending|Accepted|Ignored)/message_request_notice`。方法 `pending_request_count`（侧栏角标，只数可见待处理）/`request_count_for`/`visible_message_requests`（按 minutes_ago 升序）/ `toggle_message_requests/close_message_requests/set_message_request_filter/accept_message_request/ignore_message_request/delete_message_request/dismiss_message_request_notice`；筛选匹配用文件内私有 `state_matches_filter(state, filter)`。三种操作写 `AuditKind::Member` 日志。删除是置 `visible=false` 而非物理移除。
+- ⚠️ 借用坑：`accept/ignore/delete` 里持有 `message_requests.iter_mut()` 的可变引用时不能调 `self.log_audit()`——先用作用域块/元组取出 owned 字段并释放借用，再调用其它 `&mut self` 方法。`accept_message_request` 把 sender 用 `Box::leak` 转 `&'static str` 后建 `DmConversation` + 空 `dm_messages`，再 `open_dm` 切入，形成「接受→真正开始私信」闭环。
+- 互斥与清理：`toggle_message_requests` 关 pins/inbox/events；`toggle_pins`/`toggle_inbox`/`toggle_events` 反向关；`reset_session` 与 `close_top_overlay`（Esc）收起并清提示。入口在 `ui/dm_sidebar.rs` 好友入口下的 `dm-requests-entry`（`IconName::Inbox` + 待处理角标，仅常规模式显示）。
+- 视图 `ui/message_requests_panel.rs`：右侧 360px 全高浮层；`filter_chip` 三态筛选带计数；卡片展示头像/名字/状态徽标/相对时间/预览，`pending` 才有「接受/忽略」，三态都有删除；卡片自身不挂 `on_click`（避免与按钮点击冒泡冲突）。
+
 ### 主题切换约定
 
 - 色板不再是常量：`ui/theme.rs::palette` 里每个 token 都是 `fn() -> u32`，深/浅两套值写在 `tokens!` 宏表里（`名称 = 深色 => 浅色`）。主题状态是一个 `AtomicBool`，由 `palette::set_light(bool)` 写入、渲染时读取，所以**不需要**把主题逐层透传进视图。

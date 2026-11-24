@@ -297,7 +297,47 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                 this.show_friends(window, cx);
             }));
 
-        list = list.child(friends_entry).child(group_label("私信"));
+        // 消息请求入口：待处理请求数角标，点击进入请求面板。
+        let pending = app.pending_request_count();
+        let requests_active = app.show_message_requests;
+        let requests_entry = h_flex()
+            .h(px(40.))
+            .mx_2()
+            .px_2()
+            .gap_3()
+            .rounded(px(4.))
+            .bg(if requests_active {
+                rgb(palette::bg_channel_selected())
+            } else {
+                rgb(palette::bg_sidebar())
+            })
+            .text_color(if requests_active {
+                rgb(palette::text_primary())
+            } else {
+                rgb(palette::text_secondary())
+            })
+            .hover(|el| {
+                el.bg(rgb(palette::bg_channel_hover()))
+                    .text_color(rgb(palette::text_message()))
+            })
+            .child(ico(IconName::Inbox, Size::Small))
+            .child(
+                div()
+                    .flex_1()
+                    .text_size(px(14.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .child("消息请求"),
+            )
+            .when(pending > 0, |el| el.child(unread_badge(pending)))
+            .id("dm-requests-entry")
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.toggle_message_requests(cx);
+            }));
+
+        list = list
+            .child(friends_entry)
+            .child(requests_entry)
+            .child(group_label("私信"));
 
         for conversation in &app.dm_conversations {
             let selected = app.view_mode == ViewMode::DirectMessage

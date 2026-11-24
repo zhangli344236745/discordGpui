@@ -3,8 +3,9 @@ use std::collections::HashMap;
 use super::models::{
     Attachment, AuditEntry, AuditKind, AutoModAction, AutoModRule, BannedUser, Category, Channel,
     ChatThread, DiscoverServer, DmConversation, Friend, FriendRequest, Gif, HelpArticle, Invite,
-    EventCategory, InviteExpiry, Member, Message, MyProfile, NotifyLevel, PermissionGrant,
-    PermissionState, Poll, ReadReceipt, Role, Server, ServerEvent, Sticker, ThreadReply,
+    EventCategory, InviteExpiry, Member, Message, MessageRequest, MessageRequestState, MyProfile,
+    NotifyLevel, PermissionGrant, PermissionState, Poll, ReadReceipt, Role, Server, ServerEvent,
+    Sticker, ThreadReply,
 };
 
 /// 前端模拟服务器数据。
@@ -609,6 +610,27 @@ pub fn seed_friend_requests() -> Vec<FriendRequest> {
             name: "Rin".into(),
             color: 0x00a8fc,
             incoming: false,
+        },
+    ]
+}
+
+/// 前端模拟私信请求：3 条待处理、1 条已接受、1 条已忽略、1 条已删除。
+pub fn seed_message_requests() -> Vec<MessageRequest> {
+    vec![
+        MessageRequest::new("Kai", 0xeb459e, "你好，看到你在做 GPUI 项目，想请教几个问题", 18),
+        MessageRequest::new("Mira", 0x00a8fc, "上次的设计稿很棒，方便私下聊聊合作吗？", 95),
+        MessageRequest::new("Devon", 0xf0b232, "请问这个开源项目还招贡献者吗", 1500),
+        MessageRequest {
+            state: MessageRequestState::Accepted,
+            ..MessageRequest::new("Iris", 0x57f287, "已经加上啦，晚点聊", 60)
+        },
+        MessageRequest {
+            state: MessageRequestState::Ignored,
+            ..MessageRequest::new("SpamBot", 0x80848e, "点击领取免费奖励", 4300)
+        },
+        MessageRequest {
+            visible: false,
+            ..MessageRequest::new("已删除的人", 0x80848e, "这条不应该显示", 5000)
         },
     ]
 }

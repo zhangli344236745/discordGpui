@@ -1481,6 +1481,68 @@ pub struct FriendRequest {
     pub incoming: bool,
 }
 
+/// 消息请求的处理状态。
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub enum MessageRequestState {
+    /// 待处理（新请求，计入侧栏角标）。
+    Pending,
+    /// 已接受（转为正常私信会话）。
+    Accepted,
+    /// 已忽略（保留记录但不再提醒）。
+    Ignored,
+}
+
+impl MessageRequestState {
+    pub fn label(self) -> &'static str {
+        match self {
+            MessageRequestState::Pending => "待处理",
+            MessageRequestState::Accepted => "已接受",
+            MessageRequestState::Ignored => "已忽略",
+        }
+    }
+}
+
+/// 陌生人发来的私信请求。接受后转为正常私信会话，忽略后仅保留记录。
+#[derive(Clone, Serialize, Deserialize)]
+pub struct MessageRequest {
+    pub sender: String,
+    pub color: u32,
+    /// 首条消息预览。
+    pub preview: String,
+    /// 收到距今的分钟数（用于相对时间标签）。
+    pub minutes_ago: u32,
+    pub state: MessageRequestState,
+    /// 是否还在请求箱里展示（删除后为 false）。
+    pub visible: bool,
+}
+
+impl MessageRequest {
+    pub fn new(sender: impl Into<String>, color: u32, preview: impl Into<String>, minutes_ago: u32) -> Self {
+        Self {
+            sender: sender.into(),
+            color,
+            preview: preview.into(),
+            minutes_ago,
+            state: MessageRequestState::Pending,
+            visible: true,
+        }
+    }
+
+    /// 相对时间标签：分钟 / 小时 / 天。
+    pub fn time_label(&self) -> String {
+        match self.minutes_ago {
+            0..=1 => "刚刚".into(),
+            2..=59 => format!("{} 分钟前", self.minutes_ago),
+            60..=1439 => format!("{} 小时前", self.minutes_ago / 60),
+            _ => format!("{} 天前", self.minutes_ago / 1440),
+        }
+    }
+
+    pub fn is_pending(&self) -> bool {
+        self.state == MessageRequestState::Pending && self.visible
+    }
+}
+
 /// 好友页标签。
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum FriendTab {
@@ -1870,5 +1932,29 @@ mod tests {
         assert_eq!(event.attendee_count(), 2);
         assert!(event.is_attending("你"));
         assert_eq!(EventCategory::Game.label(), "游戏");
+    }
+
+    #[test]
+    fn message_request_state_and_time_label() {
+        let req = MessageRequest::new("Kai", 0xeb459e, "你好", 18);
+        assert_eq!(req.state, MessageRequestState::Pending);
+        assert!(req.visible);
+        assert!(req.is_pending());
+        assert_eq!(req.time_label(), "18 分钟前");
+        assert_eq!(req.state.label(), "待处理");
+
+        let accepted = MessageRequest {
+            state: MessageRequestState::Accepted,
+            ..MessageRequest::new("Iris", 0x57f287, "hi", 60)
+        };
+        assert!(!accepted.is_pending());
+        assert_eq!(accepted.time_label(), "1 小时前");
+
+        let deleted = MessageRequest {
+            visible: false,
+            ..MessageRequest::new("x", 0, "x", 5000)
+        };
+        assert!(!deleted.is_pending());
+        assert_eq!(deleted.time_label(), "3 天前");
     }
 }
