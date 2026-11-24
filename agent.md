@@ -10,6 +10,7 @@
 - **优先级**：界面与交互功能优先；数据层保持可替换，方便未来接入真实 API。
 - **技术栈**：Rust 2024 edition + gpui-kit `0.10.0` + serde / serde_json（仅数据层与快照使用）。
 - **配色**：Discord 深色主题；涨红跌绿等金融约定与本项目无关。
+- **后端（规划，未实现）**：`docs/backend-api.md` 是本项目唯一的后端契约——167 个 REST 端点、30 类 Gateway 事件、50 张表的 SQLite DDL、FastAPI 工程结构与 LiveKit 接入方案。**改动任何界面行为后必须回看该文档是否需要同步**，不要让文档与界面脱节。
 
 ---
 
@@ -750,6 +751,23 @@ gpui_kit::application()
 1. 在 `ui/` 下新建模块文件，导出 `pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElement`。
 2. 在 `ui/mod.rs` 声明模块。
 3. 在 `app.rs` 的 `Render` 实现顶层骨架里 `.child(...)` 接入。
+
+### 新增一个界面能力后同步后端契约
+
+1. 打开 `docs/backend-api.md`，在对应 `3.x` 小节补端点行（方法 / 路径 / 说明 / 界面文件），并更新该小节标题里的计数。
+2. 若引入了新实体，同步「5.1 表清单」与「5.2 索引」；若产生跨端广播，同步「4.1 下行事件」。
+3. 更新第 0 节的合计（端点总数、方法分布、表数）与第 9 节分期数字——**这几个数字必须与正文一致**，可用下面的脚本自检：
+
+```bash
+python3 - <<'PY'
+import re
+t = open('docs/backend-api.md').read()
+rows = re.findall(r'^\|\s*(GET|POST|PATCH|PUT|DELETE)\s*\|', t, re.M)
+print('实际端点行数:', len(rows))
+PY
+```
+
+4. 该文档只是设计，不生成服务端代码；不要在 `src/` 里引入任何 HTTP 客户端依赖。
 
 ---
 
