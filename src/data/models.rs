@@ -310,6 +310,8 @@ pub struct Message {
     pub delivery: DeliveryStatus,
     /// 已读者列表，非空时状态行可点开详情。
     pub readers: Vec<ReadReceipt>,
+    /// 投票消息：正文可作为投票标题，另渲染投票卡。
+    pub poll: Option<Poll>,
 }
 
 impl Message {
@@ -330,6 +332,7 @@ impl Message {
             reply_to: None,
             delivery: DeliveryStatus::Sent,
             readers: Vec::new(),
+            poll: None,
         }
     }
 
@@ -361,6 +364,12 @@ impl Message {
     /// 挂一个 GIF（消息正文可为空）。
     pub fn gif(mut self, gif: Gif) -> Self {
         self.gif = Some(gif);
+        self
+    }
+
+    /// 挂一张投票卡（正文可作为投票说明）。
+    pub fn poll(mut self, poll: Poll) -> Self {
+        self.poll = Some(poll);
         self
     }
 
@@ -1123,6 +1132,93 @@ impl AutoModRule {
     }
 }
 
+/// 投票的单个选项：`voters` 存投票者身份键（"你"表示本机用户），
+/// 用名单而非纯计数，既能显示票数也能判断"我是否已投 / 投了哪项"。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PollOption {
+    pub label: String,
+    #[serde(default)]
+    pub voters: Vec<String>,
+}
+
+impl PollOption {
+    pub fn new(label: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            voters: Vec::new(),
+        }
+    }
+}
+
+/// 一条投票：问题 + 选项 + 是否多选 + 是否已结束。
+/// 全部字段自有，serde 直接派生，无需 `*Owned` 镜像。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Poll {
+    pub question: String,
+    pub options: Vec<PollOption>,
+    #[serde(default)]
+    pub multiple: bool,
+    #[serde(default)]
+    pub closed: bool,
+}
+
+impl Poll {
+    pub fn new(question: impl Into<String>, labels: &[&str], multiple: bool) -> Self {
+        Self {
+            question: question.into(),
+            options: labels.iter().map(|label| PollOption::new(*label)).collect(),
+            multiple,
+            closed: false,
+        }
+    }
+
+    /// 总票数（含重复投票者在不同选项上的票）。
+    pub fn total_votes(&self) -> usize {
+        self.options.iter().map(|option| option.voters.len()).sum()
+    }
+
+    pub fn option_votes(&self, index: usize) -> usize {
+        self.options
+            .get(index)
+            .map(|option| option.voters.len())
+            .unwrap_or(0)
+    }
+
+    /// 某选项的得票百分比（总票为 0 时返回 0）。
+    pub fn percent(&self, index: usize) -> usize {
+        let total = self.total_votes();
+        if total == 0 {
+            0
+        } else {
+            self.option_votes(index) * 100 / total
+        }
+    }
+
+    /// 某个投票者投了哪些选项的下标。
+    pub fn voted_options(&self, voter: &str) -> Vec<usize> {
+        self.options
+            .iter()
+            .enumerate()
+            .filter(|(_, option)| option.voters.iter().any(|name| name == voter))
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    /// 当前领先选项的下标集合（并列可能多个；无人投票时为空）。
+    pub fn leading_options(&self) -> Vec<usize> {
+        let max = self.options.iter().map(|option| option.voters.len()).max().unwrap_or(0);
+        if max == 0 {
+            return Vec::new();
+        }
+        self.options
+            .iter()
+            .enumerate()
+            .filter(|(_, option)| option.voters.len() == max)
+            .map(|(index, _)| index)
+            .collect()
+    }
+}
+
 /// 成员条目。`role` 存角色名，None 表示无角色（归入在线 / 离线兜底组）；
 /// `nick` 是服务器昵称，只影响展示，`name` 始终是身份键。
 #[derive(Clone, Copy, Serialize)]
@@ -1561,5 +1657,33 @@ mod tests {
         assert_eq!(rule.matched_keyword("clean message"), None);
         assert_eq!(AutoModAction::Block.label(), "拦截消息");
         assert_eq!(AutoModAction::Warn.label(), "发出警告");
+    }
+
+    #[test]
+    fn poll_tally_percent_and_voter_lookup() {
+        let mut poll = Poll::new("下周周会", &["周一", "周三", "周五"], false);
+        assert_eq!(poll.total_votes(), 0);
+        assert_eq!(poll.percent(0), 0);
+        assert!(poll.leading_options().is_empty());
+
+        poll.options[0].voters = vec!["小满".into(), "阿哲".into()];
+        poll.options[1].voters = vec!["Lin".into()];
+        assert_eq!(poll.total_votes(), 3);
+        assert_eq!(poll.option_votes(0), 2);
+        assert_eq!(poll.percent(0), 66);
+        assert_eq!(poll.percent(1), 33);
+        assert_eq!(poll.leading_options(), vec![0]);
+        assert!(poll.voted_options("你").is_empty());
+        assert_eq!(poll.voted_options("阿哲"), vec![0]);
+    }
+
+    #[test]
+    fn poll_ties_return_multiple_leaders() {
+        let mut poll = Poll::new("午餐", &["A", "B", "C"], true);
+        assert!(poll.multiple);
+        poll.options[0].voters = vec!["你".into()];
+        poll.options[2].voters = vec!["Lin".into()];
+        assert_eq!(poll.leading_options(), vec![0, 2]);
+        assert_eq!(poll.voted_options("你"), vec![0]);
     }
 }

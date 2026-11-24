@@ -385,6 +385,8 @@ pub struct MessageOwned {
     pub delivery: super::models::DeliveryStatus,
     #[serde(default)]
     pub readers: Vec<ReadReceiptOwned>,
+    #[serde(default)]
+    pub poll: Option<super::models::Poll>,
 }
 
 fn default_delivery() -> super::models::DeliveryStatus {
@@ -409,6 +411,7 @@ impl From<MessageOwned> for super::models::Message {
             reply_to: value.reply_to.map(Into::into),
             delivery: value.delivery,
             readers: value.readers.into_iter().map(Into::into).collect(),
+            poll: value.poll,
         }
     }
 }
@@ -578,6 +581,16 @@ mod tests {
         assert_eq!(after[0].color.r, before[0].color.r);
         assert_eq!(after[0].color.g, before[0].color.g);
         assert_eq!(after[0].color.b, before[0].color.b);
+
+        // 投票：问题 / 选项 / 每位投票者都要完整往返（种子末尾有一条投票消息）。
+        let poll_before = before.iter().find_map(|m| m.poll.as_ref());
+        let poll_after = after.iter().find_map(|m| m.poll.as_ref());
+        assert!(poll_before.is_some(), "种子里应有一条投票消息");
+        let (pb, pa) = (poll_before.unwrap(), poll_after.unwrap());
+        assert_eq!(pa.question, pb.question);
+        assert_eq!(pa.options.len(), pb.options.len());
+        assert_eq!(pa.options[0].voters, pb.options[0].voters);
+        assert_eq!(pa.total_votes(), pb.total_votes());
 
         // 好友分组：顺序表与成员身上的分组名都要能完整往返。
         assert_eq!(back.friend_groups, snapshot.friend_groups);

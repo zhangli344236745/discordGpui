@@ -12,5 +12,6 @@ pub mod inbox_panel;
 pub mod message_menu;
 pub mod messages;
 pub mod pinned_panel;
+pub mod poll_composer;
 pub mod quick_switcher;
 pub mod read_receipts;

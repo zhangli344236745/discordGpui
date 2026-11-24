@@ -498,6 +498,14 @@ gpui_kit::application()
 - 视图 `ui/chat/sticker_picker.rs`：底部 52 / 右侧 16、宽 348 的浮卡；顶部包标签（数据源 `app.sticker_packs`）+ 分隔线 + 4 列贴纸格（emoji 30px + 名称 10px）+ 底部「当前包 · 共 N 张」。切包走 `set_sticker_pack`。
 - 消息里的贴纸由 `messages.rs::sticker_card` 渲染：132×132 圆角块 + 54px emoji + 名称；正文为空时不渲染文本节点，因此贴纸消息只有卡片。
 
+### 消息投票约定
+- 数据：`data::PollOption { label, voters: Vec<String> }`（voters 存投票者身份键，"你"是本机用户，用名单而非纯计数以支持判断"我投了哪项 / 取消"）+ `data::Poll { question, options, multiple, closed }`；全自有字段，serde 直接派生，`Message.poll: Option<Poll>` + `.poll(p)` builder。`MessageOwned` 加 `#[serde(default)] pub poll: Option<Poll>` 并在 `From<MessageOwned>` 透传，旧快照缺字段时投票为空。
+- 种子：`seed_messages()` 的默认频道末尾有一条投票消息，预置了部分投票者让结果可见；快照往返测试断言 poll 的问题 / 选项 / 投票者名单完整往返。
+- 创建草稿状态在 app：`show_poll_composer / poll_question_edit / poll_option_edit / poll_options_draft / poll_multiple`（草稿不进快照，已发起的投票随 Message 进快照）。入口 `composer-poll` 按钮（`IconName::ChartBar`）走 `toggle_poll_composer(cx)`；与附件 / 贴纸 / GIF / 表情 / 资料卡互斥。`add_poll_option`（去空白 / 去重 / ≤8）由选项框 Enter 触发，`send_poll` 由问题框 Enter 或按钮触发（选项 < 2 直接返回）。
+- 业务：`send_poll` 生成 `Message::new("你","刚刚","",palette::accent()).poll(poll)` 入列、迁移回复引用、记 `AuditKind::Server`「发起了投票」；`vote_poll(index, option_index, cx)` 对当前会话第 index 条消息投票——单选先清掉"你"在其它选项的票，点已投项即取消，未结束才生效，记「参与了投票」；`close_poll(index, cx)` 仅作者"你"可结束，记「结束了投票」。
+- 清理：`reset_session` 与 `close_top_overlay`（Esc）都走 `close_poll_composer`（清草稿 + 两个输入框 set_value）。⚠️ `toggle_poll_composer` 不碰 window，签名只有 `cx`。
+- 视图 `ui/chat/poll_composer.rs`：底部 52 / 右侧 16、宽 360 的浮卡；问题输入 + 已添加选项 chips（序号 + 文本 + 删除）+ 选项输入 + 多选开关 + 发起按钮（选项 < 2 时置灰）。消息里的投票由 `messages.rs::poll_card` 渲染：选项行用绝对定位进度条按 `percent()` 铺底 + 单选圆点 + 标签 + `N% · M 票`，我的选择描 accent 边、领先项描 success 边；底部显示总票数 / 单多选 / 结束态 + 作者可「结束投票」。⚠️ 选项行 `.id()` 放到 `.hover()` 之后、直接挂 `.on_click()`（Stateful<Div> 上再调 `.hover()` 会类型错），点击安全性由 `vote_poll` 内部的 closed 判断保证。
+
 ### 主题切换约定
 
 - 色板不再是常量：`ui/theme.rs::palette` 里每个 token 都是 `fn() -> u32`，深/浅两套值写在 `tokens!` 宏表里（`名称 = 深色 => 浅色`）。主题状态是一个 `AtomicBool`，由 `palette::set_light(bool)` 写入、渲染时读取，所以**不需要**把主题逐层透传进视图。

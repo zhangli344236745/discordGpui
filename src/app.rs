@@ -17,7 +17,7 @@ use crate::data::{
     ChatThread, DiscoverServer,     DmConversation, EditRevision, ForwardOrigin, ForwardTarget, Friend, FriendRequest,
     FriendTab, Gif, HelpArticle, Invite, InviteExpiry, Member, MyProfile,
     MemberGroup, Message, Notification, NotificationKind, NotificationTarget, NotifyLevel,
-    PermissionGrant, PermissionState, Reaction,
+    PermissionGrant, PermissionState, Poll, Reaction,
     ReadReceipt,
     ReplyRef, Role, SearchHit, Server, Sticker, ThreadReply, UserStatus, VoiceParticipant,
 };
@@ -357,6 +357,14 @@ pub struct DiscordApp {
     pub(crate) show_gif_picker: bool,
     pub(crate) gif_search: Entity<InputState>,
 
+    // 投票创建弹层：问题 / 新选项输入 + 已添加选项草稿 + 是否多选 + 显隐。
+    // 已发起的投票挂在 Message.poll 上，随消息快照持久化；这里只存"正在编辑"的草稿。
+    pub(crate) show_poll_composer: bool,
+    pub(crate) poll_question_edit: Entity<InputState>,
+    pub(crate) poll_option_edit: Entity<InputState>,
+    pub(crate) poll_options_draft: Vec<String>,
+    pub(crate) poll_multiple: bool,
+
     // 服务器设置页：整屏覆盖主界面，与用户设置页互斥。
     pub(crate) show_server_settings: bool,
     pub(crate) server_settings_section: ServerSettingsSection,
@@ -694,6 +702,8 @@ impl DiscordApp {
         let quick_search =
             cx.new(|cx| InputState::new(window, cx).placeholder("跳转到频道或私信…"));
         let gif_search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索 GIF 标签…"));
+        let poll_question_edit = cx.new(|cx| InputState::new(window, cx).placeholder("投票问题…"));
+        let poll_option_edit = cx.new(|cx| InputState::new(window, cx).placeholder("添加一个选项"));
         let thread_input = cx.new(|cx| InputState::new(window, cx).placeholder("回复话题…"));
         let root_focus = cx.focus_handle();
 
@@ -901,6 +911,28 @@ impl DiscordApp {
         )
         .detach();
 
+        // 投票：选项框回车添加选项，问题框回车发起投票。
+        cx.subscribe_in(
+            &poll_option_edit,
+            window,
+            |this, _, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::PressEnter { secondary: false, .. }) {
+                    this.add_poll_option(window, cx);
+                }
+            },
+        )
+        .detach();
+        cx.subscribe_in(
+            &poll_question_edit,
+            window,
+            |this, _, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::PressEnter { secondary: false, .. }) {
+                    this.send_poll(window, cx);
+                }
+            },
+        )
+        .detach();
+
         cx.subscribe_in(&topic_input, window, |this, _, event: &InputEvent, window, cx| {
             if matches!(event, InputEvent::PressEnter { secondary: false, .. }) {
                 this.save_channel_topic(window, cx);
@@ -1006,6 +1038,11 @@ impl DiscordApp {
             gif_query: String::new(),
             show_gif_picker: false,
             gif_search,
+            show_poll_composer: false,
+            poll_question_edit,
+            poll_option_edit,
+            poll_options_draft: Vec::new(),
+            poll_multiple: false,
             show_server_settings: false,
             server_settings_section: ServerSettingsSection::Overview,
             server_name_edit,
@@ -1719,6 +1756,7 @@ impl DiscordApp {
         self.close_forward();
         self.forward_notice = None;
         self.automod_notice = None;
+        self.close_poll_composer(window, cx);
         self.attachment_preview = None;
         self.member_menu = None;
         self.cancel_edit();
@@ -3049,6 +3087,8 @@ impl DiscordApp {
             self.show_inbox = false;
         } else if self.show_status_menu {
             self.show_status_menu = false;
+        } else if self.show_poll_composer {
+            self.close_poll_composer(window, cx);
         } else if self.show_gif_picker {
             self.close_gif_picker();
         } else if self.show_sticker_picker {
@@ -3265,6 +3305,167 @@ impl DiscordApp {
         }
         self.close_message_menu();
         cx.notify();
+    }
+
+    // -----------------------------------------------------------------------
+    // 消息投票
+    // -----------------------------------------------------------------------
+
+    /// 打开/关闭投票创建弹层；打开时互斥收起其他输入浮层。
+    pub(crate) fn toggle_poll_composer(&mut self, cx: &mut Context<Self>) {
+        let opening = !self.show_poll_composer;
+        self.show_poll_composer = opening;
+        if opening {
+            self.show_attachment_picker = false;
+            self.show_sticker_picker = false;
+            self.show_gif_picker = false;
+            self.emoji_picker_open = false;
+            self.emoji_target = None;
+            self.show_status_menu = false;
+            self.show_server_menu = false;
+            self.close_message_menu();
+        }
+        cx.notify();
+    }
+
+    /// 关闭投票创建弹层并清空草稿（切会话 / 发送成功后调用）。
+    pub(crate) fn close_poll_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_poll_composer = false;
+        self.poll_options_draft.clear();
+        self.poll_multiple = false;
+        self.poll_question_edit
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.poll_option_edit
+            .update(cx, |input, cx| input.set_value("", window, cx));
+    }
+
+    /// 把选项输入框的内容加入草稿（去空白、去重、最多 8 项）。
+    pub(crate) fn add_poll_option(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let value = self.poll_option_edit.read(cx).value().trim().to_string();
+        if value.is_empty()
+            || self.poll_options_draft.len() >= 8
+            || self.poll_options_draft.iter().any(|item| item == &value)
+        {
+            return;
+        }
+        self.poll_options_draft.push(value);
+        self.poll_option_edit
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        cx.notify();
+    }
+
+    /// 删除草稿中指定下标的选项。
+    pub(crate) fn remove_poll_option(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index < self.poll_options_draft.len() {
+            self.poll_options_draft.remove(index);
+            cx.notify();
+        }
+    }
+
+    /// 切换"多选"草稿开关。
+    pub(crate) fn toggle_poll_multiple(&mut self, cx: &mut Context<Self>) {
+        self.poll_multiple = !self.poll_multiple;
+        cx.notify();
+    }
+
+    /// 用当前草稿发起投票：至少 1 个选项时把投票挂到一条新消息并发送。
+    /// 问题为空时回退到"投票"作为标题；单选/多选取自草稿开关。
+    pub(crate) fn send_poll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.poll_options_draft.len() < 2 {
+            return;
+        }
+        let question = {
+            let raw = self.poll_question_edit.read(cx).value().trim().to_string();
+            if raw.is_empty() {
+                "投票".to_string()
+            } else {
+                raw
+            }
+        };
+        let labels: Vec<&str> = self
+            .poll_options_draft
+            .iter()
+            .map(|option| option.as_str())
+            .collect();
+        let poll = Poll::new(question.clone(), &labels, self.poll_multiple);
+        let mut message = Message::new("你", "刚刚", String::new(), palette::accent()).poll(poll);
+        if let Some(reply) = self.reply_to.take() {
+            message = message.replying_to(reply.author, reply.excerpt);
+        }
+        let sent_session = self.current_session.clone();
+        self.drafts.remove(&sent_session);
+        if let Some(messages) = self.current_messages_mut() {
+            messages.push(message);
+        }
+        self.log_audit(AuditKind::Server, "发起了投票", question);
+        self.close_poll_composer(window, cx);
+        self.clear_search(window, cx);
+        self.scroll_handle.scroll_to_bottom();
+        cx.notify();
+    }
+
+    /// 给当前会话第 index 条消息的投票投一票 / 取消自己的票。
+    /// 单选会先移除"你"在其它选项上的票；已投的选项再点即取消。
+    pub(crate) fn vote_poll(
+        &mut self,
+        index: usize,
+        option_index: usize,
+        cx: &mut Context<Self>,
+    ) {
+        let me = "你";
+        let mut changed = false;
+        let mut question = String::new();
+        if let Some(Some(poll)) = self
+            .current_messages_mut()
+            .and_then(|messages| messages.get_mut(index))
+            .map(|message| message.poll.as_mut())
+        {
+            if !poll.closed && option_index < poll.options.len() {
+                question = poll.question.clone();
+                let already = poll.options[option_index]
+                    .voters
+                    .iter()
+                    .any(|name| name == me);
+                if !poll.multiple {
+                    for option in poll.options.iter_mut() {
+                        option.voters.retain(|name| name != me);
+                    }
+                }
+                if already {
+                    poll.options[option_index].voters.retain(|name| name != me);
+                } else {
+                    poll.options[option_index].voters.push(me.to_string());
+                }
+                changed = true;
+            }
+        }
+        if changed {
+            self.log_audit(
+                AuditKind::Server,
+                "参与了投票",
+                format!("{question} · 选项 {}", option_index + 1),
+            );
+            cx.notify();
+        }
+    }
+
+    /// 结束当前会话第 index 条消息的投票（仅自己发起的投票可结束）。
+    pub(crate) fn close_poll(&mut self, index: usize, cx: &mut Context<Self>) {
+        let mut question = String::new();
+        let mut changed = false;
+        if let Some(message) = self.current_messages_mut().and_then(|m| m.get_mut(index))
+            && let Some(poll) = message.poll.as_mut()
+            && !poll.closed
+            && message.author == "你"
+        {
+            question = poll.question.clone();
+            poll.closed = true;
+            changed = true;
+        }
+        if changed {
+            self.log_audit(AuditKind::Server, "结束了投票", question);
+            cx.notify();
+        }
     }
 
     /// 删除当前会话的第 index 条消息；同时迁移该会话里话题的根消息下标。

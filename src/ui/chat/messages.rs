@@ -1,7 +1,7 @@
 use gpui_kit::*;
 
 use crate::app::DiscordApp;
-use crate::data::{Attachment, DeliveryStatus, ForwardOrigin, ReplyRef, Sticker};
+use crate::data::{Attachment, DeliveryStatus, ForwardOrigin, Poll, ReplyRef, Sticker};
 use crate::ui::theme::palette;
 use crate::ui::{avatar, ico, chat::message_menu};
 
@@ -137,6 +137,164 @@ fn gif_card(gif: &crate::data::Gif) -> Div {
                         .child("GIF · 演示占位"),
                 ),
         )
+}
+
+/// 投票卡片：问题标题 + 每个选项的进度条/票数/百分比 + 我的选择高亮。
+/// 点选项投票或取消；作者是"你"且未结束时可点"结束投票"。
+fn poll_card(
+    poll: &Poll,
+    index: usize,
+    author: &'static str,
+    cx: &mut Context<DiscordApp>,
+) -> impl IntoElement {
+    let total = poll.total_votes();
+    let leaders = poll.leading_options();
+    let mine = poll.voted_options("你");
+
+    let mut rows = v_flex().gap_1().mt_1();
+    for (option_index, option) in poll.options.iter().enumerate() {
+        let percent = poll.percent(option_index);
+        let is_mine = mine.contains(&option_index);
+        let is_leading = leaders.contains(&option_index) && !poll.closed;
+        let votes = option.voters.len();
+        let label = option.label.clone();
+
+        rows = rows.child(
+            div()
+                .relative()
+                .h(px(30.))
+                .rounded(px(6.))
+                .border_1()
+                .border_color(if is_mine {
+                    rgb(palette::accent())
+                } else if is_leading {
+                    rgb(palette::success())
+                } else {
+                    rgb(palette::border_default())
+                })
+                .bg(rgb(palette::bg_composer()))
+                .overflow_hidden()
+                .hover(|el| el.border_color(rgb(palette::text_dim())))
+                // 进度条：绝对定位铺底，宽度按得票百分比。
+                .child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .w(relative(percent as f32 / 100.))
+                        .bg(if is_mine {
+                            rgb(palette::accent())
+                        } else {
+                            rgb(palette::bg_reaction_mine())
+                        })
+                        .opacity(0.28),
+                )
+                .child(
+                    h_flex()
+                        .relative()
+                        .h_full()
+                        .px_2()
+                        .gap_2()
+                        .items_center()
+                        .child(
+                            div()
+                                .w(px(14.))
+                                .h(px(14.))
+                                .flex_shrink_0()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded_full()
+                                .border_1()
+                                .border_color(if is_mine {
+                                    rgb(palette::accent())
+                                } else {
+                                    rgb(palette::text_dim())
+                                })
+                                .when(is_mine, |el| {
+                                    el.bg(rgb(palette::accent())).child(ico(
+                                        IconName::Check,
+                                        Size::XSmall,
+                                    ))
+                                }),
+                        )
+                        .child(
+                            div()
+                                .min_w_0()
+                                .flex_1()
+                                .truncate()
+                                .text_size(px(12.5))
+                                .text_color(rgb(palette::text_message()))
+                                .child(label),
+                        )
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .text_size(px(11.))
+                                .text_color(rgb(palette::text_secondary()))
+                                .child(format!("{percent}% · {votes} 票")),
+                        ),
+                )
+                .id(format!("poll-vote-{index}-{option_index}"))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.vote_poll(index, option_index, cx);
+                })),
+        );
+    }
+
+    let mut footer = h_flex().mt_1().gap_2().items_center().child(
+        div()
+            .text_size(px(10.5))
+            .text_color(rgb(palette::text_dim()))
+            .child(format!(
+                "{total} 人投票 · {}{}",
+                if poll.multiple { "多选" } else { "单选" },
+                if poll.closed { " · 已结束" } else { "" },
+            )),
+    );
+
+    if !poll.closed && author == "你" {
+        footer = footer.child(
+            div()
+                .text_size(px(10.5))
+                .text_color(rgb(palette::text_link()))
+                .hover(|el| el.underline())
+                .child("结束投票")
+                .id(format!("poll-close-{index}"))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.close_poll(index, cx);
+                })),
+        );
+    }
+
+    v_flex()
+        .mt_1()
+        .w(px(320.))
+        .max_w_full()
+        .p_2()
+        .rounded(px(8.))
+        .bg(rgb(palette::bg_sidebar()))
+        .border_1()
+        .border_color(rgb(palette::border_default()))
+        .child(
+            h_flex()
+                .gap_2()
+                .items_center()
+                .child(
+                    div()
+                        .text_color(rgb(palette::accent()))
+                        .child(ico(IconName::ChartBar, Size::Small)),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .text_size(px(13.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(palette::text_primary()))
+                        .child(poll.question.clone()),
+                ),
+        )
+        .child(rows)
+        .child(footer)
 }
 
 /// 消息附件卡片：图片给缩略图占位块，其他文件给文件行；整卡点击打开大图/文件预览。
@@ -760,6 +918,9 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
             }
             if let Some(gif) = &message.gif {
                 content = content.child(gif_card(gif));
+            }
+            if let Some(poll) = &message.poll {
+                content = content.child(poll_card(poll, index, message.author, cx));
             }
         }
 

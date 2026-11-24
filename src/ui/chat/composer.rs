@@ -5,7 +5,7 @@ use crate::data::Attachment;
 use crate::ui::theme::palette;
 use crate::ui::{
     avatar,
-    chat::{attachment_picker, emoji_picker, gif_picker, sticker_picker},
+    chat::{attachment_picker, emoji_picker, gif_picker, poll_composer, sticker_picker},
     ico,
 };
 
@@ -171,6 +171,27 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                         this.toggle_gif_picker(cx);
                     })),
             )
+            // 投票按钮：打开投票创建弹层，发起后发送一条带投票卡的消息。
+            .child(
+                div()
+                    .w(px(26.))
+                    .h(px(26.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(4.))
+                    .text_color(if app.show_poll_composer {
+                        rgb(palette::accent())
+                    } else {
+                        rgb(palette::text_secondary())
+                    })
+                    .hover(|el| el.bg(rgb(palette::bg_toolbar_hover())))
+                    .child(ico(IconName::ChartBar, Size::Small))
+                    .id("composer-poll")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.toggle_poll_composer(cx);
+                    })),
+            )
             .child(
                 div()
                     .w(px(26.))
@@ -275,6 +296,10 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
 
     if app.show_gif_picker {
         wrapper = wrapper.child(gif_picker::render(app, cx));
+    }
+
+    if app.show_poll_composer {
+        wrapper = wrapper.child(poll_composer::render(app, cx));
     }
 
     if !app.mention_candidates.is_empty() {

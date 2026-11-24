@@ -4,7 +4,7 @@ use super::models::{
     Attachment, AuditEntry, AuditKind, AutoModAction, AutoModRule, BannedUser, Category, Channel,
     ChatThread, DiscoverServer, DmConversation, Friend, FriendRequest, Gif, HelpArticle, Invite,
     InviteExpiry, Member, Message, MyProfile, NotifyLevel, PermissionGrant, PermissionState,
-    ReadReceipt, Role, Server, Sticker, ThreadReply,
+    Poll, ReadReceipt, Role, Server, Sticker, ThreadReply,
 };
 
 /// 前端模拟服务器数据。
@@ -178,6 +178,22 @@ pub fn seed_messages() -> HashMap<String, Vec<Message>> {
                 ReadReceipt::new("小满", "今天 11:52", 0xfaa61c),
                 ReadReceipt::new("阿哲", "今天 11:53", 0x5865f2),
             ]),
+            Message::new(
+                "Nova",
+                "今天 12:00",
+                "下周的周会定在哪天？投个票 👇",
+                0x00a8fc,
+            )
+            .poll({
+                let mut poll = Poll::new(
+                    "下周周会时间",
+                    &["周一 10:00", "周三 15:00", "周五 16:00"],
+                    false,
+                );
+                poll.options[0].voters = vec!["小满".into(), "阿哲".into()];
+                poll.options[1].voters = vec!["Lin".into()];
+                poll
+            }),
         ],
     );
 
