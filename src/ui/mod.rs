@@ -14,6 +14,7 @@ pub mod forum;
 pub mod friends;
 pub mod help_center;
 pub mod invite_dialog;
+pub mod login;
 pub mod member_list;
 pub mod member_menu;
 pub mod member_nick_dialog;

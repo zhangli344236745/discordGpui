@@ -169,6 +169,62 @@ pub struct FriendDto {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct MemberDto {
+    pub user_id: String,
+    pub username: String,
+    pub tag: String,
+    pub display_name: String,
+    #[serde(default)]
+    pub nickname: String,
+    pub avatar_color: u32,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub role_ids: Vec<String>,
+    #[serde(default)]
+    pub joined_at: String,
+    #[serde(default)]
+    pub is_owner: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct RoleDto {
+    pub id: String,
+    pub server_id: String,
+    pub name: String,
+    pub color: u32,
+    #[serde(default)]
+    pub position: i32,
+    #[serde(default)]
+    pub is_everyone: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct PermissionItemDto {
+    pub role_id: String,
+    pub permission: String,
+    pub state: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct PermissionMatrixDto {
+    #[serde(default)]
+    pub permissions: Vec<String>,
+    #[serde(default)]
+    pub items: Vec<PermissionItemDto>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct FriendRequestPageDto {
+    #[serde(default)]
+    pub items: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub count: u32,
+    #[serde(default)]
+    pub outgoing: Vec<serde_json::Value>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct FriendGroupDto {
     pub id: String,
     pub name: String,
@@ -245,6 +301,22 @@ pub struct PageDto<T> {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct ChannelUnreadDto {
+    pub channel_id: String,
+    #[serde(default)]
+    pub server_id: String,
+    #[serde(default)]
+    pub unread: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct DmUnreadDto {
+    pub dm_id: String,
+    #[serde(default)]
+    pub unread: u32,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 pub struct UnreadCountsDto {
     #[serde(default)]
     pub mentions: u32,
@@ -257,9 +329,9 @@ pub struct UnreadCountsDto {
     #[serde(default)]
     pub servers: Vec<serde_json::Value>,
     #[serde(default)]
-    pub channels: Vec<serde_json::Value>,
+    pub channels: Vec<ChannelUnreadDto>,
     #[serde(default)]
-    pub dms: Vec<serde_json::Value>,
+    pub dms: Vec<DmUnreadDto>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]

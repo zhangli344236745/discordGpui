@@ -271,7 +271,7 @@ uv run python scripts/smoke.py http://127.0.0.1:8080
 
 ### 客户端接后端（进行中）
 
-网络底座（`src/net/`）已落地：REST worker、token 刷新、DTO、typed 请求与 0600 会话文件。登录界面与首屏同步在后续阶段接入；当前客户端仍默认离线演示。
+网络底座（`src/net/`）、登录/注册界面、health 探测与首屏同步已落地：登录后拉取用户、服务器/频道、成员/角色、好友、私信与未读；后端不可达时自动回到离线演示。消息写路径、实时事件与各域操作仍在后续阶段接入。
 
 ```bash
 # 在线模式（登录页接入后生效）
@@ -283,6 +283,7 @@ DISCORD_DEMO=1 cargo run
 
 - `DISCORD_HTTP_TIMEOUT`：请求超时秒数（1–120，默认 10）。
 - `DISCORD_SESSION_FILE`：覆盖“记住我”的 token 文件路径。
+- 启动顺序：health 探测 → 登录/注册 → 首屏同步 → 主界面；退出登录在「用户设置 → 账户」。
 - 计划与任务见 `openspec/changes/connect-client-to-backend/`。
 
 ---

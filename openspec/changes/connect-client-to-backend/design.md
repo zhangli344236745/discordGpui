@@ -65,7 +65,7 @@ src/net/
 - `Bookmark` 改为 `target_kind: BookmarkKind` + `target_id: String` + `scope: String`（频道 id / dm id）；`text` 仅作缓存展示，不参与查找。
 - `Message.delivery` 增加 `Sending` / `Failed` 状态，用于乐观发送。
 
-现有以显示名/`"server/channel"` 为键的 HashMap 暂不重写；`RemoteIndex` 维护 `name ↔ id` 与 `(conversation, position) ↔ message id` 的双向映射。这样 UI 渲染代码几乎不动，写操作统一走 id。
+现有以显示名/`"server/channel"` 为键的 HashMap 暂不重写；`RemoteIndex` 维护 `name ↔ id` 与 `(conversation, position) ↔ message id` 的双向映射。C1 先用 `RemoteIndex` 保存服务器/频道/成员/角色/好友/私信 id，UI 渲染代码几乎不动；`Message.id` 与 `Bookmark.target_id` 在 C3/C6 随写路径和书签改造补齐。
 
 替代方案：把全部键改成 id。否决原因：会波及 63 个 UI 文件的索引与断言，风险大于收益；列为后续重构。
 

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use gpui_kit::*;
 use gpui_kit::component::input::{InputEvent, InputState};
@@ -24,15 +25,37 @@ use crate::data::{
     ReplyRef, Role, SearchHit, Server, ServerBoost, Booster, ServerEvent, ServerWelcome, Sticker, ThreadReply,
     UserStatus, VoiceParticipant, WelcomeRule,
 };
+use crate::net::dto::{
+    DmDto, FriendDto, FriendGroupDto, MemberDto, MessageDto, PageDto, PermissionMatrixDto, RoleDto,
+    ServerDto, ServerTreeDto, UnreadCountsDto, UserDto,
+};
+use crate::net::hydrate::{self, RemoteIndex};
+use crate::net::{api, NetClient, NetConfig, NetError};
 use crate::ui::theme::palette;
 use crate::ui::{
     category_dialog, category_menu, channel_menu, channel_sidebar, chat, create_dialog, dm_call_panel,
     dm_sidebar, discover, events_panel, friend_group_dialog, friend_group_menu, forum, friends,
     help_center, invite_dialog, member_list, member_nick_dialog, message_requests_panel, profile_card,
     server_menu, server_rail,
-    member_menu, search_center, server_settings, settings, status_menu, topic_dialog, voice_room,
-    voice_status, welcome,
+    login, member_menu, search_center, server_settings, settings, status_menu, topic_dialog,
+    voice_room, voice_status, welcome,
 };
+
+/// 启动 / 登录阶段：检查后端 → 登录页 → 首屏同步 → 主界面。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AuthStatus {
+    Checking,
+    Login,
+    Booting,
+    Ready,
+    Demo,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LoginMode {
+    Login,
+    Register,
+}
 
 /// 主视图模式：服务器频道 / 私信 / 好友。
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -373,6 +396,22 @@ pub struct DiscordApp {
 
     pub(crate) my_status: UserStatus,
     pub(crate) show_status_menu: bool,
+
+    // 在线会话：网络句柄、启动阶段、登录表单与首屏同步结果。
+    pub(crate) auth_status: AuthStatus,
+    pub(crate) login_mode: LoginMode,
+    pub(crate) login_email: Entity<InputState>,
+    pub(crate) login_password: Entity<InputState>,
+    pub(crate) login_username: Entity<InputState>,
+    pub(crate) login_remember: bool,
+    pub(crate) login_busy: bool,
+    pub(crate) login_error: Option<String>,
+    pub(crate) boot_message: String,
+    pub(crate) net: Option<Arc<NetClient>>,
+    pub(crate) remote: RemoteIndex,
+    pub(crate) members_by_server: HashMap<String, Vec<Member>>,
+    pub(crate) roles_by_server: HashMap<String, Vec<Role>>,
+    pub(crate) permissions_by_server: HashMap<String, Vec<PermissionGrant>>,
 
     // 当前用户资料：账户页可编辑，底部用户栏与设置页预览共用。
     pub(crate) me: MyProfile,
@@ -803,6 +842,9 @@ impl DiscordApp {
             cx.new(|cx| InputState::new(window, cx).placeholder("邮箱地址"));
         let account_bio_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("一句话介绍自己"));
+        let login_email = cx.new(|cx| InputState::new(window, cx).placeholder("you@example.com"));
+        let login_password = cx.new(|cx| InputState::new(window, cx).placeholder("密码（至少 8 位）"));
+        let login_username = cx.new(|cx| InputState::new(window, cx).placeholder("用户名（注册时使用）"));
         let server_name_edit =
             cx.new(|cx| InputState::new(window, cx).placeholder("服务器名称"));
         let role_name_edit = cx.new(|cx| InputState::new(window, cx).placeholder("角色名称"));
@@ -893,6 +935,15 @@ impl DiscordApp {
             }
         })
         .detach();
+
+        for input in [&login_email, &login_username, &login_password] {
+            cx.subscribe_in(input, window, |this, _, event: &InputEvent, _, cx| {
+                if matches!(event, InputEvent::PressEnter { secondary: false, .. }) {
+                    this.submit_auth(cx);
+                }
+            })
+            .detach();
+        }
 
         // 分组输入框同时服务「新建分组」与「重命名分组」，按当前弹层分发 Enter。
         cx.subscribe_in(&group_input, window, |this, _, event: &InputEvent, window, cx| {
@@ -1115,6 +1166,11 @@ impl DiscordApp {
         })
         .detach();
 
+        let (net, auth_status) = match NetConfig::from_env() {
+            Ok(config) if !config.demo => (Some(Arc::new(NetClient::spawn(config))), AuthStatus::Checking),
+            _ => (None, AuthStatus::Demo),
+        };
+
         let mut this = Self {
             view_mode: ViewMode::Server,
             servers: seed_servers(),
@@ -1192,6 +1248,20 @@ impl DiscordApp {
             boosts: seed_boosts(),
             boost_notice: None,
             voice_channel: None,
+            auth_status,
+            login_mode: LoginMode::Login,
+            login_email,
+            login_password,
+            login_username,
+            login_remember: false,
+            login_busy: false,
+            login_error: None,
+            boot_message: String::new(),
+            net,
+            remote: RemoteIndex::default(),
+            members_by_server: HashMap::new(),
+            roles_by_server: HashMap::new(),
+            permissions_by_server: HashMap::new(),
             my_status: UserStatus::Online,
             show_status_menu: false,
             me: seed_me(),
@@ -1339,6 +1409,9 @@ impl DiscordApp {
         this.sync_invite_channel();
         // 有本地快照就覆盖种子数据；没有则以种子数据启动并立即记一次基线。
         this.restore_state(window, cx);
+        if this.auth_status == AuthStatus::Checking {
+            this.check_health(cx);
+        }
         window.focus(&this.root_focus, cx);
         this
     }
@@ -1866,6 +1939,16 @@ impl DiscordApp {
     ) {
         self.view_mode = ViewMode::Server;
         self.active_server = index;
+        let server_name = self.servers[index].name.clone();
+        if let Some(members) = self.members_by_server.get(&server_name) {
+            self.members = members.clone();
+        }
+        if let Some(roles) = self.roles_by_server.get(&server_name) {
+            self.roles = roles.clone();
+        }
+        if let Some(permissions) = self.permissions_by_server.get(&server_name) {
+            self.role_permissions = permissions.clone();
+        }
         self.active_channel = self.first_text_channel().unwrap_or_default();
         self.sync_invite_channel();
         self.reset_session(window, cx);
@@ -7428,6 +7511,304 @@ impl DiscordApp {
     }
 
     // -----------------------------------------------------------------------
+    // 在线会话：健康检查 / 登录 / 首屏同步 / 退出
+    // -----------------------------------------------------------------------
+
+    pub(crate) fn is_online(&self) -> bool {
+        self.auth_status == AuthStatus::Ready
+    }
+
+    fn check_health(&mut self, cx: &mut Context<Self>) {
+        let Some(net) = self.net.clone() else {
+            self.auth_status = AuthStatus::Demo;
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let result = net.execute(api::health(), false).await;
+            let _ = this.update(cx, |app, cx| {
+                app.auth_status = if result.is_ok() {
+                    AuthStatus::Login
+                } else {
+                    AuthStatus::Demo
+                };
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub(crate) fn toggle_login_mode(&mut self, cx: &mut Context<Self>) {
+        self.login_mode = match self.login_mode {
+            LoginMode::Login => LoginMode::Register,
+            LoginMode::Register => LoginMode::Login,
+        };
+        self.login_error = None;
+        cx.notify();
+    }
+
+    pub(crate) fn toggle_login_remember(&mut self, cx: &mut Context<Self>) {
+        self.login_remember = !self.login_remember;
+        cx.notify();
+    }
+
+    pub(crate) fn submit_auth(&mut self, cx: &mut Context<Self>) {
+        if self.login_busy {
+            return;
+        }
+        let email = self.login_email.read(cx).value().trim().to_string();
+        let password = self.login_password.read(cx).value().to_string();
+        let username = self.login_username.read(cx).value().trim().to_string();
+        if email.is_empty() || password.is_empty() {
+            self.login_error = Some("请输入邮箱和密码".into());
+            cx.notify();
+            return;
+        }
+        let mode = self.login_mode;
+        if mode == LoginMode::Register && username.len() < 2 {
+            self.login_error = Some("注册需要至少 2 个字符的用户名".into());
+            cx.notify();
+            return;
+        }
+        let Some(net) = self.net.clone() else {
+            self.login_error = Some("未配置后端地址".into());
+            cx.notify();
+            return;
+        };
+        let remember = self.login_remember;
+        self.login_busy = true;
+        self.login_error = None;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = if mode == LoginMode::Register {
+                net.register(email, password, username, remember).await
+            } else {
+                net.login(email, password, remember).await
+            };
+            let _ = this.update(cx, |app, cx| {
+                app.login_busy = false;
+                match result {
+                    Ok(_) => app.begin_boot(cx),
+                    Err(error) => {
+                        app.login_error = Some(error.user_message());
+                        cx.notify();
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn begin_boot(&mut self, cx: &mut Context<Self>) {
+        let Some(net) = self.net.clone() else {
+            self.auth_status = AuthStatus::Demo;
+            cx.notify();
+            return;
+        };
+        self.auth_status = AuthStatus::Booting;
+        self.boot_message = "正在同步服务器…".into();
+        self.login_error = None;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = Self::fetch_boot(net).await;
+            let _ = this.update(cx, |app, cx| match result {
+                Ok(data) => app.apply_hydrated(data, cx),
+                Err(error) => {
+                    app.auth_status = AuthStatus::Login;
+                    app.login_error = Some(format!("首屏同步失败：{}", error.user_message()));
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    async fn fetch_boot(net: Arc<NetClient>) -> Result<hydrate::Hydrated, NetError> {
+        let me: UserDto = net.execute_as(api::me(), true).await?;
+        let servers: Vec<ServerDto> = net.execute_as(api::servers(), true).await?;
+
+        let mut trees = Vec::new();
+        let mut members = Vec::new();
+        let mut roles = Vec::new();
+        let mut permissions = Vec::new();
+        for server in &servers {
+            trees.push(net.execute_as::<ServerTreeDto>(api::server_tree(&server.id), true).await?);
+            members.push(net.execute_as::<Vec<MemberDto>>(api::server_members(&server.id), true).await?);
+            roles.push(net.execute_as::<Vec<RoleDto>>(api::server_roles(&server.id), true).await?);
+            permissions.push(
+                match net
+                    .execute_as::<PermissionMatrixDto>(api::server_permissions(&server.id), true)
+                    .await
+                {
+                    Ok(matrix) => matrix,
+                    Err(error) if error.status == Some(403) => PermissionMatrixDto {
+                        permissions: Vec::new(),
+                        items: Vec::new(),
+                    },
+                    Err(error) => return Err(error),
+                },
+            );
+        }
+
+        let friends: Vec<FriendDto> = net.execute_as(api::friends(), true).await?;
+        let groups: Vec<FriendGroupDto> = net.execute_as(api::friend_groups(), true).await?;
+        let dms: Vec<DmDto> = net.execute_as(api::dms(), true).await?;
+        let counts: UnreadCountsDto = net
+            .execute_as(api::unread_counts(), true)
+            .await
+            .unwrap_or_default();
+
+        let mut active_server_id = String::new();
+        let mut active_channel_id = String::new();
+        if let Some(server) = servers.first()
+            && let Some(tree) = trees.first()
+        {
+            active_server_id = server.id.clone();
+            active_channel_id = tree
+                .channels
+                .iter()
+                .find(|channel| channel.kind == "text")
+                .map(|channel| channel.id.clone())
+                .unwrap_or_default();
+        }
+        let active_messages = if active_channel_id.is_empty() {
+            Vec::new()
+        } else {
+            net.execute_as::<PageDto<MessageDto>>(api::messages(&active_channel_id, None, 50), true)
+                .await?
+                .items
+        };
+
+        Ok(hydrate::hydrate(hydrate::BootData {
+            me,
+            servers,
+            trees,
+            members,
+            roles,
+            permissions,
+            friends,
+            groups,
+            dms,
+            counts,
+            active_messages,
+            active_server_id,
+            active_channel_id,
+        }))
+    }
+
+    fn apply_hydrated(&mut self, data: hydrate::Hydrated, cx: &mut Context<Self>) {
+        self.me = data.me;
+        self.remote = data.index;
+        self.servers = data.servers;
+        self.members_by_server = data.members_by_server;
+        self.roles_by_server = data.roles_by_server;
+        self.permissions_by_server = data.permissions_by_server;
+
+        if self.servers.is_empty() {
+            let (server, members) = hydrate::fallback_server(&self.me.display_name);
+            let name = server.name.clone();
+            self.members_by_server.insert(name.clone(), members);
+            self.roles_by_server.insert(name.clone(), Vec::new());
+            self.permissions_by_server.insert(name, Vec::new());
+            self.servers = vec![server];
+        }
+        self.active_server = data.active_server.min(self.servers.len() - 1);
+        let server_name = self.servers[self.active_server].name.clone();
+        self.active_channel = if data.active_channel.is_empty() {
+            self.first_text_channel().unwrap_or_default()
+        } else {
+            data.active_channel
+        };
+        self.members = self
+            .members_by_server
+            .get(&server_name)
+            .cloned()
+            .unwrap_or_default();
+        self.roles = self
+            .roles_by_server
+            .get(&server_name)
+            .cloned()
+            .unwrap_or_default();
+        self.role_permissions = self
+            .permissions_by_server
+            .get(&server_name)
+            .cloned()
+            .unwrap_or_default();
+
+        self.friends = data.friends;
+        self.friend_groups = data.friend_groups;
+        self.dm_conversations = data.dm_conversations;
+        self.active_dm = self.dm_conversations.first().map(|dm| dm.friend.to_string());
+
+        // 在线模式不展示种子内容；后续阶段逐域填充。
+        self.messages.clear();
+        let key = self.active_key();
+        self.messages.insert(key, data.messages);
+        self.dm_messages.clear();
+        self.threads.clear();
+        self.events.clear();
+        self.invites.clear();
+        self.audit.clear();
+        self.bans.clear();
+        self.automod_rules.clear();
+        self.forum_posts.clear();
+        self.forum_open = None;
+        self.bookmarks.clear();
+        self.welcome_screens.clear();
+        self.welcome_joined.clear();
+        self.boosts.clear();
+        self.message_requests.clear();
+        self.friend_requests.clear();
+        self.blocked_users.clear();
+
+        self.view_mode = ViewMode::Server;
+        self.show_settings = false;
+        self.show_server_settings = false;
+        self.show_search_center = false;
+        self.show_help_center = false;
+        self.auth_status = AuthStatus::Ready;
+        self.boot_message.clear();
+        self.login_error = None;
+        self.current_session = self.session_key();
+        self.sync_invite_channel();
+        cx.notify();
+    }
+
+    pub(crate) fn retry_boot(&mut self, cx: &mut Context<Self>) {
+        if self.net.is_some() {
+            self.begin_boot(cx);
+        }
+    }
+
+    pub(crate) fn logout(&mut self, cx: &mut Context<Self>) {
+        let net = self.net.clone();
+        self.auth_status = AuthStatus::Login;
+        self.login_busy = false;
+        self.login_error = None;
+        self.show_settings = false;
+        self.show_server_settings = false;
+        self.show_search_center = false;
+        self.servers.clear();
+        self.messages.clear();
+        self.dm_messages.clear();
+        self.members.clear();
+        self.roles.clear();
+        self.role_permissions.clear();
+        self.friends.clear();
+        self.friend_groups.clear();
+        self.dm_conversations.clear();
+        self.active_dm = None;
+        self.bookmarks.clear();
+        self.notifications_on = true;
+        cx.notify();
+        if let Some(net) = net {
+            cx.spawn(async move |_this, _cx| {
+                let _ = net.logout().await;
+            })
+            .detach();
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // 本地持久化（快照 / 自动保存 / 恢复示例数据）
     // -----------------------------------------------------------------------
 
@@ -7645,6 +8026,9 @@ impl DiscordApp {
 
     /// 每帧调用：快照内容与上次落盘不同才写，避免无意义的磁盘 IO。
     fn autosave(&mut self) {
+        if self.auth_status == AuthStatus::Ready {
+            return;
+        }
         let snapshot = self.snapshot();
         let Ok(json) = serde_json::to_string(&snapshot) else {
             return;
@@ -8019,9 +8403,13 @@ impl DiscordApp {
 }
 
 impl Render for DiscordApp {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    #[allow(refining_impl_trait)]
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         // 内容有变化就顺手落盘；没有变化时这里只是序列化一次做比较。
         self.autosave();
+        if !matches!(self.auth_status, AuthStatus::Ready | AuthStatus::Demo) {
+            return login::render(self, cx).into_any_element();
+        }
         // 键盘入口挂在元素树的根上（window.on_key_event 只能在 paint 阶段调用，Render 里会 panic）。
         // 根元素持有焦点，输入框聚焦时按键也会从焦点元素冒泡到这里。
         let content: AnyElement = if self.show_server_settings {
@@ -8046,5 +8434,22 @@ impl Render for DiscordApp {
             .when(self.dm_call.is_some(), |el| {
                 el.child(dm_call_panel::render(self, cx))
             })
+            .when(self.auth_status == AuthStatus::Demo, |el| {
+                el.child(
+                    div()
+                        .absolute()
+                        .right(px(12.))
+                        .bottom(px(64.))
+                        .px_2()
+                        .py_1()
+                        .rounded(px(4.))
+                        .bg(rgb(palette::bg_footer()))
+                        .text_size(px(11.))
+                        .text_color(rgb(palette::text_muted()))
+                        .id("demo-mode-badge")
+                        .child("离线演示"),
+                )
+            })
+            .into_any_element()
     }
 }

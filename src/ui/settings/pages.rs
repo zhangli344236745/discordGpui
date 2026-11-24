@@ -321,6 +321,15 @@ fn account(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
         Box::new(|this, window, cx| this.reset_account_form(window, cx)),
         cx,
     ));
+    if app.is_online() {
+        actions = actions.child(action_button(
+            "退出登录",
+            false,
+            "account-logout",
+            Box::new(|this, _, cx| this.logout(cx)),
+            cx,
+        ));
+    }
     if let Some(notice) = app.account_notice {
         actions = actions.child(
             div()

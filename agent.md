@@ -818,6 +818,8 @@ pgrep -fl 'target/debug/discord-gpui'   # 确认无残留
 - **认证**：access 只在内存，`SessionStore` 提前 30 秒刷新；401 `TOKEN_EXPIRED` 只重放一次。密码不落盘，“记住我”的 refresh token 文件权限必须是 `0600`。
 - **错误**：统一 `NetError`，保留后端 `code/field/request_id/retry_after`；UI 只展示 `user_message()` 并提供重试，不 panic。
 - **离线回退**：`DISCORD_DEMO=1` 或 health 失败进入 `AppMode::Demo`；在线与离线互斥，不合并数据。
+- **启动阶段**：`DiscordApp.auth_status` 走 `Checking → Login → Booting → Ready`（或 `Demo`）；在线模式不写快照（`autosave` 直接返回），登录后由 `net::hydrate` 填充状态。
+- **id 映射**：显示名/`服务器/频道` 仍是 UI 键，但后端 id 统一存 `DiscordApp.remote`（`RemoteIndex`）；写操作必须查索引，不得按显示名反查。
 - **测试**：网络逻辑用 `Transport` mock + `pollster::block_on` 单测；不依赖真实后端。改 DTO 时同步补 fixture。
 
 ### 后端（server/）验证

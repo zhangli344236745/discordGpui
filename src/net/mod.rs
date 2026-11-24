@@ -7,7 +7,10 @@
 pub mod api;
 pub mod auth;
 pub mod dto;
+pub mod hydrate;
 pub mod worker;
+
+pub use worker::NetClient;
 
 use std::fmt;
 use std::path::PathBuf;
