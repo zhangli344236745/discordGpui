@@ -30,6 +30,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
     let level = app.server_notify_default();
     let muted = level.is_muted();
     let members = app.members.len();
+    let welcome_done = app.welcome_done_for(&name);
 
     // 频道侧栏宽 240、头部高 48，菜单贴在头部下方。通知页文案更宽，卡片加宽。
     let width = if app.server_notify_page { 280. } else { 232. };
@@ -77,7 +78,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
     let card = if app.server_notify_page {
         notify_page(card, name, level, app.inherit_channel_count(), cx)
     } else {
-        actions_page(card, muted, level, cx)
+        actions_page(card, muted, level, welcome_done, cx)
     };
 
     // 透明遮罩与卡片是兄弟节点：点遮罩关闭，点卡片（含单选行）不触发关闭。
@@ -102,8 +103,14 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
         .into_any_element()
 }
 
-/// 操作页：服务器设置 / 邀请 / 通知入口 / 静音 / 标记已读 / 创建 / 离开。
-fn actions_page(card: Div, muted: bool, level: NotifyLevel, cx: &mut Context<DiscordApp>) -> Div {
+/// 操作页：服务器设置 / 邀请 / 欢迎屏幕 / 通知入口 / 静音 / 标记已读 / 创建 / 离开。
+fn actions_page(
+    card: Div,
+    muted: bool,
+    level: NotifyLevel,
+    welcome_done: bool,
+    cx: &mut Context<DiscordApp>,
+) -> Div {
     let mute_label = if muted {
         "取消静音服务器"
     } else {
@@ -113,6 +120,22 @@ fn actions_page(card: Div, muted: bool, level: NotifyLevel, cx: &mut Context<Dis
         IconName::Bell
     } else {
         IconName::BellOff
+    };
+    // 没走完欢迎流程时给个小提示，点进去就是规则同意页。
+    let welcome_trailing = if welcome_done {
+        None
+    } else {
+        Some(
+            div()
+                .px_1()
+                .py_0p5()
+                .rounded(px(3.))
+                .bg(rgb(palette::accent()))
+                .text_color(rgb(palette::WHITE))
+                .text_size(px(9.))
+                .child("未同意")
+                .into_any_element(),
+        )
     };
 
     card.child(menu_item(
@@ -129,6 +152,14 @@ fn actions_page(card: Div, muted: bool, level: NotifyLevel, cx: &mut Context<Dis
         None,
         "server-menu-invite",
         Box::new(|this, window, cx| this.open_invite(window, cx)),
+        cx,
+    ))
+    .child(menu_item(
+        IconName::PartyPopper,
+        "欢迎屏幕",
+        welcome_trailing,
+        "server-menu-welcome",
+        Box::new(|this, _, cx| this.open_active_welcome(cx)),
         cx,
     ))
     .child(menu_item(

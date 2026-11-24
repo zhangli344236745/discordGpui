@@ -30,6 +30,7 @@ pub mod topic_dialog;
 pub mod user_footer;
 pub mod voice_room;
 pub mod voice_status;
+pub mod welcome;
 pub mod widgets;
 
 pub use theme::ico;

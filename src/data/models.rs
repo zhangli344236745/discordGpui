@@ -1941,6 +1941,77 @@ impl Bookmark {
     }
 }
 
+/// 欢迎屏幕里的一条社区规则。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WelcomeRule {
+    pub title: String,
+    pub body: String,
+}
+
+impl WelcomeRule {
+    pub fn new(title: impl Into<String>, body: impl Into<String>) -> Self {
+        Self {
+            title: title.into(),
+            body: body.into(),
+        }
+    }
+}
+
+/// 服务器的欢迎屏幕：新成员进入时展示的介绍 + 规则 + 推荐频道。
+///
+/// 归属用服务器名标记；没有专属配置的服务器由 `app` 按简介与文字频道
+/// 现场合成一个默认欢迎页，因此这里只需要存「精心配置过」的那些。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ServerWelcome {
+    pub server: String,
+    /// 大标题，例如「欢迎来到开发者社区」。
+    pub headline: String,
+    /// 介绍段落。
+    pub description: String,
+    pub rules: Vec<WelcomeRule>,
+    /// 推荐频道（频道名，渲染前会按当前服务器的文字频道过滤）。
+    pub recommended: Vec<String>,
+    /// true 时需要勾选同意规则才能进入。
+    pub require_rules: bool,
+}
+
+impl ServerWelcome {
+    pub fn new(
+        server: impl Into<String>,
+        headline: impl Into<String>,
+        description: impl Into<String>,
+    ) -> Self {
+        Self {
+            server: server.into(),
+            headline: headline.into(),
+            description: description.into(),
+            rules: Vec::new(),
+            recommended: Vec::new(),
+            require_rules: true,
+        }
+    }
+
+    pub fn rules(mut self, rules: Vec<WelcomeRule>) -> Self {
+        self.rules = rules;
+        self
+    }
+
+    pub fn recommended(mut self, channels: &[&str]) -> Self {
+        self.recommended = channels.iter().map(|name| name.to_string()).collect();
+        self
+    }
+
+    /// 只保留仍然存在的推荐频道，顺序不变。
+    pub fn retain_recommended(&mut self, existing: &[String]) {
+        self.recommended
+            .retain(|name| existing.iter().any(|channel| channel == name));
+    }
+
+    pub fn rule_count(&self) -> usize {
+        self.rules.len()
+    }
+}
+
 /// 分钟数转相对时间标签（发帖与回帖共用）。
 fn relative_label(minutes: u32) -> String {
     match minutes {
@@ -2279,5 +2350,30 @@ mod tests {
         let long = Bookmark { text: "一二三四五六".into(), ..channel.clone() };
         assert_eq!(long.preview(3), "一二三…");
         assert_eq!(channel.preview(50), "把 palette 收敛到一处");
+    }
+
+    #[test]
+    fn welcome_rules_and_recommended_channels() {
+        let mut welcome = ServerWelcome::new("开发者社区", "欢迎来到开发者社区", "一起聊 Rust")
+            .rules(vec![
+                WelcomeRule::new("友善交流", "对事不对人"),
+                WelcomeRule::new("按频道发帖", "提问发问题求助"),
+            ])
+            .recommended(&["公告", "闲聊", "已删频道"]);
+        assert_eq!(welcome.rule_count(), 2);
+        assert!(welcome.require_rules);
+
+        // 推荐频道要按现存频道裁剪，顺序保持原样。
+        let existing = vec!["闲聊".to_string(), "公告".to_string(), "Rust 讨论".to_string()];
+        welcome.retain_recommended(&existing);
+        assert_eq!(welcome.recommended, vec!["公告", "闲聊"]);
+
+        // 关闭规则同意后不再拦人。
+        let relaxed = ServerWelcome {
+            require_rules: false,
+            ..welcome.clone()
+        };
+        assert!(!relaxed.require_rules);
+        assert!(welcome.require_rules);
     }
 }

@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize, Serializer};
 use super::models::{
     AuditEntry, AutoModRule, BannedUser, Bookmark, ChatThread, DmConversation, ForumPost, Friend,
     FriendRequest, Invite, InviteExpiry, Member, Message, MessageRequest, MyProfile,
-    PermissionGrant, Role, Server, ServerEvent, UserStatus,
+    PermissionGrant, Role, Server, ServerEvent, ServerWelcome, UserStatus,
 };
 
 /// 快照版本号；字段语义变化时递增，加载端按需丢弃旧数据。
@@ -74,6 +74,12 @@ pub struct Snapshot {
     /// 消息书签。旧快照缺字段时保留种子书签。
     #[serde(default)]
     pub bookmarks: Option<Vec<Bookmark>>,
+    /// 服务器欢迎屏幕（只存配置过文案的服务器）。旧快照缺字段时保留种子。
+    #[serde(default)]
+    pub welcome_screens: Option<Vec<ServerWelcome>>,
+    /// 已走完欢迎屏幕（同意规则）的服务器名，避免重复弹出。
+    #[serde(default)]
+    pub welcome_joined: Vec<String>,
     /// 好友分组的顺序（只存分组名，成员关系在 `Friend.group` 上）。
     #[serde(default)]
     pub friend_groups: Vec<String>,
@@ -572,6 +578,7 @@ mod tests {
             message_requests: Some(crate::data::seed_message_requests()),
             forum_posts: Some(crate::data::seed_forum_posts()),
             bookmarks: Some(crate::data::seed_bookmarks()),
+            welcome_screens: Some(crate::data::seed_welcome_screens()),
             audit: Some(crate::data::seed_audit()),
             bans: Some(crate::data::seed_bans()),
             me: crate::data::seed_me(),
@@ -651,6 +658,17 @@ mod tests {
         assert_eq!(marks_after[0].saved_minutes_ago, marks_before[0].saved_minutes_ago);
         // 私信书签的 `server` 保持空串。
         assert!(marks_after.iter().any(|b| b.is_dm && b.server.is_empty()));
+
+        // 欢迎屏幕：规则条目与推荐频道都要完整往返。
+        let welcome_before = snapshot.welcome_screens.clone().unwrap_or_default();
+        let welcome_after = back.welcome_screens.clone().unwrap_or_default();
+        assert_eq!(welcome_after.len(), welcome_before.len());
+        assert_eq!(welcome_after[0].server, welcome_before[0].server);
+        assert_eq!(welcome_after[0].headline, welcome_before[0].headline);
+        assert_eq!(welcome_after[0].rules.len(), welcome_before[0].rules.len());
+        assert_eq!(welcome_after[0].rules[0].title, welcome_before[0].rules[0].title);
+        assert_eq!(welcome_after[0].recommended, welcome_before[0].recommended);
+        assert_eq!(welcome_after[0].require_rules, welcome_before[0].require_rules);
 
         // 好友分组：顺序表与成员身上的分组名都要能完整往返。
         assert_eq!(back.friend_groups, snapshot.friend_groups);

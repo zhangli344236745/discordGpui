@@ -52,6 +52,7 @@ src/
     ├── friends.rs            # 好友页（在线/待处理/全部/已屏蔽/添加好友 五个标签，点击发起私信）
     ├── help_center.rs        # 帮助中心浮层（标题栏 ? 打开：左侧分类导航 + 关键词搜索 + 文档列表 / 详情）
     ├── forum.rs              # 论坛频道页（帖子列表/搜索排序 + 帖子详情回帖 + 发帖弹层，接管聊天主区域）
+    ├── welcome.rs            # 服务器欢迎屏幕（顶层模态：介绍 + 规则同意 + 推荐频道多选）
     ├── user_footer.rs        # 侧栏底部用户控制条（频道栏/私信栏共用）
     ├── member_list.rs        # 成员栏视图（按角色分组 + 折叠 + 点击成员弹资料卡 + 右键上下文菜单）
     ├── member_menu.rs        # 成员上下文菜单（资料卡/私信/提及/复制名/屏蔽，光标锚点 + 透明遮罩）
@@ -542,6 +543,16 @@ gpui_kit::application()
 - 跳转顺序：先切会话（`open_dm` / 设 `active_*` 后 `reset_session`）→ 因为 `reset_session` 会清高亮并滚到底部，**定位必须放在切换之后**，再 `show_bookmarks = true` 重新打开面板 → `reveal_message(index)`（抽出的公共方法，`jump_to_reply` 也复用）滚动 + 高亮。找不到原消息时区分「贴纸/附件无法定位」与「原消息已删除」两种提示。
 - 面板互斥：`toggle_bookmarks` 与置顶/收件箱/日程/消息请求互斥；反过来这四者打开时也要 `show_bookmarks = false`；`close_top_overlay`（Esc）把书签放在置顶之后；`reset_session` 关面板并清空搜索；面板在 Friends 视图不挂载（同置顶）。
 - 视图 `ui/chat/bookmarks_panel.rs`：右侧 360px 全高浮层，头部「已保存 — N」+ 关闭，下面是带放大镜的搜索输入行，卡片含来源 chip / 服务器 / 保存时间 / 头像作者 / 正文预览 / 「跳转」按钮 + 移除图标。卡片本身不挂 `on_click`，动作只放在按钮上（避免冒泡）。
+
+### 服务器欢迎屏幕约定
+
+- 数据：`data::ServerWelcome { server, headline, description, rules: Vec<WelcomeRule>, recommended: Vec<String>, require_rules }` + `WelcomeRule { title, body }`，全自有字段 serde 直接派生。方法 `rule_count()/retain_recommended(&[String])`（按现存频道裁剪推荐列表，保持原顺序）。
+- 只给「精心配置过」的服务器写文案（种子 `seed_welcome_screens()`：开发者社区 3 条规则、设计工坊 2 条）。其它服务器由 `app.welcome_screen_for(server)` **现场合成**：标题「欢迎来到X」+ 服务器简介 + 2 条通用规则 + 前 3 个文字频道作推荐，所以每个服务器都有欢迎页、菜单入口不会失效。
+- app 字段：`welcome_screens/welcome_target(正在展示的服务器名)/welcome_rule_agreed/welcome_selected(多选频道)/welcome_joined(已完成的服务器，进快照)`。方法 `text_channels_of`（私有）/`welcome_screen_for`/`open_welcome`/`open_active_welcome`/`close_welcome`/`toggle_welcome_rule`/`toggle_welcome_channel`/`welcome_can_confirm`/`confirm_welcome`/`welcome_done_for` + 迁移 `remove_welcome_of_server/rename_welcome_server`。
+- 触发：只有 `join_discover_server` 新建服务器后调用 `open_welcome`；`open_welcome` 会先把其它浮层全部收起（它是最顶层模态）。`confirm_welcome` 先写 `welcome_joined`，再按侧栏顺序取「已选中的第一个频道」`reset_session` 进去；未同意规则时直接 return。
+- 持久化：`Snapshot.welcome_screens: Option<Vec<ServerWelcome>>`（缺字段保留种子）+ `welcome_joined: Vec<String>`；`restore_state` 丢弃服务器已不存在的配置与完成记录。
+- 渲染：挂在根节点**最后**（`show_quick_switcher` 之后、`voice_status` 之前）保证盖住菜单与面板；`close_top_overlay` 里放**最前面**，Esc 等价「稍后再说」。视图 `ui/welcome.rs` 用「全屏容器 → 遮罩 div（兄弟）+ 居中 flex 容器（兄弟，无 click handler）→ 卡片」的三层结构：不要像 `create_dialog` 那样把卡片嵌进带 `on_click` 的遮罩里，否则点频道 chip 会顺带关掉模态。
+- 服务器菜单「欢迎屏幕」项在未完成时用 `menu_item` 的 `trailing` 参数挂一个「未同意」小角标（`welcome_done_for` 唯一的调用点，别删）。
 
 ### 主题切换约定
 

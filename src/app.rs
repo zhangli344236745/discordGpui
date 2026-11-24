@@ -9,7 +9,7 @@ use crate::data::{
     persist,
     seed_discover_servers, seed_dm_conversations, seed_dm_messages, seed_friend_requests,
     seed_forum_posts, seed_message_requests, gif_categories, help_categories, seed_friend_groups,
-    seed_friends, seed_gifs, seed_bookmarks,
+    seed_friends, seed_gifs, seed_bookmarks, seed_welcome_screens,
     seed_audit, seed_events, seed_help_articles, seed_invites, seed_me, seed_roles,
     seed_members, seed_messages, seed_servers,
     seed_automod_rules, seed_bans, seed_permissions, seed_stickers, seed_threads, sticker_packs,
@@ -21,8 +21,8 @@ use crate::data::{
     MemberGroup, Message, Notification, NotificationKind, NotificationTarget, NotifyLevel,
     PermissionGrant, PermissionState, Poll, Reaction,
     ReadReceipt,
-    ReplyRef, Role, SearchHit, Server, ServerEvent, Sticker, ThreadReply, UserStatus,
-    VoiceParticipant,
+    ReplyRef, Role, SearchHit, Server, ServerEvent, ServerWelcome, Sticker, ThreadReply,
+    UserStatus, VoiceParticipant, WelcomeRule,
 };
 use crate::ui::theme::palette;
 use crate::ui::{
@@ -31,7 +31,7 @@ use crate::ui::{
     help_center, invite_dialog, member_list, member_nick_dialog, message_requests_panel, profile_card,
     server_menu, server_rail,
     member_menu, search_center, server_settings, settings, status_menu, topic_dialog, voice_room,
-    voice_status,
+    voice_status, welcome,
 };
 
 /// 主视图模式：服务器频道 / 私信 / 好友。
@@ -355,6 +355,13 @@ pub struct DiscordApp {
     pub(crate) bookmark_query: String,
     pub(crate) bookmark_search: Entity<InputState>,
     pub(crate) bookmark_notice: Option<String>,
+
+    // 服务器欢迎屏幕：配置表 + 当前展示的服务器 + 规则勾选 + 推荐频道多选 + 已完成的服务器。
+    pub(crate) welcome_screens: Vec<ServerWelcome>,
+    pub(crate) welcome_target: Option<String>,
+    pub(crate) welcome_rule_agreed: bool,
+    pub(crate) welcome_selected: Vec<String>,
+    pub(crate) welcome_joined: Vec<String>,
 
     /// 当前语音连接：(服务器索引, 频道名)；跨会话保持，符合 Discord 行为。
     pub(crate) voice_channel: Option<(usize, String)>,
@@ -1170,6 +1177,11 @@ impl DiscordApp {
             bookmark_query: String::new(),
             bookmark_search,
             bookmark_notice: None,
+            welcome_screens: seed_welcome_screens(),
+            welcome_target: None,
+            welcome_rule_agreed: false,
+            welcome_selected: Vec::new(),
+            welcome_joined: Vec::new(),
             voice_channel: None,
             my_status: UserStatus::Online,
             show_status_menu: false,
@@ -2779,6 +2791,7 @@ impl DiscordApp {
         self.remove_events_of_server(&name);
         self.remove_forum_posts_of_server(&name);
         self.remove_bookmarks_of_server(&name);
+        self.remove_welcome_of_server(&name);
 
         if leaving_voice {
             self.leave_voice();
@@ -3244,7 +3257,10 @@ impl DiscordApp {
 
     /// Esc：按「最上层优先」顺序关闭当前浮层 / 整屏页，不误伤底层状态。
     fn close_top_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.show_member_nick {
+        if self.welcome_target.is_some() {
+            // 欢迎屏幕是顶层模态，Esc 先关它（等价于「稍后再说」）。
+            self.close_welcome(cx);
+        } else if self.show_member_nick {
             self.close_member_nick(cx);
         } else if self.show_create_group || self.show_rename_group {
             self.close_group_dialog(cx);
@@ -4478,6 +4494,195 @@ impl DiscordApp {
             if !bookmark.is_dm && bookmark.server == old {
                 bookmark.server = new.to_string();
             }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // 服务器欢迎屏幕
+    // -----------------------------------------------------------------------
+
+    /// 某服务器下的文字频道名（顺序即侧栏顺序）。
+    fn text_channels_of(&self, server: &str) -> Vec<String> {
+        self.servers
+            .iter()
+            .find(|s| s.name == server)
+            .map(|s| {
+                s.categories
+                    .iter()
+                    .flat_map(|category| category.channels.iter())
+                    .filter(|channel| channel.kind == ChannelKind::Text)
+                    .map(|channel| channel.name.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// 取某服务器的欢迎屏幕：优先用配置过的文案，没有就按简介 + 文字频道合成。
+    pub(crate) fn welcome_screen_for(&self, server: &str) -> Option<ServerWelcome> {
+        let info = self.servers.iter().find(|s| s.name == server)?;
+        let channels = self.text_channels_of(server);
+        let mut welcome = self
+            .welcome_screens
+            .iter()
+            .find(|welcome| welcome.server == server)
+            .cloned()
+            .unwrap_or_else(|| {
+                let defaults: Vec<&str> = channels.iter().take(3).map(String::as_str).collect();
+                ServerWelcome::new(
+                    info.name.clone(),
+                    format!("欢迎来到{}", info.name),
+                    if info.description.trim().is_empty() {
+                        "先看看下面的频道，找到感兴趣的话题就开始聊吧。".to_string()
+                    } else {
+                        info.description.clone()
+                    },
+                )
+                .rules(vec![
+                    WelcomeRule::new("友善交流", "尊重不同观点，不人身攻击、不刷屏。"),
+                    WelcomeRule::new("按频道发帖", "尽量把内容发到对应频道，方便别人找到。"),
+                ])
+                .recommended(&defaults)
+            });
+        // 推荐频道可能已被删除，渲染前按现存频道裁剪一次。
+        welcome.retain_recommended(&channels);
+        Some(welcome)
+    }
+
+    /// 打开某服务器的欢迎屏幕；推荐频道默认全选、规则默认未同意。
+    pub(crate) fn open_welcome(&mut self, server: String, cx: &mut Context<Self>) {
+        let Some(welcome) = self.welcome_screen_for(&server) else {
+            return;
+        };
+        self.welcome_selected = welcome.recommended.clone();
+        self.welcome_rule_agreed = false;
+        self.welcome_target = Some(server);
+
+        // 欢迎页是顶层模态，先把其它浮层收起来，避免叠着显示。
+        self.show_settings = false;
+        self.show_server_settings = false;
+        self.show_search_center = false;
+        self.show_help_center = false;
+        self.show_server_menu = false;
+        self.show_status_menu = false;
+        self.show_invite = false;
+        self.show_create_server = false;
+        self.show_create_channel = false;
+        self.show_voice_room = false;
+        self.channel_menu = None;
+        self.category_menu = None;
+        self.member_menu = None;
+        self.profile_target = None;
+        self.close_message_menu();
+        self.close_thread();
+        self.close_read_receipts();
+        self.close_edit_history();
+        self.show_pins = false;
+        self.show_bookmarks = false;
+        self.show_inbox = false;
+        self.show_events = false;
+        self.show_message_requests = false;
+        cx.notify();
+    }
+
+    /// 服务器菜单入口：看当前服务器的欢迎屏幕。
+    pub(crate) fn open_active_welcome(&mut self, cx: &mut Context<Self>) {
+        let server = self.servers[self.active_server].name.clone();
+        self.open_welcome(server, cx);
+    }
+
+    pub(crate) fn close_welcome(&mut self, cx: &mut Context<Self>) {
+        self.welcome_target = None;
+        self.welcome_rule_agreed = false;
+        self.welcome_selected.clear();
+        cx.notify();
+    }
+
+    /// 勾选 / 取消「我已阅读并同意以上规则」。
+    pub(crate) fn toggle_welcome_rule(&mut self, cx: &mut Context<Self>) {
+        self.welcome_rule_agreed = !self.welcome_rule_agreed;
+        cx.notify();
+    }
+
+    /// 多选推荐频道。
+    pub(crate) fn toggle_welcome_channel(&mut self, name: String, cx: &mut Context<Self>) {
+        if let Some(pos) = self.welcome_selected.iter().position(|channel| channel == &name) {
+            self.welcome_selected.remove(pos);
+        } else {
+            self.welcome_selected.push(name);
+        }
+        cx.notify();
+    }
+
+    /// 当前欢迎页是否允许「开始聊天」：需要同意规则且还没勾时不允许。
+    pub(crate) fn welcome_can_confirm(&self) -> bool {
+        let Some(server) = &self.welcome_target else {
+            return false;
+        };
+        match self.welcome_screen_for(server) {
+            Some(welcome) => !welcome.require_rules || self.welcome_rule_agreed,
+            None => false,
+        }
+    }
+
+    /// 完成欢迎流程：记住已同意、按勾选的推荐频道进入，然后关闭。
+    pub(crate) fn confirm_welcome(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.welcome_can_confirm() {
+            return;
+        }
+        let Some(server) = self.welcome_target.clone() else {
+            return;
+        };
+        if !self.welcome_joined.iter().any(|name| name == &server) {
+            self.welcome_joined.push(server.clone());
+        }
+        let channels = self.text_channels_of(&server);
+        // 勾了推荐频道就进第一个（按侧栏顺序），没勾就留在当前频道。
+        let target = channels
+            .iter()
+            .find(|channel| self.welcome_selected.contains(channel))
+            .cloned();
+
+        self.welcome_target = None;
+        self.welcome_rule_agreed = false;
+        self.welcome_selected.clear();
+        if let Some(channel) = target {
+            self.view_mode = ViewMode::Server;
+            self.active_channel = channel;
+            self.reset_session(window, cx);
+        }
+        cx.notify();
+    }
+
+    /// 某服务器是否已走完欢迎流程（同意过规则）。
+    pub(crate) fn welcome_done_for(&self, server: &str) -> bool {
+        self.welcome_joined.iter().any(|name| name == server)
+    }
+
+    /// 离开服务器时清掉它的欢迎配置与完成记录。
+    pub(crate) fn remove_welcome_of_server(&mut self, server: &str) {
+        self.welcome_screens.retain(|welcome| welcome.server != server);
+        self.welcome_joined.retain(|name| name != server);
+        if self.welcome_target.as_deref() == Some(server) {
+            self.welcome_target = None;
+            self.welcome_rule_agreed = false;
+            self.welcome_selected.clear();
+        }
+    }
+
+    /// 服务器改名时迁移欢迎配置与完成记录。
+    pub(crate) fn rename_welcome_server(&mut self, old: &str, new: &str) {
+        for welcome in self.welcome_screens.iter_mut() {
+            if welcome.server == old {
+                welcome.server = new.to_string();
+            }
+        }
+        for name in self.welcome_joined.iter_mut() {
+            if name == old {
+                *name = new.to_string();
+            }
+        }
+        if self.welcome_target.as_deref() == Some(old) {
+            self.welcome_target = Some(new.to_string());
         }
     }
 
@@ -6016,6 +6221,8 @@ impl DiscordApp {
             target.joined = true;
         }
         self.select_server(position, window, cx);
+        // 新加入的服务器先走一遍欢迎屏幕（介绍 + 规则 + 推荐频道）。
+        self.open_welcome(entry.name.clone(), cx);
     }
 
     // -----------------------------------------------------------------------
@@ -6133,6 +6340,7 @@ impl DiscordApp {
             self.rename_events_server(&current, &new_name);
             self.rename_forum_server(&current, &new_name);
             self.rename_bookmarks_server(&current, &new_name);
+            self.rename_welcome_server(&current, &new_name);
 
             let badge = new_name.chars().next().unwrap_or('?').to_string();
             self.servers[index].name = new_name;
@@ -7101,6 +7309,8 @@ impl DiscordApp {
             message_requests: Some(self.message_requests.clone()),
             forum_posts: Some(self.forum_posts.clone()),
             bookmarks: Some(self.bookmarks.clone()),
+            welcome_screens: Some(self.welcome_screens.clone()),
+            welcome_joined: self.welcome_joined.clone(),
             friend_requests: self.friend_requests.clone(),
             blocked_users: self.blocked_users.clone(),
             me: self.me.clone(),
@@ -7237,6 +7447,14 @@ impl DiscordApp {
                 })
             }
         });
+        // 欢迎屏幕：旧快照没有就保留种子；丢弃服务器已不存在的配置与已完成记录。
+        if let Some(screens) = saved.welcome_screens {
+            self.welcome_screens = screens;
+        }
+        self.welcome_screens
+            .retain(|welcome| self.servers.iter().any(|server| server.name == welcome.server));
+        self.welcome_joined
+            .retain(|name| self.servers.iter().any(|server| &server.name == name));
         if let Some(selected) = self.selected_automod.take() {
             self.selected_automod = self
                 .automod_rules
@@ -7349,6 +7567,11 @@ impl DiscordApp {
         self.bookmark_search
             .update(cx, |input, cx| input.set_value("", window, cx));
         self.bookmark_notice = None;
+        self.welcome_screens = seed_welcome_screens();
+        self.welcome_target = None;
+        self.welcome_rule_agreed = false;
+        self.welcome_selected.clear();
+        self.welcome_joined.clear();
         self.invites = seed_invites();
         self.invite_copied_code = None;
         self.audit = seed_audit();
@@ -7633,6 +7856,10 @@ impl DiscordApp {
             })
             .when(self.show_quick_switcher, |el| {
                 el.child(chat::quick_switcher::render(self, cx))
+            })
+            // 欢迎屏幕是顶层模态，放在最后保证盖住菜单与面板。
+            .when(self.welcome_target.is_some(), |el| {
+                el.child(welcome::render(self, cx))
             })
             .child(voice_status::render(self, cx))
     }

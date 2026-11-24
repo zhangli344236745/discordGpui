@@ -5,7 +5,7 @@ use super::models::{
     Channel, ChatThread, DiscoverServer, DmConversation, Friend, FriendRequest, Gif, HelpArticle,
     Invite, EventCategory, ForumPost, ForumReply, InviteExpiry, Member, Message, MessageRequest,
     MessageRequestState, MyProfile, NotifyLevel, PermissionGrant, PermissionState, Poll,
-    ReadReceipt, Role, Server, ServerEvent, Sticker, ThreadReply,
+    ReadReceipt, Role, Server, ServerEvent, ServerWelcome, Sticker, ThreadReply, WelcomeRule,
 };
 
 /// 前端模拟服务器数据。
@@ -750,6 +750,49 @@ pub fn seed_bookmarks() -> Vec<Bookmark> {
             "今天 09:43",
             95,
         ),
+    ]
+}
+
+/// 服务器欢迎屏幕：只给「精心配置过」的服务器存文案，其余服务器由 app
+/// 用简介 + 文字频道现场合成默认欢迎页。推荐频道名必须真实存在。
+pub fn seed_welcome_screens() -> Vec<ServerWelcome> {
+    vec![
+        ServerWelcome::new(
+            "开发者社区",
+            "欢迎来到开发者社区 👋",
+            "这里聚集了写 Rust、折腾前端与工具链的人。先说三件小事，然后就可以开始逛了。",
+        )
+        .rules(vec![
+            WelcomeRule::new(
+                "友善交流",
+                "对事不对人，不人身攻击、不引战；有分歧就拿出代码或文档说话。",
+            ),
+            WelcomeRule::new(
+                "按频道发帖",
+                "提问去「问题求助」，作品去「作品反馈」，日常闲聊留在「闲聊」。",
+            ),
+            WelcomeRule::new(
+                "不刷屏、不发广告",
+                "重复消息与无关外链会被自动审核拦截，屡次触发会被移出服务器。",
+            ),
+        ])
+        .recommended(&["公告", "闲聊", "Rust 讨论"]),
+        ServerWelcome::new(
+            "设计工坊",
+            "欢迎来到设计工坊 🎨",
+            "把设计稿贴上来，一起看字距、留白与配色。互评只有一条原则：说清楚哪一处、为什么。",
+        )
+        .rules(vec![
+            WelcomeRule::new(
+                "互评对事不对人",
+                "评价作品而不是作者，尽量给可执行的具体建议。",
+            ),
+            WelcomeRule::new(
+                "标注素材来源",
+                "转载素材请注明出处，商用素材先确认授权再发。",
+            ),
+        ])
+        .recommended(&["灵感", "反馈", "素材"]),
     ]
 }
 
