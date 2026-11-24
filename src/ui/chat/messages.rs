@@ -473,6 +473,41 @@ fn notice_bar(notice: String, cx: &mut Context<DiscordApp>) -> impl IntoElement 
         )
 }
 
+/// 自动审核提示条：命中拦截 / 警告规则时显示在消息列表顶部，点 X 关闭。
+fn automod_notice_bar(notice: String, cx: &mut Context<DiscordApp>) -> impl IntoElement {
+    h_flex()
+        .mx_4()
+        .mt_2()
+        .mb_1()
+        .px_3()
+        .h(px(32.))
+        .gap_2()
+        .items_center()
+        .rounded(px(6.))
+        .bg(rgb(palette::bg_sidebar()))
+        .border_1()
+        .border_color(rgb(palette::danger()))
+        .text_size(px(12.))
+        .text_color(rgb(palette::text_primary()))
+        .child(ico(IconName::ShieldAlert, Size::XSmall))
+        .child(div().flex_1().child(notice))
+        .child(
+            div()
+                .w(px(18.))
+                .h(px(18.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(3.))
+                .hover(|el| el.bg(rgb(palette::bg_channel_hover())))
+                .child(ico(IconName::X, Size::XSmall))
+                .id("automod-notice-close")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.dismiss_automod_notice(cx);
+                })),
+        )
+}
+
 /// 消息列表：搜索过滤、频道欢迎页、消息分组与表情回应。
 pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElement {
     let messages = app.current_messages();
@@ -483,6 +518,9 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
 
     if let Some(notice) = app.forward_notice.clone() {
         list = list.child(notice_bar(notice, cx));
+    }
+    if let Some(notice) = app.automod_notice.clone() {
+        list = list.child(automod_notice_bar(notice, cx));
     }
 
     if !query.is_empty() {

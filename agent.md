@@ -329,10 +329,11 @@ gpui_kit::application()
 ### 服务器设置页约定
 
 - 入口：服务器下拉菜单第一项「服务器设置」（`server-menu-settings`）→ `app::open_server_settings`；它会把当前服务器名称/简介预填到 `server_name_edit` / `server_desc_edit`，并收起所有浮层（含用户设置页）。
-- 分类：`ServerSettingsSection`（Overview/Roles/Permissions/Emoji/Invites/Members/Audit），文案与图标唯一数据源是 `ui/server_settings/mod.rs::SECTIONS`，切换走 `select_server_settings_section`。
+- 分类：`ServerSettingsSection`（Overview/Roles/Permissions/AutoMod/Emoji/Invites/Members/Audit），文案与图标唯一数据源是 `ui/server_settings/mod.rs::SECTIONS`，切换走 `select_server_settings_section`。
 - 概览：名称与简介各一个 Input，Enter（订阅在 `new` 里）或「保存」按钮都调用 `save_server_overview`。改名是**带迁移**的：同步搬走 `messages` 里 `旧名/` 前缀的键、重写 `collapsed` 里的折叠键，并按新名首字更新 `badge`；空名或未改名不生效。图标颜色由 6 个色块 `set_server_color` 点击即生效。
 - 角色：主从布局（左列表 / 右详情），数据来自 `app.roles` 与 `app.members`，见「角色管理约定」。
 - 权限：见下方「权限管理约定」；纯配置演示，不校验真实操作。
+- 自动审核：见下方「自动审核约定」；唯一一个会拦截真实操作的设置页。
 - 表情：`server_emojis` / `removed_server_emojis` 两个向量，`remove_server_emoji` 与 `restore_server_emoji` 互转；Demo 不做真实上传。
 - 邀请：见下方「邀请管理约定」；入口按钮 `open_invite` 会关掉服务器设置页（弹层挂在主界面）。
 - 成员：见下方「成员管理约定」；搜索框、筛选与昵称弹层都在 app 层。
@@ -358,6 +359,16 @@ gpui_kit::application()
 - 页面状态复用 `selected_role`（角色页共用）：顶部角色 tabs 走 `select_permission_role`（只切聚焦、不写角色名输入草稿）；进权限分类时若没选中会自动选第一个；切分类清 `permission_notice`。
 - 视图布局：`shell` + 角色 tabs 卡 + 按 `PermissionGroup::ALL` 分组的权限行卡（每行：标签 + hint + 76px 三态按钮，id `permission-toggle-{role}-{key}`）。纯演示，**权限位不校验任何真实操作**。
 - 持久化：`Snapshot.permissions: Option<Vec<PermissionGrant>>`，旧快照缺字段时保留种子；往返测试已覆盖。
+
+### 自动审核约定
+
+- 数据：`AutoModAction { Block, Warn }`（`label()` 文案），`AutoModRule { name, description, keywords: Vec<String>, action, enabled }`（全自有类型，serde 直接派生；`enabled` 带 default=true）。`matched_keyword(text)` 大小写不敏感、忽略空关键词、返回首个命中的原始关键词。种子 `seed_automod_rules()` 三条（广告链接拦截=Block 启用 / 刷屏提醒=Warn 启用 / 不友善用语=Block 停用）。
+- app 状态：`automod_rules` + `selected_automod` + `automod_name_edit` / `automod_keyword_edit`（两个 InputState，Enter 订阅分别走 create / add）+ `automod_notice: Option<String>`（聊天区提示条）。
+- 查询：`automod_rule_focus()` 取选中规则、无则回落第一条；`automod_check(text) -> Option<(AutoModAction, 规则名, 关键词)>` 只遍历启用规则，按规则顺序取首个命中。
+- 写操作：`create_automod_rule`（名非空不重名、默认 Block 启用）、`delete_automod_rule`、`toggle_automod_rule`、`set_automod_action`、`add_automod_keyword`（去重忽略空）、`remove_automod_keyword`、`select_automod_rule`（清空关键词草稿）、`dismiss_automod_notice`。凡是调用 `set_value` 的方法都要带 `window: &mut Window` 参数。所有变更写 `AuditKind::Server` 日志。
+- **拦截落点**：`send_message` 里在清空 composer **之前**检查——仅 `ViewMode::Server` 且文本非空时调 `automod_check`；`Block` 则设 `automod_notice`、不清草稿、`return` 中止；`Warn` 则设提示后照常发送。`reset_session` 与切服务器设置分类都会清 `automod_notice`。
+- 视图：`ui/server_settings/pages.rs::automod` 用「左规则列表+新建输入 / 右详情（启用开关 / 动作二选一 `action_button` / 关键词 chips 带删除 / 关键词输入 / 删除规则）」；`set_value` 走 `<Input as Sizable>::with_size`。拦截提示条 `ui/chat/messages.rs::automod_notice_bar`（danger 描边 + ShieldAlert，点 X 走 `dismiss_automod_notice`），挂在消息列表顶部、与 `forward_notice` 并存。动态 notice 文案要先 `clone()` 成 String 再渲染，不能把 `app` 的借用直接传给 `hint(&'static str)`（会 E0521）。
+- 持久化：`Snapshot.automod_rules: Option<Vec<AutoModRule>>`，旧快照缺字段时保留种子；restore 时选中规则不存在则清空；往返测试已覆盖。
 
 ### 成员管理约定
 

@@ -21,6 +21,11 @@ pub(crate) const SECTIONS: &[(ServerSettingsSection, &str, IconName)] = &[
         IconName::ShieldCheck,
     ),
     (
+        ServerSettingsSection::AutoMod,
+        "自动审核",
+        IconName::ShieldAlert,
+    ),
+    (
         ServerSettingsSection::Emoji,
         "表情",
         IconName::FaceSlightlySmiling,

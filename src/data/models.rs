@@ -1062,6 +1062,67 @@ impl PermissionGrant {
     }
 }
 
+/// 自动审核规则命中关键词后的处理方式。
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub enum AutoModAction {
+    /// 拦截：消息不会被发送，原文保留在输入框。
+    Block,
+    /// 警告：消息照常发送，同时给一条提示。
+    Warn,
+}
+
+impl AutoModAction {
+    pub fn label(self) -> &'static str {
+        match self {
+            AutoModAction::Block => "拦截消息",
+            AutoModAction::Warn => "发出警告",
+        }
+    }
+}
+
+/// 一条自动审核规则：名字 + 说明 + 关键词清单 + 处理方式 + 是否启用。
+/// 全部字段自有，serde 直接派生，无需 `*Owned` 镜像。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AutoModRule {
+    pub name: String,
+    pub description: String,
+    pub keywords: Vec<String>,
+    pub action: AutoModAction,
+    #[serde(default = "default_automod_enabled")]
+    pub enabled: bool,
+}
+
+fn default_automod_enabled() -> bool {
+    true
+}
+
+impl AutoModRule {
+    pub fn new(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        keywords: &[&str],
+        action: AutoModAction,
+        enabled: bool,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+            keywords: keywords.iter().map(|key| (*key).to_string()).collect(),
+            action,
+            enabled,
+        }
+    }
+
+    /// 文本是否命中任一关键词（大小写不敏感）；返回命中的原始关键词。
+    pub fn matched_keyword(&self, text: &str) -> Option<&str> {
+        let lower = text.to_lowercase();
+        self.keywords
+            .iter()
+            .find(|keyword| !keyword.is_empty() && lower.contains(&keyword.to_lowercase()))
+            .map(|keyword| keyword.as_str())
+    }
+}
+
 /// 成员条目。`role` 存角色名，None 表示无角色（归入在线 / 离线兜底组）；
 /// `nick` 是服务器昵称，只影响展示，`name` 始终是身份键。
 #[derive(Clone, Copy, Serialize)]
@@ -1483,5 +1544,22 @@ mod tests {
             assert!(!def.label.is_empty());
             assert!(PermissionGroup::ALL.contains(&def.group));
         }
+    }
+
+    /// 自动审核关键词大小写不敏感，空关键词不参与匹配。
+    #[test]
+    fn automod_keyword_matching_is_case_insensitive() {
+        let rule = AutoModRule::new(
+            "广告",
+            "test",
+            &["SPAM", "", "https://"],
+            AutoModAction::Block,
+            true,
+        );
+        assert_eq!(rule.matched_keyword("please spam me"), Some("SPAM"));
+        assert_eq!(rule.matched_keyword("去 HTTPS://example.com"), Some("https://"));
+        assert_eq!(rule.matched_keyword("clean message"), None);
+        assert_eq!(AutoModAction::Block.label(), "拦截消息");
+        assert_eq!(AutoModAction::Warn.label(), "发出警告");
     }
 }

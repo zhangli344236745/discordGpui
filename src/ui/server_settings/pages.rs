@@ -6,7 +6,9 @@ use gpui_kit::component::input::Input;
 use gpui_kit::component::{h_flex, v_flex, Size, Sizable};
 
 use crate::app::{DiscordApp, MemberFilter, ROLE_COLORS, ServerSettingsSection};
-use crate::data::{AuditKind, InviteExpiry, PermissionGroup, PermissionState, PERMISSIONS};
+use crate::data::{
+    AuditKind, AutoModAction, InviteExpiry, PermissionGroup, PermissionState, PERMISSIONS,
+};
 use crate::ui::theme::palette;
 use crate::ui::{avatar, danger_icon_button, filter_chip, ico, icon_button};
 
@@ -21,6 +23,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
         ServerSettingsSection::Overview => overview(app, cx),
         ServerSettingsSection::Roles => roles(app, cx),
         ServerSettingsSection::Permissions => permissions(app, cx),
+        ServerSettingsSection::AutoMod => automod(app, cx),
         ServerSettingsSection::Emoji => emoji(app, cx),
         ServerSettingsSection::Invites => invites(app, cx),
         ServerSettingsSection::Members => members(app, cx),
@@ -715,6 +718,407 @@ fn permissions(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
             ))),
     )
     .child(body)
+}
+
+// ---------------------------------------------------------------------------
+// 自动审核
+// ---------------------------------------------------------------------------
+
+fn automod(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
+    let focus = app.automod_rule_focus();
+
+    // 左栏：规则列表 + 新建输入。
+    let mut list = v_flex().w_full().gap(px(2.));
+    for (index, rule) in app.automod_rules.iter().enumerate() {
+        let active = focus.as_deref() == Some(rule.name.as_str());
+        let name = rule.name.clone();
+        let enabled = rule.enabled;
+        list = list.child(
+            h_flex()
+                .w_full()
+                .min_h(px(40.))
+                .px_2()
+                .gap_2()
+                .items_center()
+                .rounded(px(6.))
+                .bg(rgb(if active {
+                    palette::bg_rail()
+                } else {
+                    palette::bg_sidebar()
+                }))
+                .hover(|el| el.bg(rgb(palette::bg_channel_hover())))
+                .child(
+                    div()
+                        .w(px(8.))
+                        .h(px(8.))
+                        .flex_shrink_0()
+                        .rounded_full()
+                        .bg(rgb(if enabled {
+                            palette::success()
+                        } else {
+                            palette::text_dim()
+                        })),
+                )
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .gap(px(1.))
+                        .child(
+                            div()
+                                .truncate()
+                                .text_size(px(13.))
+                                .text_color(rgb(palette::text_primary()))
+                                .child(rule.name.clone()),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(10.))
+                                .text_color(rgb(palette::text_muted()))
+                                .child(format!(
+                                    "{} · {} 个关键词",
+                                    rule.action.label(),
+                                    rule.keywords.len()
+                                )),
+                        ),
+                )
+                .id(format!("automod-rule-{index}"))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.select_automod_rule(name.clone(), window, cx);
+                })),
+        );
+    }
+
+    let left = v_flex()
+        .w(px(228.))
+        .flex_shrink_0()
+        .gap_2()
+        .child(
+            div()
+                .text_size(px(13.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(palette::text_primary()))
+                .child("规则"),
+        )
+        .child(list)
+        .child(
+            v_flex()
+                .gap_1()
+                .child(chip_label("新建规则"))
+                .child(
+                    div()
+                        .rounded(px(6.))
+                        .bg(rgb(palette::bg_rail()))
+                        .child(
+                            <Input as Sizable>::with_size(
+                                Input::new(&app.automod_name_edit),
+                                Size::Small,
+                            )
+                            .w_full(),
+                        ),
+                )
+                .child(
+                    div()
+                        .h(px(30.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(6.))
+                        .bg(rgb(palette::accent()))
+                        .text_size(px(12.))
+                        .text_color(rgb(palette::WHITE))
+                        .hover(|el| el.bg(rgb(palette::accent_hover())))
+                        .child("创建规则")
+                        .id("automod-create")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.create_automod_rule(window, cx);
+                        })),
+                ),
+        );
+
+    // 右栏：选中规则的详情。
+    let mut detail = card();
+    match focus.as_deref() {
+        None => {
+            detail = detail.child(hint("左侧选择或新建一条规则"));
+        }
+        Some(current) => {
+            let rule = app
+                .automod_rules
+                .iter()
+                .find(|rule| rule.name == current);
+            if let Some(rule) = rule {
+                // 启用开关行。
+                let toggle_icon = if rule.enabled {
+                    IconName::CircleCheck
+                } else {
+                    IconName::Circle
+                };
+                let enabled = rule.enabled;
+                let action = rule.action;
+                let keyword_count = rule.keywords.len();
+
+                detail = detail
+                    .child(
+                        v_flex()
+                            .gap(px(2.))
+                            .child(
+                                div()
+                                    .text_size(px(16.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(rgb(palette::text_primary()))
+                                    .child(rule.name.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(rgb(palette::text_muted()))
+                                    .child(rule.description.clone()),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .h(px(38.))
+                            .px_2()
+                            .gap_2()
+                            .items_center()
+                            .justify_between()
+                            .rounded(px(6.))
+                            .bg(rgb(palette::bg_rail()))
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .text_color(rgb(palette::text_primary()))
+                                    .child(if enabled { "已启用" } else { "已停用" }),
+                            )
+                            .child(
+                                h_flex()
+                                    .gap_1()
+                                    .items_center()
+                                    .child(ico(toggle_icon, Size::XSmall))
+                                    .child(
+                                        div()
+                                            .text_size(px(11.))
+                                            .text_color(rgb(if enabled {
+                                                palette::success()
+                                            } else {
+                                                palette::text_muted()
+                                            }))
+                                            .child(if enabled { "点击停用" } else { "点击启用" }),
+                                    )
+                            .id("automod-toggle-enabled")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.toggle_automod_rule(cx);
+                            })),
+                            ),
+                    )
+                    // 动作切换：拦截 / 警告 两个按钮。
+                    .child(
+                        v_flex()
+                            .gap_2()
+                            .child(chip_label("命中后动作"))
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .child(action_button(
+                                        "拦截消息",
+                                        "命中关键词时阻止发送",
+                                        action == AutoModAction::Block,
+                                        "automod-action-block",
+                                        AutoModAction::Block,
+                                        cx,
+                                    ))
+                                    .child(action_button(
+                                        "发出警告",
+                                        "照常发送并提示",
+                                        action == AutoModAction::Warn,
+                                        "automod-action-warn",
+                                        AutoModAction::Warn,
+                                        cx,
+                                    )),
+                            ),
+                    )
+                    // 关键词 chips：每个可点 X 删除。
+                    .child(
+                        v_flex()
+                            .gap_2()
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .items_center()
+                                    .child(chip_label("关键词"))
+                                    .child(
+                                        div()
+                                            .px_2()
+                                            .h(px(18.))
+                                            .flex()
+                                            .items_center()
+                                            .rounded_full()
+                                            .bg(rgb(palette::bg_rail()))
+                                            .text_size(px(11.))
+                                            .text_color(rgb(palette::text_muted()))
+                                            .child(format!("{keyword_count}")),
+                                    ),
+                            )
+                            .child({
+                                let mut chips = h_flex().gap_2().flex_wrap();
+                                for (index, keyword) in rule.keywords.iter().enumerate() {
+                                    let word = keyword.clone();
+                                    chips = chips.child(
+                                        h_flex()
+                                            .h(px(28.))
+                                            .px_2()
+                                            .gap_1()
+                                            .items_center()
+                                            .rounded(px(6.))
+                                            .bg(rgb(palette::bg_rail()))
+                                            .border_1()
+                                            .border_color(rgb(palette::border_default()))
+                                            .child(
+                                                div()
+                                                    .text_size(px(12.))
+                                                    .text_color(rgb(palette::text_primary()))
+                                                    .child(keyword.clone()),
+                                            )
+                                            .child(
+                                                div()
+                                                    .w(px(16.))
+                                                    .h(px(16.))
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .rounded(px(3.))
+                                                    .hover(|el| {
+                                                        el.bg(rgb(palette::danger()))
+                                                            .text_color(rgb(palette::WHITE))
+                                                    })
+                                                    .child(ico(IconName::X, Size::XSmall))
+                                                    .id(format!("automod-keyword-remove-{index}"))
+                                                    .on_click(cx.listener(
+                                                        move |this, _, _, cx| {
+                                                            this.remove_automod_keyword(
+                                                                word.clone(),
+                                                                cx,
+                                                            );
+                                                        },
+                                                    )),
+                                            ),
+                                    );
+                                }
+                                if keyword_count == 0 {
+                                    chips.child(hint("还没有关键词，在下方输入添加"))
+                                } else {
+                                    chips
+                                }
+                            })
+                            .child(
+                                div()
+                                    .rounded(px(6.))
+                                    .bg(rgb(palette::bg_rail()))
+                                    .child(
+                                        <Input as Sizable>::with_size(
+                                            Input::new(&app.automod_keyword_edit),
+                                            Size::Small,
+                                        )
+                                        .w_full(),
+                                    ),
+                            )
+                            .child(hint("回车添加关键词；消息命中任一关键词即触发动作")),
+                    )
+                    // 删除规则。
+                    .child(
+                        h_flex()
+                            .h(px(32.))
+                            .px_3()
+                            .gap_1()
+                            .items_center()
+                            .rounded(px(6.))
+                            .bg(rgb(palette::bg_rail()))
+                            .text_size(px(12.))
+                            .text_color(rgb(palette::danger()))
+                            .hover(|el| {
+                                el.bg(rgb(palette::danger()))
+                                    .text_color(rgb(palette::WHITE))
+                            })
+                            .child(ico(IconName::Trash, Size::XSmall))
+                            .child("删除规则")
+                            .id("automod-delete")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.delete_automod_rule(cx);
+                            })),
+                    );
+            }
+        }
+    }
+
+    let notice = app.automod_notice.clone().unwrap_or_else(|| {
+        "新建规则并添加关键词后即可生效；变更写入审核日志。".to_string()
+    });
+    shell(
+        "自动审核",
+        "规则命中关键词时拦截或提醒消息（仅对服务器频道生效，不会写入真实后端）。",
+    )
+    .child(
+        div()
+            .text_size(px(11.))
+            .text_color(rgb(palette::text_dim()))
+            .child(notice),
+    )
+    .child(
+        h_flex()
+            .w_full()
+            .gap_4()
+            .items_start()
+            .child(left)
+            .child(div().flex_1().min_w_0().child(detail)),
+    )
+}
+
+/// 动作二选一按钮。
+fn action_button(
+    title: &'static str,
+    desc: &'static str,
+    active: bool,
+    id: &'static str,
+    action: AutoModAction,
+    cx: &mut Context<DiscordApp>,
+) -> Stateful<Div> {
+    div()
+        .flex_1()
+        .px_3()
+        .py_2()
+        .gap(px(2.))
+        .rounded(px(6.))
+        .border_1()
+        .border_color(rgb(if active {
+            palette::accent()
+        } else {
+            palette::border_default()
+        }))
+        .bg(rgb(if active {
+            palette::bg_channel_selected()
+        } else {
+            palette::bg_sidebar()
+        }))
+        .hover(|el| el.bg(rgb(palette::bg_channel_hover())))
+        .child(
+            div()
+                .text_size(px(13.))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(rgb(palette::text_primary()))
+                .child(title),
+        )
+        .child(
+            div()
+                .text_size(px(11.))
+                .text_color(rgb(palette::text_muted()))
+                .child(desc),
+        )
+        .id(id)
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.set_automod_action(action, cx);
+        }))
 }
 
 // ---------------------------------------------------------------------------

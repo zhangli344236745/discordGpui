@@ -15,8 +15,8 @@ use gpui_kit::{rgb, Rgba};
 use serde::{Deserialize, Serialize, Serializer};
 
 use super::models::{
-    AuditEntry, BannedUser, ChatThread, DmConversation, Friend, FriendRequest, Invite, InviteExpiry,
-    Member, Message, MyProfile, PermissionGrant, Role, Server, UserStatus,
+    AuditEntry, AutoModRule, BannedUser, ChatThread, DmConversation, Friend, FriendRequest, Invite,
+    InviteExpiry, Member, Message, MyProfile, PermissionGrant, Role, Server, UserStatus,
 };
 
 /// 快照版本号；字段语义变化时递增，加载端按需丢弃旧数据。
@@ -58,6 +58,9 @@ pub struct Snapshot {
     /// 角色权限位（只存非默认项）。旧快照缺字段时保留种子权限。
     #[serde(default)]
     pub permissions: Option<Vec<PermissionGrant>>,
+    /// 自动审核规则。旧快照缺字段时保留种子规则。
+    #[serde(default)]
+    pub automod_rules: Option<Vec<AutoModRule>>,
     /// 好友分组的顺序（只存分组名，成员关系在 `Friend.group` 上）。
     #[serde(default)]
     pub friend_groups: Vec<String>,
@@ -548,6 +551,7 @@ mod tests {
             members: Some(crate::data::seed_members()),
             roles: Some(crate::data::seed_roles()),
             permissions: Some(crate::data::seed_permissions()),
+            automod_rules: Some(crate::data::seed_automod_rules()),
             audit: Some(crate::data::seed_audit()),
             bans: Some(crate::data::seed_bans()),
             me: crate::data::seed_me(),
@@ -616,6 +620,15 @@ mod tests {
         assert_eq!(after_permissions[0].role, before_permissions[0].role);
         assert_eq!(after_permissions[0].permission, before_permissions[0].permission);
         assert_eq!(after_permissions[0].state, before_permissions[0].state);
+
+        // 自动审核规则：名称 / 关键词清单 / 动作 / 启用状态都要完整往返。
+        let before_rules = snapshot.automod_rules.clone().unwrap_or_default();
+        let after_rules = back.automod_rules.clone().unwrap_or_default();
+        assert_eq!(after_rules.len(), before_rules.len());
+        assert_eq!(after_rules[0].name, before_rules[0].name);
+        assert_eq!(after_rules[0].keywords, before_rules[0].keywords);
+        assert_eq!(after_rules[0].action, before_rules[0].action);
+        assert_eq!(after_rules[0].enabled, before_rules[0].enabled);
 
         // 审核日志：类别枚举、序号与两段文本都要完整往返。
         let before_audit = snapshot.audit.clone().unwrap_or_default();

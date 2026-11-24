@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
 use super::models::{
-    Attachment, AuditEntry, AuditKind, BannedUser, Category, Channel, ChatThread, DiscoverServer,
-    DmConversation, Friend, FriendRequest, Gif, HelpArticle, Invite, InviteExpiry, Member, Message,
-    MyProfile, NotifyLevel, PermissionGrant, PermissionState, ReadReceipt, Role, Server, Sticker,
-    ThreadReply,
+    Attachment, AuditEntry, AuditKind, AutoModAction, AutoModRule, BannedUser, Category, Channel,
+    ChatThread, DiscoverServer, DmConversation, Friend, FriendRequest, Gif, HelpArticle, Invite,
+    InviteExpiry, Member, Message, MyProfile, NotifyLevel, PermissionGrant, PermissionState,
+    ReadReceipt, Role, Server, Sticker, ThreadReply,
 };
 
 /// 前端模拟服务器数据。
@@ -336,6 +336,34 @@ pub fn seed_permissions() -> Vec<PermissionGrant> {
         &mut grants,
     );
     grants
+}
+
+/// 自动审核种子：默认启用一条拦截广告链接的规则与一条警告刷屏的规则，
+/// 另有一条停用规则演示「启用」开关。
+pub fn seed_automod_rules() -> Vec<AutoModRule> {
+    vec![
+        AutoModRule::new(
+            "广告链接拦截",
+            "拦截常见推广与外链，保护社区免受垃圾广告打扰。",
+            &["http://", "https://", "免费领取", "点击链接", "spam"],
+            AutoModAction::Block,
+            true,
+        ),
+        AutoModRule::new(
+            "刷屏提醒",
+            "命中后仍可发送，但会提示注意刷屏。",
+            &["刷屏", " flood ", "@@@"],
+            AutoModAction::Warn,
+            true,
+        ),
+        AutoModRule::new(
+            "不友善用语",
+            "命中后拦截人身攻击类词汇（默认停用）。",
+            &["笨蛋", "傻子"],
+            AutoModAction::Block,
+            false,
+        ),
+    ]
 }
 
 /// 前端模拟成员数据。角色按名称归属 `seed_roles()`，None 表示无角色。

@@ -11,8 +11,9 @@ use crate::data::{
     gif_categories, help_categories, seed_friend_groups, seed_friends, seed_gifs,
     seed_audit, seed_help_articles, seed_invites, seed_me, seed_roles,
     seed_members, seed_messages, seed_servers,
-    seed_bans, seed_permissions, seed_stickers, seed_threads, sticker_packs, Attachment, AuditEntry,
-    AuditKind, BannedUser, Category, Channel, ChannelKind,
+    seed_automod_rules, seed_bans, seed_permissions, seed_stickers, seed_threads, sticker_packs,
+    Attachment, AuditEntry, AuditKind, AutoModAction, AutoModRule, BannedUser, Category, Channel,
+    ChannelKind,
     ChatThread, DiscoverServer,     DmConversation, EditRevision, ForwardOrigin, ForwardTarget, Friend, FriendRequest,
     FriendTab, Gif, HelpArticle, Invite, InviteExpiry, Member, MyProfile,
     MemberGroup, Message, Notification, NotificationKind, NotificationTarget, NotifyLevel,
@@ -179,6 +180,7 @@ pub(crate) enum ServerSettingsSection {
     Overview,
     Roles,
     Permissions,
+    AutoMod,
     Emoji,
     Invites,
     Members,
@@ -372,6 +374,13 @@ pub struct DiscordApp {
     // 权限管理：角色 × 权限的三态设置（只存非默认项）+ 操作提示。
     pub(crate) role_permissions: Vec<PermissionGrant>,
     pub(crate) permission_notice: Option<&'static str>,
+
+    // 自动审核：规则表 + 选中规则 + 新建名/关键词输入 + 拦截提示。
+    pub(crate) automod_rules: Vec<AutoModRule>,
+    pub(crate) selected_automod: Option<String>,
+    pub(crate) automod_name_edit: Entity<InputState>,
+    pub(crate) automod_keyword_edit: Entity<InputState>,
+    pub(crate) automod_notice: Option<String>,
 
     // 邀请管理：全部邀请 + 新建表单（频道 / 有效期 / 次数上限）+ 最近复制的邀请码。
     pub(crate) invites: Vec<Invite>,
@@ -665,6 +674,10 @@ impl DiscordApp {
         let server_name_edit =
             cx.new(|cx| InputState::new(window, cx).placeholder("服务器名称"));
         let role_name_edit = cx.new(|cx| InputState::new(window, cx).placeholder("角色名称"));
+        let automod_name_edit =
+            cx.new(|cx| InputState::new(window, cx).placeholder("规则名称，例如 广告拦截"));
+        let automod_keyword_edit =
+            cx.new(|cx| InputState::new(window, cx).placeholder("输入关键词后回车添加"));
         let member_search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索成员"));
         let member_nick_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("服务器昵称"));
@@ -866,6 +879,28 @@ impl DiscordApp {
         })
         .detach();
 
+        // 自动审核：规则名回车新建规则，关键词回车添加到选中规则。
+        cx.subscribe_in(
+            &automod_name_edit,
+            window,
+            |this, _, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::PressEnter { secondary: false, .. }) {
+                    this.create_automod_rule(window, cx);
+                }
+            },
+        )
+        .detach();
+        cx.subscribe_in(
+            &automod_keyword_edit,
+            window,
+            |this, _, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::PressEnter { secondary: false, .. }) {
+                    this.add_automod_keyword(window, cx);
+                }
+            },
+        )
+        .detach();
+
         cx.subscribe_in(&topic_input, window, |this, _, event: &InputEvent, window, cx| {
             if matches!(event, InputEvent::PressEnter { secondary: false, .. }) {
                 this.save_channel_topic(window, cx);
@@ -985,6 +1020,11 @@ impl DiscordApp {
             role_notice: None,
             role_permissions: seed_permissions(),
             permission_notice: None,
+            automod_rules: seed_automod_rules(),
+            selected_automod: None,
+            automod_name_edit,
+            automod_keyword_edit,
+            automod_notice: None,
             invites: seed_invites(),
             invite_channel: String::new(),
             invite_expiry: InviteExpiry::OneDay,
@@ -1678,6 +1718,7 @@ impl DiscordApp {
         self.show_search_center = false;
         self.close_forward();
         self.forward_notice = None;
+        self.automod_notice = None;
         self.attachment_preview = None;
         self.member_menu = None;
         self.cancel_edit();
@@ -2509,6 +2550,24 @@ impl DiscordApp {
             || self.view_mode == ViewMode::Friends
         {
             return;
+        }
+
+        // 自动审核：仅服务器频道生效。拦截则保留草稿、提示并中止发送。
+        if self.view_mode == ViewMode::Server && !text.is_empty() {
+            if let Some((action, rule, keyword)) = self.automod_check(&text) {
+                match action {
+                    AutoModAction::Block => {
+                        self.automod_notice =
+                            Some(format!("消息被「{rule}」拦截（命中关键词：{keyword}）"));
+                        cx.notify();
+                        return;
+                    }
+                    AutoModAction::Warn => {
+                        self.automod_notice =
+                            Some(format!("提醒：「{rule}」命中关键词 {keyword}，消息仍会发送"));
+                    }
+                }
+            }
         }
 
         self.composer
@@ -4787,12 +4846,20 @@ impl DiscordApp {
         self.invite_copied_code = None;
         self.role_notice = None;
         self.permission_notice = None;
+        self.automod_notice = None;
         // 进角色页/权限页时默认选中第一个角色，右侧详情不至于空白。
         if (section == ServerSettingsSection::Roles || section == ServerSettingsSection::Permissions)
             && self.selected_role.is_none()
             && let Some(first) = self.roles.first().map(|role| role.name.clone())
         {
             self.select_role(first, window, cx);
+        }
+        // 进自动审核页时默认选中第一条规则。
+        if section == ServerSettingsSection::AutoMod
+            && self.selected_automod.is_none()
+            && let Some(first) = self.automod_rules.first().map(|rule| rule.name.clone())
+        {
+            self.selected_automod = Some(first);
         }
         cx.notify();
     }
@@ -5123,6 +5190,198 @@ impl DiscordApp {
     pub(crate) fn select_permission_role(&mut self, name: String, cx: &mut Context<Self>) {
         self.selected_role = Some(name);
         self.permission_notice = None;
+        cx.notify();
+    }
+
+    // ---------------------------- 自动审核 ----------------------------
+
+    /// 选中一条规则（并清空关键词输入草稿）。
+    pub(crate) fn select_automod_rule(
+        &mut self,
+        name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.selected_automod = Some(name);
+        self.automod_notice = None;
+        self.automod_keyword_edit
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        cx.notify();
+    }
+
+    /// 当前聚焦的规则名：选中项优先，否则回落第一条。
+    pub(crate) fn automod_rule_focus(&self) -> Option<String> {
+        self.selected_automod.clone().or_else(|| {
+            self.automod_rules
+                .first()
+                .map(|rule| rule.name.clone())
+        })
+    }
+
+    /// 新建规则：名称非空且不重名，默认启用、动作为拦截、关键词为空。
+    pub(crate) fn create_automod_rule(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let name = self
+            .automod_name_edit
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
+        if name.is_empty() {
+            self.automod_notice = Some("规则名称不能为空".into());
+            cx.notify();
+            return;
+        }
+        if self.automod_rules.iter().any(|rule| rule.name == name) {
+            self.automod_notice = Some("已有同名规则".into());
+            cx.notify();
+            return;
+        }
+        let rule = AutoModRule::new(
+            name.clone(),
+            "新规则，添加关键词后生效。",
+            &[],
+            AutoModAction::Block,
+            true,
+        );
+        self.automod_rules.push(rule);
+        self.log_audit(
+            AuditKind::Server,
+            "创建了自动审核规则",
+            name.clone(),
+        );
+        self.automod_name_edit
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.select_automod_rule(name, window, cx);
+        self.automod_notice = Some("规则已创建，添加关键词后生效".into());
+        cx.notify();
+    }
+
+    /// 删除选中的规则。
+    pub(crate) fn delete_automod_rule(&mut self, cx: &mut Context<Self>) {
+        let Some(current) = self.selected_automod.clone() else {
+            return;
+        };
+        self.automod_rules.retain(|rule| rule.name != current);
+        self.log_audit(AuditKind::Server, "删除了自动审核规则", current.clone());
+        self.selected_automod = None;
+        self.automod_notice = Some("规则已删除".into());
+        cx.notify();
+    }
+
+    /// 切换选中规则的启用状态。
+    pub(crate) fn toggle_automod_rule(&mut self, cx: &mut Context<Self>) {
+        let Some(current) = self.automod_rule_focus() else {
+            return;
+        };
+        if let Some(rule) = self.automod_rules.iter_mut().find(|rule| rule.name == current) {
+            rule.enabled = !rule.enabled;
+            let text = if rule.enabled { "启用" } else { "停用" };
+            self.log_audit(
+                AuditKind::Server,
+                "更新了自动审核规则",
+                format!("{current} · {text}"),
+            );
+        }
+        cx.notify();
+    }
+
+    /// 修改选中规则的处理动作。
+    pub(crate) fn set_automod_action(
+        &mut self,
+        action: AutoModAction,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(current) = self.automod_rule_focus() else {
+            return;
+        };
+        if let Some(rule) = self.automod_rules.iter_mut().find(|rule| rule.name == current)
+            && rule.action != action
+        {
+            rule.action = action;
+            self.log_audit(
+                AuditKind::Server,
+                "更新了自动审核规则",
+                format!("{current} · 动作改为{}", action.label()),
+            );
+        }
+        cx.notify();
+    }
+
+    /// 给选中规则添加关键词（去重、忽略空值）。
+    pub(crate) fn add_automod_keyword(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let keyword = self
+            .automod_keyword_edit
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
+        if keyword.is_empty() {
+            return;
+        }
+        let Some(current) = self.automod_rule_focus() else {
+            return;
+        };
+        if let Some(rule) = self.automod_rules.iter_mut().find(|rule| rule.name == current) {
+            if rule.keywords.iter().any(|key| key == &keyword) {
+                self.automod_notice = Some("关键词已存在".into());
+            } else {
+                rule.keywords.push(keyword.clone());
+                self.log_audit(
+                    AuditKind::Server,
+                    "添加了审核关键词",
+                    format!("{current} · {keyword}"),
+                );
+                self.automod_notice = Some("关键词已添加".into());
+            }
+        }
+        self.automod_keyword_edit
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        cx.notify();
+    }
+
+    /// 删除选中规则的一个关键词。
+    pub(crate) fn remove_automod_keyword(
+        &mut self,
+        keyword: String,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(current) = self.automod_rule_focus() else {
+            return;
+        };
+        if let Some(rule) = self.automod_rules.iter_mut().find(|rule| rule.name == current)
+            && let Some(index) = rule.keywords.iter().position(|key| key == &keyword)
+        {
+            rule.keywords.remove(index);
+            self.log_audit(
+                AuditKind::Server,
+                "移除了审核关键词",
+                format!("{current} · {keyword}"),
+            );
+        }
+        cx.notify();
+    }
+
+    /// 检查文本是否命中启用的审核规则；返回（动作、规则名、命中关键词）。
+    pub(crate) fn automod_check(&self, text: &str) -> Option<(AutoModAction, String, String)> {
+        for rule in self.automod_rules.iter().filter(|rule| rule.enabled) {
+            if let Some(keyword) = rule.matched_keyword(text) {
+                return Some((rule.action, rule.name.clone(), keyword.to_string()));
+            }
+        }
+        None
+    }
+
+    /// 关闭聊天区的审核提示条。
+    pub(crate) fn dismiss_automod_notice(&mut self, cx: &mut Context<Self>) {
+        self.automod_notice = None;
         cx.notify();
     }
 
@@ -5599,6 +5858,7 @@ impl DiscordApp {
             members: Some(self.members.clone()),
             roles: Some(self.roles.clone()),
             permissions: Some(self.role_permissions.clone()),
+            automod_rules: Some(self.automod_rules.clone()),
             friend_requests: self.friend_requests.clone(),
             blocked_users: self.blocked_users.clone(),
             me: self.me.clone(),
@@ -5681,6 +5941,17 @@ impl DiscordApp {
         }
         self.role_permissions
             .retain(|grant| self.roles.iter().any(|role| role.name == grant.role));
+        // 自动审核：旧快照没有就保留种子；选中规则若已不存在则清空。
+        if let Some(rules) = saved.automod_rules {
+            self.automod_rules = rules;
+        }
+        if let Some(selected) = self.selected_automod.take() {
+            self.selected_automod = self
+                .automod_rules
+                .iter()
+                .any(|rule| rule.name == selected)
+                .then_some(selected);
+        }
         if let Some(selected) = self.selected_role.take() {
             self.selected_role = self
                 .roles
@@ -5758,6 +6029,9 @@ impl DiscordApp {
         self.role_notice = None;
         self.role_permissions = seed_permissions();
         self.permission_notice = None;
+        self.automod_rules = seed_automod_rules();
+        self.selected_automod = None;
+        self.automod_notice = None;
         self.invites = seed_invites();
         self.invite_copied_code = None;
         self.audit = seed_audit();
