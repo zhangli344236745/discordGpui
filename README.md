@@ -284,6 +284,7 @@ DISCORD_DEMO=1 cargo run
 - `DISCORD_HTTP_TIMEOUT`：请求超时秒数（1–120，默认 10）。
 - `DISCORD_SESSION_FILE`：覆盖“记住我”的 token 文件路径。
 - 启动顺序：health 探测 → 登录/注册 → 首屏同步 → 主界面；退出登录在「用户设置 → 账户」。
+- 客户端端到端冒烟：`./scripts/client-e2e.sh`（自动起临时 server，覆盖 Demo / 登录页 / 自动登录 + WS + 事件 / 失效 token / 后端不可达）。
 - 计划与任务见 `openspec/changes/connect-client-to-backend/`。
 
 ---

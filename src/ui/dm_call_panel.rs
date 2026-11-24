@@ -24,7 +24,6 @@ fn control(
         danger_icon_button(icon, Size::Small, px(32.), id, handler, cx)
             .bg(rgb(palette::danger()))
             .text_color(rgb(palette::WHITE))
-            .hover(|el| el.bg(rgb(palette::danger())))
             .into_any_element()
     } else {
         icon_button(icon, Size::Small, px(32.), id, active, handler, cx).into_any_element()
