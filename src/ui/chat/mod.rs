@@ -1,5 +1,6 @@
 pub mod attachment_picker;
 pub mod attachment_preview;
+pub mod bookmarks_panel;
 pub mod composer;
 pub mod edit_history;
 pub mod gif_picker;

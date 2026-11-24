@@ -103,6 +103,34 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                         Box::new(|this, _, _| this.toggle_pins()), cx,
                     ),
                 )
+                // 书签入口：跨频道 / 私信汇总，与置顶、收件箱等面板互斥。
+                .child(
+                    crate::ui::icon_button(
+                        IconName::Bookmark, Size::Small, px(24.), "chat-toggle-bookmarks",
+                        app.show_bookmarks,
+                        Box::new(|this, _, cx| this.toggle_bookmarks(cx)), cx,
+                    )
+                    .when(!app.bookmarks.is_empty(), |el| {
+                        el.child(
+                            div()
+                                .absolute()
+                                .right(px(-3.))
+                                .top(px(-3.))
+                                .min_w(px(13.))
+                                .h(px(13.))
+                                .px_1()
+                                .rounded_full()
+                                .bg(rgb(palette::accent()))
+                                .text_color(rgb(palette::WHITE))
+                                .text_size(px(8.))
+                                .font_weight(FontWeight::BOLD)
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(app.bookmarks.len().to_string()),
+                        )
+                    }),
+                )
                 // 服务器日程入口：仅服务器视图显示，与置顶/收件箱互斥。
                 .when(!is_dm, |el| {
                     el.child(crate::ui::icon_button(

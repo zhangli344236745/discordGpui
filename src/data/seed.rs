@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use super::models::{
-    Attachment, AuditEntry, AuditKind, AutoModAction, AutoModRule, BannedUser, Category, Channel,
-    ChatThread, DiscoverServer, DmConversation, Friend, FriendRequest, Gif, HelpArticle, Invite,
-    EventCategory, ForumPost, ForumReply, InviteExpiry, Member, Message, MessageRequest,
+    Attachment, AuditEntry, AuditKind, AutoModAction, AutoModRule, BannedUser, Bookmark, Category,
+    Channel, ChatThread, DiscoverServer, DmConversation, Friend, FriendRequest, Gif, HelpArticle,
+    Invite, EventCategory, ForumPost, ForumReply, InviteExpiry, Member, Message, MessageRequest,
     MessageRequestState, MyProfile, NotifyLevel, PermissionGrant, PermissionState, Poll,
     ReadReceipt, Role, Server, ServerEvent, Sticker, ThreadReply,
 };
@@ -713,6 +713,43 @@ pub fn seed_forum_posts() -> Vec<ForumPost> {
         .tags(&["公告"])
         .pinned(true)
         .locked(true),
+    ]
+}
+
+/// 消息书签种子：覆盖不同服务器频道与一条私信，正文与种子消息保持一致，
+/// 这样「跳转到原消息」在首次启动时就能命中。
+pub fn seed_bookmarks() -> Vec<Bookmark> {
+    vec![
+        Bookmark::new(
+            false,
+            "开发者社区",
+            "闲聊",
+            "Nova",
+            0x00a8fc,
+            "早上好！今天准备把消息搜索补上，@小满 你昨天说的筛选逻辑我看了，思路没问题。",
+            "今天 09:12",
+            6,
+        ),
+        Bookmark::new(
+            false,
+            "开发者社区",
+            "闲聊",
+            "Lin",
+            0x57f287,
+            "设计稿放在 https://example.com/gpui-kit-design 了，有空可以看看。",
+            "今天 11:28",
+            32,
+        ),
+        Bookmark::new(
+            true,
+            "",
+            "Nova",
+            "你",
+            0x5865f2,
+            "沿用频道那套四栏，把频道栏换成会话列表就行。",
+            "今天 09:43",
+            95,
+        ),
     ]
 }
 

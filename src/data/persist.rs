@@ -15,7 +15,7 @@ use gpui_kit::{rgb, Rgba};
 use serde::{Deserialize, Serialize, Serializer};
 
 use super::models::{
-    AuditEntry, AutoModRule, BannedUser, ChatThread, DmConversation, ForumPost, Friend,
+    AuditEntry, AutoModRule, BannedUser, Bookmark, ChatThread, DmConversation, ForumPost, Friend,
     FriendRequest, Invite, InviteExpiry, Member, Message, MessageRequest, MyProfile,
     PermissionGrant, Role, Server, ServerEvent, UserStatus,
 };
@@ -71,6 +71,9 @@ pub struct Snapshot {
     /// 论坛帖子。旧快照缺字段时保留种子帖子。
     #[serde(default)]
     pub forum_posts: Option<Vec<ForumPost>>,
+    /// 消息书签。旧快照缺字段时保留种子书签。
+    #[serde(default)]
+    pub bookmarks: Option<Vec<Bookmark>>,
     /// 好友分组的顺序（只存分组名，成员关系在 `Friend.group` 上）。
     #[serde(default)]
     pub friend_groups: Vec<String>,
@@ -568,6 +571,7 @@ mod tests {
             events: Some(crate::data::seed_events()),
             message_requests: Some(crate::data::seed_message_requests()),
             forum_posts: Some(crate::data::seed_forum_posts()),
+            bookmarks: Some(crate::data::seed_bookmarks()),
             audit: Some(crate::data::seed_audit()),
             bans: Some(crate::data::seed_bans()),
             me: crate::data::seed_me(),
@@ -635,6 +639,18 @@ mod tests {
         assert_eq!(forum_after[0].locked, forum_before[0].locked);
         assert_eq!(forum_after[0].replies.len(), forum_before[0].replies.len());
         assert_eq!(forum_after[0].replies[0].body, forum_before[0].replies[0].body);
+
+        // 消息书签：来源标记、正文副本与保存时间都要完整往返。
+        let marks_before = snapshot.bookmarks.clone().unwrap_or_default();
+        let marks_after = back.bookmarks.clone().unwrap_or_default();
+        assert_eq!(marks_after.len(), marks_before.len());
+        assert_eq!(marks_after[0].is_dm, marks_before[0].is_dm);
+        assert_eq!(marks_after[0].server, marks_before[0].server);
+        assert_eq!(marks_after[0].channel, marks_before[0].channel);
+        assert_eq!(marks_after[0].text, marks_before[0].text);
+        assert_eq!(marks_after[0].saved_minutes_ago, marks_before[0].saved_minutes_ago);
+        // 私信书签的 `server` 保持空串。
+        assert!(marks_after.iter().any(|b| b.is_dm && b.server.is_empty()));
 
         // 好友分组：顺序表与成员身上的分组名都要能完整往返。
         assert_eq!(back.friend_groups, snapshot.friend_groups);

@@ -76,6 +76,7 @@ src/
         ├── pinned_panel.rs   # 置顶消息面板（绝对定位，覆盖聊天区右侧）
         ├── quick_switcher.rs # 快速切换器（Ctrl/⌘+K 搜索频道/私信并跳转）
         ├── read_receipts.rs  # 已读回执详情浮层（光标锚点卡片，列出读者与时间）
+        ├── bookmarks_panel.rs # 消息书签面板（跨频道/私信汇总 + 搜索 + 跳转高亮 + 移除）
         └── inbox_panel.rs    # 收件箱/通知中心（绝对定位，聚合提及/未读/私信/好友请求）
 ```
 
@@ -531,6 +532,16 @@ gpui_kit::application()
 - app 字段：`forum_posts/forum_open(帖子 id)/forum_sort/forum_query+forum_search(Entity)/show_forum_composer/forum_title_edit+forum_body_edit+forum_tag_edit+forum_reply_edit/forum_tags_draft/forum_notice`。方法 `is_forum_view()`（Server 视图 + 当前频道 kind==Forum）/`forum_key()→(server,channel)`/`forum_visible_posts()`（按归属+搜索过滤，置顶恒定在前，再按排序）/ `forum_open_post/open_forum_post/close_forum_post/set_forum_sort/toggle_forum_composer/close_forum_composer/add_forum_tag/remove_forum_tag/create_forum_post/send_forum_reply/toggle_forum_pin/toggle_forum_lock/dismiss_forum_notice/clear_forum_search` + 迁移清理 `remove_forum_posts_of_server/rename_forum_server`。发帖/回帖/置顶/锁定写 `AuditKind::Channel` 日志。⚠️ `open_forum_post` 要传 `window` 给 `set_value`。
 - 渲染：`render_main` 的 `main` 分支里 `ViewMode::Server if is_forum_view()` → `forum::render`（在 search_center 分支之后）；成员栏仍显示。搜索中心输入订阅用 `InputEvent::Change` 同步 `forum_query`；标签/回帖框订阅 `PressEnter` 回车提交。`reset_session` 与 `close_top_overlay`（Esc：先发帖弹层→再帖子详情）清理论坛状态。
 - 视图 `ui/forum.rs`：需 `use gpui_kit::prelude::FluentBuilder as _`（`.when()`）。列表页固定 96px 头部（搜索框 + 排序 chips）+ 可滚动帖卡，`.id("forum-list-scroll")`；详情页绝对定位覆盖，含返回/置顶/锁定按钮、正文、回帖列表、回帖输入（锁定时换成只读提示条）；发帖弹层居中模态，遮罩与卡片是兄弟节点（`Rc` 复用取消闭包）。锁定/置顶图标用 `Shield`/`Pin`（assets 里无 Lock 图标，别用 `IconName::Lock`）。
+
+### 消息书签约定
+
+- 数据：`data::Bookmark { is_dm, server, channel, author, color, text, time, saved_minutes_ago }`，全自有字段，serde 直接派生。私信书签的 `server` 固定空串。方法 `location_label()`（`#频道` / `私信 · 好友`）、`source_label()`、`saved_label()`（「x 前保存」）、`preview(max)`（按字符截断）、`matches(query 已转小写)`（正文/作者/频道/服务器）、`in_session(is_dm, server, channel)`、`same_as(&other)`。
+- ⚠️ Demo 消息没有 id：书签身份 = `is_dm + server + channel + text`，跳转靠正文反查原消息。所以「收藏」与「是否已收藏」必须用**同一个正文串**——统一走 `app.rs` 的自由函数 `bookmark_body(&Message)`（贴纸/GIF/附件/空消息返回 `[贴纸]` 等占位），否则空正文消息会被重复收藏。
+- 种子 `seed_bookmarks()`：2 条频道 + 1 条私信，正文与 `seed_messages` / `seed_dm_messages` 保持一致，首启即可命中跳转。`Snapshot.bookmarks: Option<Vec<Bookmark>>`，旧快照缺字段保留种子；`restore_state` 会 `retain` 掉服务器/频道/好友已不存在的脏书签。
+- app 字段：`bookmarks/show_bookmarks/bookmark_query+bookmark_search(Entity)/bookmark_notice`。方法 `session_scope()`（当前会话三元组）、`is_bookmarked(index)`、`toggle_bookmark(index, cx)`（收藏/取消，写提示）、`toggle_bookmarks(cx)`、`visible_bookmarks()`、`remove_bookmark(&Bookmark, cx)`、`jump_to_bookmark(&Bookmark, window, cx)`、`dismiss_bookmark_notice`、`clear_bookmark_search(window, cx)` + 迁移清理 `remove_bookmarks_of_server/rename_bookmarks_server`。
+- 跳转顺序：先切会话（`open_dm` / 设 `active_*` 后 `reset_session`）→ 因为 `reset_session` 会清高亮并滚到底部，**定位必须放在切换之后**，再 `show_bookmarks = true` 重新打开面板 → `reveal_message(index)`（抽出的公共方法，`jump_to_reply` 也复用）滚动 + 高亮。找不到原消息时区分「贴纸/附件无法定位」与「原消息已删除」两种提示。
+- 面板互斥：`toggle_bookmarks` 与置顶/收件箱/日程/消息请求互斥；反过来这四者打开时也要 `show_bookmarks = false`；`close_top_overlay`（Esc）把书签放在置顶之后；`reset_session` 关面板并清空搜索；面板在 Friends 视图不挂载（同置顶）。
+- 视图 `ui/chat/bookmarks_panel.rs`：右侧 360px 全高浮层，头部「已保存 — N」+ 关闭，下面是带放大镜的搜索输入行，卡片含来源 chip / 服务器 / 保存时间 / 头像作者 / 正文预览 / 「跳转」按钮 + 移除图标。卡片本身不挂 `on_click`，动作只放在按钮上（避免冒泡）。
 
 ### 主题切换约定
 

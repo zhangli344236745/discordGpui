@@ -9,12 +9,12 @@ use crate::data::{
     persist,
     seed_discover_servers, seed_dm_conversations, seed_dm_messages, seed_friend_requests,
     seed_forum_posts, seed_message_requests, gif_categories, help_categories, seed_friend_groups,
-    seed_friends, seed_gifs,
+    seed_friends, seed_gifs, seed_bookmarks,
     seed_audit, seed_events, seed_help_articles, seed_invites, seed_me, seed_roles,
     seed_members, seed_messages, seed_servers,
     seed_automod_rules, seed_bans, seed_permissions, seed_stickers, seed_threads, sticker_packs,
-    Attachment, AuditEntry, AuditKind, AutoModAction, AutoModRule, BannedUser, Category, Channel,
-    ChannelKind,
+    Attachment, AuditEntry, AuditKind, AutoModAction, AutoModRule, BannedUser, Bookmark, Category,
+    Channel, ChannelKind,
     ChatThread, DiscoverServer,     DmConversation, EditRevision, EventCategory, ForwardOrigin, ForwardTarget, ForumPost, ForumReply, ForumSort, Friend, FriendRequest,
     FriendTab, Gif, HelpArticle, Invite, InviteExpiry, Member, MessageRequest,
     MessageRequestState, MyProfile,
@@ -349,6 +349,13 @@ pub struct DiscordApp {
     pub(crate) forum_reply_edit: Entity<InputState>,
     pub(crate) forum_notice: Option<String>,
 
+    // 消息书签：跨频道 / 私信的统一收藏表 + 右侧面板 + 搜索 + 操作提示。
+    pub(crate) bookmarks: Vec<Bookmark>,
+    pub(crate) show_bookmarks: bool,
+    pub(crate) bookmark_query: String,
+    pub(crate) bookmark_search: Entity<InputState>,
+    pub(crate) bookmark_notice: Option<String>,
+
     /// 当前语音连接：(服务器索引, 频道名)；跨会话保持，符合 Discord 行为。
     pub(crate) voice_channel: Option<(usize, String)>,
 
@@ -598,6 +605,23 @@ fn base_name(display: &'static str) -> &'static str {
     display.split(" —— ").next().unwrap_or(display)
 }
 
+/// 书签身份用的正文：贴纸 / GIF / 附件消息正文为空，用占位文案代替，
+/// 保证收藏、取消收藏与列表展示三处用的是同一个字符串。
+fn bookmark_body(message: &Message) -> String {
+    if !message.text.trim().is_empty() {
+        return message.text.clone();
+    }
+    if message.sticker.is_some() {
+        "[贴纸]".into()
+    } else if message.gif.is_some() {
+        "[GIF]".into()
+    } else if message.attachment.is_some() {
+        "[附件]".into()
+    } else {
+        "[空消息]".into()
+    }
+}
+
 /// 搜索命中判定：正文或作者名包含关键词（调用方已把 query 转小写）。
 /// 搜索中心的高级过滤器：从查询串解析 `from:` / `has:` / `before:` / `after:`，剩余为普通关键词。
 #[derive(Default, Clone)]
@@ -798,6 +822,8 @@ impl DiscordApp {
         let forum_body_edit = cx.new(|cx| InputState::new(window, cx).placeholder("详细描述你的问题或想法…"));
         let forum_tag_edit = cx.new(|cx| InputState::new(window, cx).placeholder("输入标签后回车添加"));
         let forum_reply_edit = cx.new(|cx| InputState::new(window, cx).placeholder("写下你的回复…"));
+        // 书签面板：跨会话搜索。
+        let bookmark_search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索书签"));
         let thread_input = cx.new(|cx| InputState::new(window, cx).placeholder("回复话题…"));
         let root_focus = cx.focus_handle();
 
@@ -920,6 +946,14 @@ impl DiscordApp {
         cx.subscribe_in(&forum_search, window, |this, _, event: &InputEvent, _, cx| {
             if matches!(event, InputEvent::Change) {
                 this.forum_query = this.forum_search.read(cx).value().trim().to_string();
+                cx.notify();
+            }
+        })
+        .detach();
+
+        cx.subscribe_in(&bookmark_search, window, |this, _, event: &InputEvent, _, cx| {
+            if matches!(event, InputEvent::Change) {
+                this.bookmark_query = this.bookmark_search.read(cx).value().trim().to_string();
                 cx.notify();
             }
         })
@@ -1131,6 +1165,11 @@ impl DiscordApp {
             forum_tags_draft: Vec::new(),
             forum_reply_edit,
             forum_notice: None,
+            bookmarks: seed_bookmarks(),
+            show_bookmarks: false,
+            bookmark_query: String::new(),
+            bookmark_search,
+            bookmark_notice: None,
             voice_channel: None,
             my_status: UserStatus::Online,
             show_status_menu: false,
@@ -1657,6 +1696,7 @@ impl DiscordApp {
             self.show_pins = false;
             self.show_events = false;
             self.show_message_requests = false;
+            self.show_bookmarks = false;
             self.close_thread(); self.close_read_receipts(); self.close_edit_history();
             self.show_status_menu = false;
         }
@@ -1891,6 +1931,9 @@ impl DiscordApp {
         self.close_message_menu();
         self.close_thread(); self.close_read_receipts(); self.close_edit_history();
         self.show_pins = false;
+        self.show_bookmarks = false;
+        self.clear_bookmark_search(window, cx);
+        self.bookmark_notice = None;
         self.show_inbox = false;
         self.show_status_menu = false;
         self.show_create_server = false;
@@ -2735,6 +2778,7 @@ impl DiscordApp {
         self.messages.retain(|key, _| !key.starts_with(&prefix));
         self.remove_events_of_server(&name);
         self.remove_forum_posts_of_server(&name);
+        self.remove_bookmarks_of_server(&name);
 
         if leaving_voice {
             self.leave_voice();
@@ -3262,6 +3306,8 @@ impl DiscordApp {
             self.close_read_receipts();
         } else if self.show_pins {
             self.show_pins = false;
+        } else if self.show_bookmarks {
+            self.show_bookmarks = false;
         } else if self.show_events {
             self.close_events(cx);
         } else if self.show_message_requests {
@@ -3396,6 +3442,21 @@ impl DiscordApp {
         self.reply_to = None;
     }
 
+    /// 滚动到指定消息并高亮。滚动容器的 item 下标要算上顶栏提示与未读分隔线。
+    fn reveal_message(&mut self, index: usize) {
+        let mut item = index;
+        if self.forward_notice.is_some() {
+            item += 1;
+        }
+        if let Some((at, _)) = self.unread_divider() {
+            if at <= index {
+                item += 1;
+            }
+        }
+        self.scroll_handle.scroll_to_item(item);
+        self.reply_highlight = Some(index);
+    }
+
     /// 点击消息里的回复引用：按摘要反查原消息，滚动过去并高亮。
     pub(crate) fn jump_to_reply(&mut self, excerpt: &str, cx: &mut Context<Self>) {
         let target = self.current_messages().iter().position(|m| {
@@ -3403,18 +3464,7 @@ impl DiscordApp {
             text.starts_with(excerpt.trim_end_matches('…'))
         });
         if let Some(index) = target {
-            // 滚动容器的 item 下标要算上顶栏提示与未读分隔线。
-            let mut item = index;
-            if self.forward_notice.is_some() {
-                item += 1;
-            }
-            if let Some((at, _)) = self.unread_divider() {
-                if at <= index {
-                    item += 1;
-                }
-            }
-            self.scroll_handle.scroll_to_item(item);
-            self.reply_highlight = Some(index);
+            self.reveal_message(index);
         }
         cx.notify();
     }
@@ -3703,6 +3753,7 @@ impl DiscordApp {
             self.show_pins = false;
             self.show_inbox = false;
             self.show_message_requests = false;
+            self.show_bookmarks = false;
             self.event_notice = None;
         } else {
             self.show_event_create = false;
@@ -3894,6 +3945,7 @@ impl DiscordApp {
             self.show_pins = false;
             self.show_inbox = false;
             self.show_events = false;
+            self.show_bookmarks = false;
             self.message_request_notice = None;
         }
         cx.notify();
@@ -4251,6 +4303,184 @@ impl DiscordApp {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // 消息书签
+    // -----------------------------------------------------------------------
+
+    /// 当前会话的定位三元组：(是否私信, 服务器名, 频道 / 好友名)。
+    fn session_scope(&self) -> (bool, String, String) {
+        if self.is_dm() {
+            (true, String::new(), self.active_dm.clone().unwrap_or_default())
+        } else {
+            (
+                false,
+                self.servers[self.active_server].name.clone(),
+                self.active_channel.clone(),
+            )
+        }
+    }
+
+    /// 当前会话里的某条消息是否已收藏。
+    pub(crate) fn is_bookmarked(&self, index: usize) -> bool {
+        let Some(message) = self.current_messages().get(index).cloned() else {
+            return false;
+        };
+        let body = bookmark_body(&message);
+        let (is_dm, server, channel) = self.session_scope();
+        self.bookmarks
+            .iter()
+            .any(|b| b.in_session(is_dm, &server, &channel) && b.text == body)
+    }
+
+    /// 收藏 / 取消收藏当前会话里的某条消息（消息菜单入口）。
+    pub(crate) fn toggle_bookmark(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(message) = self.current_messages().get(index).cloned() else {
+            return;
+        };
+        let body = bookmark_body(&message);
+        let (is_dm, server, channel) = self.session_scope();
+        let existing = self
+            .bookmarks
+            .iter()
+            .position(|b| b.in_session(is_dm, &server, &channel) && b.text == body);
+        if let Some(pos) = existing {
+            self.bookmarks.remove(pos);
+            self.bookmark_notice = Some("已从书签移除".into());
+        } else {
+            self.bookmarks.insert(
+                0,
+                Bookmark::new(
+                    is_dm,
+                    server,
+                    channel,
+                    message.author,
+                    message.color.into(),
+                    body,
+                    message.time,
+                    0,
+                ),
+            );
+            self.bookmark_notice = Some("已保存到书签".into());
+        }
+        self.close_message_menu();
+        cx.notify();
+    }
+
+    /// 打开 / 关闭书签面板（与置顶、收件箱、日程、消息请求互斥）。
+    pub(crate) fn toggle_bookmarks(&mut self, cx: &mut Context<Self>) {
+        self.show_bookmarks = !self.show_bookmarks;
+        if self.show_bookmarks {
+            self.show_pins = false;
+            self.show_inbox = false;
+            self.show_events = false;
+            self.show_message_requests = false;
+            self.close_thread();
+            self.close_read_receipts();
+            self.close_edit_history();
+            self.bookmark_notice = None;
+        }
+        self.profile_target = None;
+        self.close_message_menu();
+        cx.notify();
+    }
+
+    /// 面板列表：按关键词过滤，保持「最近保存在前」的顺序。
+    pub(crate) fn visible_bookmarks(&self) -> Vec<Bookmark> {
+        let query = self.bookmark_query.to_lowercase();
+        self.bookmarks
+            .iter()
+            .filter(|b| b.matches(&query))
+            .cloned()
+            .collect()
+    }
+
+    /// 按身份移除一条书签。
+    pub(crate) fn remove_bookmark(&mut self, target: &Bookmark, cx: &mut Context<Self>) {
+        let before = self.bookmarks.len();
+        self.bookmarks.retain(|b| !b.same_as(target));
+        if self.bookmarks.len() != before {
+            self.bookmark_notice = Some("已从书签移除".into());
+        }
+        cx.notify();
+    }
+
+    /// 跳回书签来源：切会话 → 按正文反查原消息 → 滚动并高亮。
+    pub(crate) fn jump_to_bookmark(
+        &mut self,
+        target: &Bookmark,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if target.is_dm {
+            if !self.friends.iter().any(|f| f.name == target.channel) {
+                self.bookmark_notice = Some("原私信会话已不存在".into());
+                cx.notify();
+                return;
+            }
+            self.open_dm(target.channel.clone(), window, cx);
+        } else {
+            let Some(server_index) = self.servers.iter().position(|s| s.name == target.server)
+            else {
+                self.bookmark_notice = Some("原服务器已不存在".into());
+                cx.notify();
+                return;
+            };
+            self.view_mode = ViewMode::Server;
+            self.active_server = server_index;
+            self.active_channel = target.channel.clone();
+            self.reset_session(window, cx);
+        }
+
+        // reset_session 会关掉面板，跳转后重新打开，方便连续翻书签。
+        self.show_bookmarks = true;
+        // 切会话后 reset_session 会清掉高亮并滚到底部，所以定位必须放在之后。
+        match self
+            .current_messages()
+            .iter()
+            .position(|m| m.text == target.text)
+        {
+            Some(index) => {
+                self.reveal_message(index);
+                self.bookmark_notice = Some(format!("已定位到 {}", target.location_label()));
+            }
+            None => {
+                // 贴纸 / GIF / 附件消息没有正文，本来就无法按文本反查。
+                let placeholder = target.text.starts_with('[') && target.text.ends_with(']');
+                self.bookmark_notice = Some(if placeholder {
+                    "贴纸 / 附件消息没有正文，只能查看书签副本".into()
+                } else {
+                    "原消息已删除，仅保留书签副本".into()
+                });
+            }
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn dismiss_bookmark_notice(&mut self, cx: &mut Context<Self>) {
+        self.bookmark_notice = None;
+        cx.notify();
+    }
+
+    pub(crate) fn clear_bookmark_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.bookmark_query.clear();
+        self.bookmark_search
+            .update(cx, |input, cx| input.set_value("", window, cx));
+    }
+
+    /// 离开服务器时清掉它名下的书签（私信书签保留）。
+    pub(crate) fn remove_bookmarks_of_server(&mut self, server: &str) {
+        self.bookmarks.retain(|b| b.is_dm || b.server != server);
+    }
+
+    /// 服务器改名时迁移书签归属。
+    pub(crate) fn rename_bookmarks_server(&mut self, old: &str, new: &str) {
+        for bookmark in self.bookmarks.iter_mut() {
+            if !bookmark.is_dm && bookmark.server == old {
+                bookmark.server = new.to_string();
+            }
+        }
+    }
+
     /// 删除服务器时清掉其名下所有活动。
     pub(crate) fn remove_events_of_server(&mut self, server: &str) {
         self.events.retain(|event| event.server != server);
@@ -4395,6 +4625,7 @@ impl DiscordApp {
         self.thread_root = Some(index);
         self.show_pins = false;
         self.show_inbox = false;
+        self.show_bookmarks = false;
         self.profile_target = None;
         self.close_message_menu();
         self.thread_input.update(cx, |input, cx| {
@@ -4713,6 +4944,7 @@ impl DiscordApp {
             self.show_inbox = false;
             self.show_events = false;
             self.show_message_requests = false;
+            self.show_bookmarks = false;
             self.close_thread(); self.close_read_receipts(); self.close_edit_history();
         }
         self.profile_target = None;
@@ -5477,6 +5709,7 @@ impl DiscordApp {
         self.show_search_center = true;
         self.show_pins = false;
         self.show_inbox = false;
+        self.show_bookmarks = false;
         self.close_thread(); self.close_read_receipts(); self.close_edit_history();
         self.show_status_menu = false;
         self.show_attachment_picker = false;
@@ -5896,9 +6129,10 @@ impl DiscordApp {
                 }
             }
 
-            // 活动与论坛帖子按服务器名归属，改名后同步迁移。
+            // 活动、论坛帖子与书签按服务器名归属，改名后同步迁移。
             self.rename_events_server(&current, &new_name);
             self.rename_forum_server(&current, &new_name);
+            self.rename_bookmarks_server(&current, &new_name);
 
             let badge = new_name.chars().next().unwrap_or('?').to_string();
             self.servers[index].name = new_name;
@@ -6866,6 +7100,7 @@ impl DiscordApp {
             events: Some(self.events.clone()),
             message_requests: Some(self.message_requests.clone()),
             forum_posts: Some(self.forum_posts.clone()),
+            bookmarks: Some(self.bookmarks.clone()),
             friend_requests: self.friend_requests.clone(),
             blocked_users: self.blocked_users.clone(),
             me: self.me.clone(),
@@ -6979,6 +7214,29 @@ impl DiscordApp {
                     })
             })
         });
+        // 消息书签：旧快照没有就保留种子；丢弃指向已不存在的服务器 /
+        // 私信好友的脏记录，避免点进去空跳。
+        if let Some(markers) = saved.bookmarks {
+            self.bookmarks = markers;
+        }
+        self.bookmarks.retain(|bookmark| {
+            if bookmark.is_dm {
+                self.friends.iter().any(|friend| friend.name == bookmark.channel)
+            } else {
+                self.servers.iter().any(|server| {
+                    server.name == bookmark.server
+                        && server
+                            .categories
+                            .iter()
+                            .any(|category| {
+                                category
+                                    .channels
+                                    .iter()
+                                    .any(|channel| channel.name == bookmark.channel)
+                            })
+                })
+            }
+        });
         if let Some(selected) = self.selected_automod.take() {
             self.selected_automod = self
                 .automod_rules
@@ -7085,6 +7343,12 @@ impl DiscordApp {
         self.show_forum_composer = false;
         self.forum_tags_draft.clear();
         self.forum_notice = None;
+        self.bookmarks = seed_bookmarks();
+        self.show_bookmarks = false;
+        self.bookmark_query.clear();
+        self.bookmark_search
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.bookmark_notice = None;
         self.invites = seed_invites();
         self.invite_copied_code = None;
         self.audit = seed_audit();
@@ -7288,6 +7552,9 @@ impl DiscordApp {
             })
             .when(self.show_pins && view_mode != ViewMode::Friends, |el| {
                 el.child(chat::pinned_panel::render(self, cx))
+            })
+            .when(self.show_bookmarks && view_mode != ViewMode::Friends, |el| {
+                el.child(chat::bookmarks_panel::render(self, cx))
             })
             .when(show_thread, |el| {
                 el.child(chat::thread_panel::render(self, cx))

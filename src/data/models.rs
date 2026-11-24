@@ -1838,6 +1838,109 @@ impl ForumPost {
     }
 }
 
+/// 一条消息书签：跨频道 / 私信统一存一张表。
+///
+/// Demo 里的消息没有稳定 id，所以来源用 `is_dm` + `server` + `channel` 三个
+/// 字段定位，原消息靠正文 `text` 反查；正文副本同时保证原消息被删后仍可查看。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Bookmark {
+    /// true 表示来自私信，此时 `server` 为空串。
+    pub is_dm: bool,
+    /// 服务器名；私信为空。
+    pub server: String,
+    /// 频道名或好友名。
+    pub channel: String,
+    pub author: String,
+    pub color: u32,
+    /// 正文副本（列表展示 + 反查原消息）。
+    pub text: String,
+    /// 原消息时间标签。
+    pub time: String,
+    /// 保存时距现在的分钟数，用于「x 前保存」。
+    pub saved_minutes_ago: u32,
+}
+
+impl Bookmark {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        is_dm: bool,
+        server: impl Into<String>,
+        channel: impl Into<String>,
+        author: impl Into<String>,
+        color: u32,
+        text: impl Into<String>,
+        time: impl Into<String>,
+        saved_minutes_ago: u32,
+    ) -> Self {
+        Self {
+            is_dm,
+            server: server.into(),
+            channel: channel.into(),
+            author: author.into(),
+            color,
+            text: text.into(),
+            time: time.into(),
+            saved_minutes_ago,
+        }
+    }
+
+    /// 来源标签：`#频道` 或 `私信 · 好友`。
+    pub fn location_label(&self) -> String {
+        if self.is_dm {
+            format!("私信 · {}", self.channel)
+        } else {
+            format!("#{}", self.channel)
+        }
+    }
+
+    /// 来源的二级说明：服务器名 / 私信。
+    pub fn source_label(&self) -> String {
+        if self.is_dm {
+            "私信".into()
+        } else {
+            self.server.clone()
+        }
+    }
+
+    /// 「刚刚保存 / 3 分钟前保存」。
+    pub fn saved_label(&self) -> String {
+        format!("{}保存", relative_label(self.saved_minutes_ago))
+    }
+
+    /// 列表预览：按字符截断，避免多字节字符被切断。
+    pub fn preview(&self, max: usize) -> String {
+        let mut out: String = self.text.chars().take(max).collect();
+        if self.text.chars().count() > max {
+            out.push('…');
+        }
+        out
+    }
+
+    /// 搜索匹配（query 已转小写）：正文、作者、频道、服务器都参与。
+    pub fn matches(&self, query: &str) -> bool {
+        if query.is_empty() {
+            return true;
+        }
+        self.text.to_lowercase().contains(query)
+            || self.author.to_lowercase().contains(query)
+            || self.channel.to_lowercase().contains(query)
+            || self.server.to_lowercase().contains(query)
+    }
+
+    /// 是否指向同一个来源会话。
+    pub fn in_session(&self, is_dm: bool, server: &str, channel: &str) -> bool {
+        self.is_dm == is_dm && self.channel == channel && (is_dm || self.server == server)
+    }
+
+    /// 是否同一条书签（Demo 没有消息 id，用来源 + 正文作为身份）。
+    pub fn same_as(&self, other: &Bookmark) -> bool {
+        self.is_dm == other.is_dm
+            && self.server == other.server
+            && self.channel == other.channel
+            && self.text == other.text
+    }
+}
+
 /// 分钟数转相对时间标签（发帖与回帖共用）。
 fn relative_label(minutes: u32) -> String {
     match minutes {
@@ -2139,5 +2242,42 @@ mod tests {
         assert_eq!(ForumSort::Recent.label(), "最新");
         assert_eq!(ForumSort::Popular.label(), "最热");
         assert_eq!(ForumSort::Unanswered.label(), "未回应");
+    }
+
+    #[test]
+    fn bookmark_labels_search_and_session() {
+        let channel = Bookmark::new(false, "开发者社区", "一般", "Nova", 0, "把 palette 收敛到一处", "今天 09:41", 0);
+        assert_eq!(channel.location_label(), "#一般");
+        assert_eq!(channel.source_label(), "开发者社区");
+        assert_eq!(channel.saved_label(), "刚刚保存");
+        assert!(channel.in_session(false, "开发者社区", "一般"));
+        // 服务器不同、私信标记不同都不算同一个会话。
+        assert!(!channel.in_session(false, "设计工坊", "一般"));
+        assert!(!channel.in_session(true, "", "一般"));
+
+        let dm = Bookmark {
+            is_dm: true,
+            server: String::new(),
+            channel: "Nova".into(),
+            saved_minutes_ago: 90,
+            ..channel.clone()
+        };
+        assert_eq!(dm.location_label(), "私信 · Nova");
+        assert_eq!(dm.source_label(), "私信");
+        assert_eq!(dm.saved_label(), "1 小时前保存");
+        assert!(dm.in_session(true, "", "Nova"));
+        assert!(!dm.in_session(false, "开发者社区", "Nova"));
+
+        // 搜索：正文 / 作者 / 频道 / 服务器都算命中。
+        assert!(channel.matches("palette"));
+        assert!(channel.matches("nova"));
+        assert!(channel.matches("一般"));
+        assert!(channel.matches("开发者"));
+        assert!(!channel.matches("不存在的关键词"));
+
+        // 预览按字符截断，中文不会被切坏。
+        let long = Bookmark { text: "一二三四五六".into(), ..channel.clone() };
+        assert_eq!(long.preview(3), "一二三…");
+        assert_eq!(channel.preview(50), "把 palette 收敛到一处");
     }
 }

@@ -55,6 +55,7 @@ fn menu_items(index: usize, app: &DiscordApp, cx: &mut Context<DiscordApp>) -> i
         .map(|m| m.pinned)
         .unwrap_or(false);
     let thread_count = app.thread_count(index);
+    let bookmarked = app.is_bookmarked(index);
 
     v_flex()
         .gap(px(2.))
@@ -149,6 +150,18 @@ fn menu_items(index: usize, app: &DiscordApp, cx: &mut Context<DiscordApp>) -> i
             false,
             cx,
             move |this, _, cx| this.copy_message(index, cx),
+        ))
+        .child(menu_row(
+            if bookmarked {
+                IconName::BookmarkMinus
+            } else {
+                IconName::BookmarkPlus
+            },
+            if bookmarked { "取消保存" } else { "保存消息" },
+            format!("msg-menu-save-{index}"),
+            false,
+            cx,
+            move |this, _, cx| this.toggle_bookmark(index, cx),
         ))
         .child(div().h(px(1.)).my(px(2.)).bg(rgb(palette::bg_divider())))
         .child(menu_row(
