@@ -9,22 +9,23 @@ use crate::data::{
     persist,
     seed_discover_servers, seed_dm_conversations, seed_dm_messages, seed_friend_requests,
     gif_categories, help_categories, seed_friend_groups, seed_friends, seed_gifs,
-    seed_audit, seed_help_articles, seed_invites, seed_me, seed_roles,
+    seed_audit, seed_events, seed_help_articles, seed_invites, seed_me, seed_roles,
     seed_members, seed_messages, seed_servers,
     seed_automod_rules, seed_bans, seed_permissions, seed_stickers, seed_threads, sticker_packs,
     Attachment, AuditEntry, AuditKind, AutoModAction, AutoModRule, BannedUser, Category, Channel,
     ChannelKind,
-    ChatThread, DiscoverServer,     DmConversation, EditRevision, ForwardOrigin, ForwardTarget, Friend, FriendRequest,
+    ChatThread, DiscoverServer,     DmConversation, EditRevision, EventCategory, ForwardOrigin, ForwardTarget, Friend, FriendRequest,
     FriendTab, Gif, HelpArticle, Invite, InviteExpiry, Member, MyProfile,
     MemberGroup, Message, Notification, NotificationKind, NotificationTarget, NotifyLevel,
     PermissionGrant, PermissionState, Poll, Reaction,
     ReadReceipt,
-    ReplyRef, Role, SearchHit, Server, Sticker, ThreadReply, UserStatus, VoiceParticipant,
+    ReplyRef, Role, SearchHit, Server, ServerEvent, Sticker, ThreadReply, UserStatus,
+    VoiceParticipant,
 };
 use crate::ui::theme::palette;
 use crate::ui::{
     category_dialog, category_menu, channel_menu, channel_sidebar, chat, create_dialog, dm_call_panel,
-    dm_sidebar, discover, friend_group_dialog, friend_group_menu, friends, help_center,
+    dm_sidebar, discover, events_panel, friend_group_dialog, friend_group_menu, friends, help_center,
     invite_dialog, member_list, member_nick_dialog, profile_card,
     server_menu, server_rail,
     member_menu, search_center, server_settings, settings, status_menu, topic_dialog, voice_room,
@@ -39,6 +40,26 @@ pub(crate) enum ViewMode {
     Friends,
     /// 探索页：整屏展示可加入的公开服务器。
     Discover,
+}
+
+/// 日程面板的状态筛选。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EventFilter {
+    All,
+    Upcoming,
+    Live,
+    Ended,
+}
+
+impl EventFilter {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            EventFilter::All => "全部",
+            EventFilter::Upcoming => "即将开始",
+            EventFilter::Live => "进行中",
+            EventFilter::Ended => "已结束",
+        }
+    }
 }
 
 /// 私信通话类型：语音或视频（视频默认开摄像头，语音默认关）。
@@ -263,6 +284,22 @@ pub struct DiscordApp {
     /// 消息菜单的光标锚点：Some 表示根级浮层（右键），None 表示挂在消息行内（省略号入口）。
     pub(crate) menu_message_point: Option<(f32, f32)>,
     pub(crate) show_pins: bool,
+
+    // 服务器日程：活动表（含归属服务器）+ 面板显隐 + 状态筛选 + 选中项 + 操作提示。
+    pub(crate) events: Vec<ServerEvent>,
+    pub(crate) show_events: bool,
+    pub(crate) event_filter: EventFilter,
+    pub(crate) selected_event: Option<String>,
+    pub(crate) event_notice: Option<String>,
+    // 创建活动草稿：标题/描述输入 + 落地频道/分类 + 开始偏移/时长/是否显示表单。
+    pub(crate) show_event_create: bool,
+    pub(crate) event_title_edit: Entity<InputState>,
+    pub(crate) event_desc_edit: Entity<InputState>,
+    pub(crate) event_channel: String,
+    pub(crate) event_category: EventCategory,
+    pub(crate) event_starts_in: i32,
+    pub(crate) event_duration: u32,
+
     /// 当前语音连接：(服务器索引, 频道名)；跨会话保持，符合 Discord 行为。
     pub(crate) voice_channel: Option<(usize, String)>,
 
@@ -704,6 +741,8 @@ impl DiscordApp {
         let gif_search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索 GIF 标签…"));
         let poll_question_edit = cx.new(|cx| InputState::new(window, cx).placeholder("投票问题…"));
         let poll_option_edit = cx.new(|cx| InputState::new(window, cx).placeholder("添加一个选项"));
+        let event_title_edit = cx.new(|cx| InputState::new(window, cx).placeholder("活动标题"));
+        let event_desc_edit = cx.new(|cx| InputState::new(window, cx).placeholder("简单介绍一下这个活动…"));
         let thread_input = cx.new(|cx| InputState::new(window, cx).placeholder("回复话题…"));
         let root_focus = cx.focus_handle();
 
@@ -933,6 +972,18 @@ impl DiscordApp {
         )
         .detach();
 
+        // 日程：标题框回车创建活动。
+        cx.subscribe_in(
+            &event_title_edit,
+            window,
+            |this, _, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::PressEnter { secondary: false, .. }) {
+                    this.create_event(window, cx);
+                }
+            },
+        )
+        .detach();
+
         cx.subscribe_in(&topic_input, window, |this, _, event: &InputEvent, window, cx| {
             if matches!(event, InputEvent::PressEnter { secondary: false, .. }) {
                 this.save_channel_topic(window, cx);
@@ -976,6 +1027,18 @@ impl DiscordApp {
             menu_message: None,
             menu_message_point: None,
             show_pins: false,
+            events: seed_events(),
+            show_events: false,
+            event_filter: EventFilter::All,
+            selected_event: None,
+            event_notice: None,
+            show_event_create: false,
+            event_title_edit,
+            event_desc_edit,
+            event_channel: "一般".into(),
+            event_category: EventCategory::Community,
+            event_starts_in: 60,
+            event_duration: 60,
             voice_channel: None,
             my_status: UserStatus::Online,
             show_status_menu: false,
@@ -1500,6 +1563,7 @@ impl DiscordApp {
         self.show_inbox = !self.show_inbox;
         if self.show_inbox {
             self.show_pins = false;
+            self.show_events = false;
             self.close_thread(); self.close_read_receipts(); self.close_edit_history();
             self.show_status_menu = false;
         }
@@ -1757,6 +1821,9 @@ impl DiscordApp {
         self.forward_notice = None;
         self.automod_notice = None;
         self.close_poll_composer(window, cx);
+        self.show_events = false;
+        self.show_event_create = false;
+        self.event_notice = None;
         self.attachment_preview = None;
         self.member_menu = None;
         self.cancel_edit();
@@ -2557,9 +2624,10 @@ impl DiscordApp {
             .map(|(index, _)| *index == self.active_server)
             .unwrap_or(false);
         self.servers.remove(self.active_server);
-        // 该服务器的历史消息一并清掉。
+        // 该服务器的历史消息与活动一并清掉。
         let prefix = format!("{name}/");
         self.messages.retain(|key, _| !key.starts_with(&prefix));
+        self.remove_events_of_server(&name);
 
         if leaving_voice {
             self.leave_voice();
@@ -3083,6 +3151,8 @@ impl DiscordApp {
             self.close_read_receipts();
         } else if self.show_pins {
             self.show_pins = false;
+        } else if self.show_events {
+            self.close_events(cx);
         } else if self.show_inbox {
             self.show_inbox = false;
         } else if self.show_status_menu {
@@ -3465,6 +3535,229 @@ impl DiscordApp {
         if changed {
             self.log_audit(AuditKind::Server, "结束了投票", question);
             cx.notify();
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // 服务器日程 / 活动
+    // -----------------------------------------------------------------------
+
+    /// 当前服务器名（日程按此归属隔离）。
+    pub(crate) fn active_server_name(&self) -> String {
+        self.servers
+            .get(self.active_server)
+            .map(|server| server.name.clone())
+            .unwrap_or_default()
+    }
+
+    /// 当前服务器的活动，按开始时间升序（越近越靠前）。
+    pub(crate) fn server_events(&self) -> Vec<ServerEvent> {
+        let server = self.active_server_name();
+        let mut list: Vec<ServerEvent> = self
+            .events
+            .iter()
+            .filter(|event| event.server == server)
+            .cloned()
+            .collect();
+        list.sort_by_key(|event| (event.starts_in_minutes, event.title.clone()));
+        list
+    }
+
+    /// 按状态筛选后的活动。
+    pub(crate) fn visible_events(&self) -> Vec<ServerEvent> {
+        let all = self.server_events();
+        if self.event_filter == EventFilter::All {
+            return all;
+        }
+        all.into_iter()
+            .filter(|event| {
+                let live = event.status() == crate::data::ServerEventStatus::Live;
+                let ended = event.status() == crate::data::ServerEventStatus::Ended;
+                match self.event_filter {
+                    EventFilter::Upcoming => !live && !ended,
+                    EventFilter::Live => live,
+                    EventFilter::Ended => ended,
+                    EventFilter::All => true,
+                }
+            })
+            .collect()
+    }
+
+    /// 打开/关闭日程面板（与 pins/inbox 互斥），关闭时收起创建表单。
+    pub(crate) fn toggle_events(&mut self, cx: &mut Context<Self>) {
+        self.show_events = !self.show_events;
+        if self.show_events {
+            self.show_pins = false;
+            self.show_inbox = false;
+            self.event_notice = None;
+        } else {
+            self.show_event_create = false;
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn close_events(&mut self, cx: &mut Context<Self>) {
+        self.show_events = false;
+        self.show_event_create = false;
+        self.event_notice = None;
+        cx.notify();
+    }
+
+    pub(crate) fn set_event_filter(&mut self, filter: EventFilter, cx: &mut Context<Self>) {
+        self.event_filter = filter;
+        cx.notify();
+    }
+
+    pub(crate) fn select_event(&mut self, id: String, cx: &mut Context<Self>) {
+        self.selected_event = Some(id);
+        self.event_notice = None;
+        cx.notify();
+    }
+
+    /// 展开/收起创建活动表单，展开时清空上次草稿。
+    pub(crate) fn toggle_event_create(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let opening = !self.show_event_create;
+        self.show_event_create = opening;
+        if opening {
+            self.event_notice = None;
+            self.event_channel = "一般".into();
+            self.event_category = EventCategory::Community;
+            self.event_starts_in = 60;
+            self.event_duration = 60;
+            self.event_title_edit
+                .update(cx, |input, cx| input.set_value("", window, cx));
+            self.event_desc_edit
+                .update(cx, |input, cx| input.set_value("", window, cx));
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn set_event_category(
+        &mut self,
+        category: EventCategory,
+        cx: &mut Context<Self>,
+    ) {
+        self.event_category = category;
+        cx.notify();
+    }
+
+    pub(crate) fn set_event_channel(&mut self, channel: String, cx: &mut Context<Self>) {
+        self.event_channel = channel;
+        cx.notify();
+    }
+
+    /// 调整开始偏移（步进 15 分钟，范围 -240 ~ +10080 即一周）。
+    pub(crate) fn adjust_event_start(&mut self, delta: i32, cx: &mut Context<Self>) {
+        self.event_starts_in = (self.event_starts_in + delta).clamp(-240, 10080);
+        cx.notify();
+    }
+
+    /// 调整时长（步进 15 分钟，范围 15 ~ 480）。
+    pub(crate) fn adjust_event_duration(&mut self, delta: i32, cx: &mut Context<Self>) {
+        self.event_duration = (self.event_duration as i32 + delta)
+            .clamp(15, 480) as u32;
+        cx.notify();
+    }
+
+    /// 用草稿创建活动：标题非空即可，归属当前服务器，发起人"你"。
+    pub(crate) fn create_event(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let title = self.event_title_edit.read(cx).value().trim().to_string();
+        if title.is_empty() {
+            self.event_notice = Some("请先填写活动标题".into());
+            cx.notify();
+            return;
+        }
+        let description = self.event_desc_edit.read(cx).value().trim().to_string();
+        let server = self.active_server_name();
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .unwrap_or(0);
+        let id = format!("evt-{}-{stamp}", server);
+        let mut event = ServerEvent::new(
+            id.clone(),
+            server,
+            title.clone(),
+            self.event_channel.clone(),
+            "你",
+            self.event_starts_in,
+            self.event_duration,
+            self.event_category,
+        );
+        event.description = description;
+        event.attendees.push("你".into());
+        self.events.push(event);
+        self.log_audit(AuditKind::Server, "创建了活动", title.clone());
+        self.selected_event = Some(id);
+        self.event_filter = EventFilter::All;
+        self.show_event_create = false;
+        self.event_title_edit
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.event_desc_edit
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.event_notice = Some(format!("活动「{title}」已创建，你已自动报名"));
+        cx.notify();
+    }
+
+    /// 删除指定 id 的活动（不限归属，按 id 精确匹配）。
+    pub(crate) fn delete_event(&mut self, id: String, cx: &mut Context<Self>) {
+        let before = self.events.len();
+        self.events.retain(|event| event.id != id);
+        if self.events.len() == before {
+            return;
+        }
+        if self.selected_event.as_deref() == Some(id.as_str()) {
+            self.selected_event = None;
+        }
+        self.log_audit(AuditKind::Server, "删除了活动", id);
+        self.event_notice = Some("活动已删除".into());
+        cx.notify();
+    }
+
+    /// 报名 / 取消报名指定活动（仅本人操作本地名单）。
+    pub(crate) fn toggle_attendance(&mut self, id: String, cx: &mut Context<Self>) {
+        let mut title = String::new();
+        let mut joined = false;
+        if let Some(event) = self.events.iter_mut().find(|event| event.id == id) {
+            title = event.title.clone();
+            if event.is_attending("你") {
+                event.attendees.retain(|name| name != "你");
+            } else {
+                event.attendees.push("你".into());
+                joined = true;
+            }
+        }
+        if !title.is_empty() {
+            self.log_audit(
+                AuditKind::Server,
+                if joined { "报名了活动" } else { "取消了活动报名" },
+                title.clone(),
+            );
+            self.event_notice = Some(if joined {
+                format!("已报名「{title}」")
+            } else {
+                format!("已取消报名「{title}」")
+            });
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn dismiss_event_notice(&mut self, cx: &mut Context<Self>) {
+        self.event_notice = None;
+        cx.notify();
+    }
+
+    /// 删除服务器时清掉其名下所有活动。
+    pub(crate) fn remove_events_of_server(&mut self, server: &str) {
+        self.events.retain(|event| event.server != server);
+    }
+
+    /// 服务器改名时迁移活动归属。
+    pub(crate) fn rename_events_server(&mut self, old: &str, new: &str) {
+        for event in self.events.iter_mut() {
+            if event.server == old {
+                event.server = new.to_string();
+            }
         }
     }
 
@@ -3914,6 +4207,7 @@ impl DiscordApp {
         self.show_pins = !self.show_pins;
         if self.show_pins {
             self.show_inbox = false;
+            self.show_events = false;
             self.close_thread(); self.close_read_receipts(); self.close_edit_history();
         }
         self.profile_target = None;
@@ -5097,6 +5391,9 @@ impl DiscordApp {
                 }
             }
 
+            // 活动按服务器名归属，改名后同步迁移。
+            self.rename_events_server(&current, &new_name);
+
             let badge = new_name.chars().next().unwrap_or('?').to_string();
             self.servers[index].name = new_name;
             self.servers[index].badge = badge;
@@ -6060,6 +6357,7 @@ impl DiscordApp {
             roles: Some(self.roles.clone()),
             permissions: Some(self.role_permissions.clone()),
             automod_rules: Some(self.automod_rules.clone()),
+            events: Some(self.events.clone()),
             friend_requests: self.friend_requests.clone(),
             blocked_users: self.blocked_users.clone(),
             me: self.me.clone(),
@@ -6146,6 +6444,15 @@ impl DiscordApp {
         if let Some(rules) = saved.automod_rules {
             self.automod_rules = rules;
         }
+        // 日程：旧快照没有就保留种子；丢弃指向已不存在服务器的脏记录。
+        if let Some(events) = saved.events {
+            self.events = events;
+        }
+        self.events.retain(|event| {
+            self.servers
+                .iter()
+                .any(|server| server.name == event.server)
+        });
         if let Some(selected) = self.selected_automod.take() {
             self.selected_automod = self
                 .automod_rules
@@ -6233,6 +6540,12 @@ impl DiscordApp {
         self.automod_rules = seed_automod_rules();
         self.selected_automod = None;
         self.automod_notice = None;
+        self.events = seed_events();
+        self.show_events = false;
+        self.event_filter = EventFilter::All;
+        self.selected_event = None;
+        self.event_notice = None;
+        self.show_event_create = false;
         self.invites = seed_invites();
         self.invite_copied_code = None;
         self.audit = seed_audit();
@@ -6439,6 +6752,9 @@ impl DiscordApp {
             })
             .when(self.show_inbox, |el| {
                 el.child(chat::inbox_panel::render(self, cx))
+            })
+            .when(self.show_events && view_mode != ViewMode::Friends, |el| {
+                el.child(events_panel::render(self, cx))
             })
             .when(self.member_menu.is_some(), |el| {
                 el.child(member_menu::render(self, cx))

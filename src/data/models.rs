@@ -1219,6 +1219,152 @@ impl Poll {
     }
 }
 
+/// 服务器活动分类：决定卡片图标与配色。
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub enum EventCategory {
+    Game,
+    Voice,
+    Community,
+    Other,
+}
+
+impl EventCategory {
+    pub const ALL: [EventCategory; 4] = [
+        EventCategory::Game,
+        EventCategory::Voice,
+        EventCategory::Community,
+        EventCategory::Other,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            EventCategory::Game => "游戏",
+            EventCategory::Voice => "语音",
+            EventCategory::Community => "社区",
+            EventCategory::Other => "其他",
+        }
+    }
+
+    pub fn color(self) -> u32 {
+        match self {
+            EventCategory::Game => 0x5865f2,
+            EventCategory::Voice => 0x57f287,
+            EventCategory::Community => 0xeb459e,
+            EventCategory::Other => 0xfaa61c,
+        }
+    }
+}
+
+/// 活动状态：由开始时间相对当前分钟的位置推算（见 `ServerEvent::status`）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ServerEventStatus {
+    Upcoming,
+    Live,
+    Ended,
+}
+
+impl ServerEventStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            ServerEventStatus::Upcoming => "即将开始",
+            ServerEventStatus::Live => "进行中",
+            ServerEventStatus::Ended => "已结束",
+        }
+    }
+}
+
+/// 一条服务器活动（Discord Scheduled Event 的本地演示）。
+/// 时间用「距现在多少分钟」的相对值，和审核日志一样不依赖真实时钟；
+/// 全部字段自有，serde 直接派生。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ServerEvent {
+    pub id: String,
+    /// 归属服务器名（与 `Server.name` 对应）。
+    pub server: String,
+    pub title: String,
+    pub description: String,
+    /// 活动落地语音/文字频道，仅作展示。
+    pub channel: String,
+    /// 发起人身份键。
+    pub host: String,
+    /// 报名者身份键名单（"你"表示本机用户）。
+    pub attendees: Vec<String>,
+    /// 距开始的分钟数：正数=多久后开始，负数=已开始多久。
+    pub starts_in_minutes: i32,
+    /// 持续分钟数。
+    pub duration_minutes: u32,
+    pub category: EventCategory,
+}
+
+impl ServerEvent {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        id: impl Into<String>,
+        server: impl Into<String>,
+        title: impl Into<String>,
+        channel: impl Into<String>,
+        host: impl Into<String>,
+        starts_in_minutes: i32,
+        duration_minutes: u32,
+        category: EventCategory,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            server: server.into(),
+            title: title.into(),
+            description: String::new(),
+            channel: channel.into(),
+            host: host.into(),
+            attendees: Vec::new(),
+            starts_in_minutes,
+            duration_minutes,
+            category,
+        }
+    }
+
+    /// 相对状态：未到开始时间=即将开始；开始后仍在时长内=进行中；否则已结束。
+    pub fn status(&self) -> ServerEventStatus {
+        if self.starts_in_minutes > 0 {
+            ServerEventStatus::Upcoming
+        } else if self.starts_in_minutes + self.duration_minutes as i32 > 0 {
+            ServerEventStatus::Live
+        } else {
+            ServerEventStatus::Ended
+        }
+    }
+
+    /// 人类可读的开始时间（相对现在）。
+    pub fn time_label(&self) -> String {
+        let minutes = self.starts_in_minutes;
+        match self.status() {
+            ServerEventStatus::Upcoming => {
+                if minutes < 60 {
+                    format!("{minutes} 分钟后开始")
+                } else {
+                    format!("{} 小时后开始", minutes / 60)
+                }
+            }
+            ServerEventStatus::Live => format!("已开始 {} 分钟", -minutes),
+            ServerEventStatus::Ended => {
+                let ended = (-minutes) - self.duration_minutes as i32;
+                if ended < 60 {
+                    format!("{ended} 分钟前结束")
+                } else {
+                    format!("{} 小时前结束", ended / 60)
+                }
+            }
+        }
+    }
+
+    pub fn attendee_count(&self) -> usize {
+        self.attendees.len()
+    }
+
+    pub fn is_attending(&self, name: &str) -> bool {
+        self.attendees.iter().any(|person| person == name)
+    }
+}
+
 /// 成员条目。`role` 存角色名，None 表示无角色（归入在线 / 离线兜底组）；
 /// `nick` 是服务器昵称，只影响展示，`name` 始终是身份键。
 #[derive(Clone, Copy, Serialize)]
@@ -1685,5 +1831,44 @@ mod tests {
         poll.options[2].voters = vec!["Lin".into()];
         assert_eq!(poll.leading_options(), vec![0, 2]);
         assert_eq!(poll.voted_options("你"), vec![0]);
+    }
+
+    #[test]
+    fn server_event_status_follows_relative_time() {
+        let mut upcoming = ServerEvent::new(
+            "a", "S", "t", "c", "h", 45, 90, EventCategory::Community,
+        );
+        assert_eq!(upcoming.status(), ServerEventStatus::Upcoming);
+        assert_eq!(upcoming.time_label(), "45 分钟后开始");
+
+        upcoming.starts_in_minutes = 120;
+        assert_eq!(upcoming.time_label(), "2 小时后开始");
+
+        // 已开始但仍在时长内 = 进行中。
+        upcoming.starts_in_minutes = -20;
+        assert_eq!(upcoming.status(), ServerEventStatus::Live);
+        assert_eq!(upcoming.time_label(), "已开始 20 分钟");
+
+        // 超过时长 = 已结束。
+        upcoming.starts_in_minutes = -180;
+        assert_eq!(upcoming.status(), ServerEventStatus::Ended);
+        assert_eq!(upcoming.time_label(), "1 小时前结束");
+
+        // 恰好在开始点（-0）且时长未过仍算进行中，不出现 -0 时间戳。
+        upcoming.starts_in_minutes = 0;
+        assert_eq!(upcoming.status(), ServerEventStatus::Live);
+        assert_eq!(upcoming.time_label(), "已开始 0 分钟");
+    }
+
+    #[test]
+    fn server_event_attendee_lookup() {
+        let mut event = ServerEvent::new("b", "S", "t", "c", "h", 30, 60, EventCategory::Game);
+        assert_eq!(event.attendee_count(), 0);
+        assert!(!event.is_attending("你"));
+        event.attendees.push("你".into());
+        event.attendees.push("小满".into());
+        assert_eq!(event.attendee_count(), 2);
+        assert!(event.is_attending("你"));
+        assert_eq!(EventCategory::Game.label(), "游戏");
     }
 }

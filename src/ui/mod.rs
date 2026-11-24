@@ -7,6 +7,7 @@ pub mod create_dialog;
 pub mod discover;
 pub mod dm_call_panel;
 pub mod dm_sidebar;
+pub mod events_panel;
 pub mod friend_group_dialog;
 pub mod friend_group_menu;
 pub mod friends;

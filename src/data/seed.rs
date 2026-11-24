@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use super::models::{
     Attachment, AuditEntry, AuditKind, AutoModAction, AutoModRule, BannedUser, Category, Channel,
     ChatThread, DiscoverServer, DmConversation, Friend, FriendRequest, Gif, HelpArticle, Invite,
-    InviteExpiry, Member, Message, MyProfile, NotifyLevel, PermissionGrant, PermissionState,
-    Poll, ReadReceipt, Role, Server, Sticker, ThreadReply,
+    EventCategory, InviteExpiry, Member, Message, MyProfile, NotifyLevel, PermissionGrant,
+    PermissionState, Poll, ReadReceipt, Role, Server, ServerEvent, Sticker, ThreadReply,
 };
 
 /// 前端模拟服务器数据。
@@ -380,6 +380,50 @@ pub fn seed_automod_rules() -> Vec<AutoModRule> {
             false,
         ),
     ]
+}
+
+/// 服务器活动：覆盖"即将开始 / 进行中 / 已结束"三种状态，跨两个服务器验证归属隔离。
+pub fn seed_events() -> Vec<ServerEvent> {
+    let mut weekly = ServerEvent::new(
+        "evt-weekly",
+        "开发者社区",
+        "每周技术分享会",
+        "一般",
+        "Nova",
+        45,
+        90,
+        EventCategory::Community,
+    );
+    weekly.description = "这周聊 GPUI 渲染链路与性能优化，欢迎带问题来。".into();
+    weekly.attendees = vec!["小满".into(), "阿哲".into(), "Lin".into()];
+
+    let mut game = ServerEvent::new(
+        "evt-game",
+        "开发者社区",
+        "周五联机游戏夜",
+        "技术闲聊",
+        "阿哲",
+        -20,
+        120,
+        EventCategory::Game,
+    );
+    game.description = "轻松联机，输的人下周请奶茶 🧋".into();
+    game.attendees = vec!["Nova".into(), "小满".into()];
+
+    let mut past = ServerEvent::new(
+        "evt-design-review",
+        "设计工坊",
+        "设计稿互评会",
+        "反馈",
+        "Lin",
+        -180,
+        60,
+        EventCategory::Voice,
+    );
+    past.description = "回顾上周的作品，给彼此提点建议。".into();
+    past.attendees = vec!["小满".into()];
+
+    vec![weekly, game, past]
 }
 
 /// 前端模拟成员数据。角色按名称归属 `seed_roles()`，None 表示无角色。

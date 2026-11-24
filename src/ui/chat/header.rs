@@ -103,6 +103,14 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                         Box::new(|this, _, _| this.toggle_pins()), cx,
                     ),
                 )
+                // 服务器日程入口：仅服务器视图显示，与置顶/收件箱互斥。
+                .when(!is_dm, |el| {
+                    el.child(crate::ui::icon_button(
+                        IconName::CalendarDays, Size::Small, px(24.), "chat-toggle-events",
+                        app.show_events,
+                        Box::new(|this, _, cx| this.toggle_events(cx)), cx,
+                    ))
+                })
                 .child(
                     h_flex()
                         .gap_1()

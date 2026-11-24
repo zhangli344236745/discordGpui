@@ -506,6 +506,13 @@ gpui_kit::application()
 - 清理：`reset_session` 与 `close_top_overlay`（Esc）都走 `close_poll_composer`（清草稿 + 两个输入框 set_value）。⚠️ `toggle_poll_composer` 不碰 window，签名只有 `cx`。
 - 视图 `ui/chat/poll_composer.rs`：底部 52 / 右侧 16、宽 360 的浮卡；问题输入 + 已添加选项 chips（序号 + 文本 + 删除）+ 选项输入 + 多选开关 + 发起按钮（选项 < 2 时置灰）。消息里的投票由 `messages.rs::poll_card` 渲染：选项行用绝对定位进度条按 `percent()` 铺底 + 单选圆点 + 标签 + `N% · M 票`，我的选择描 accent 边、领先项描 success 边；底部显示总票数 / 单多选 / 结束态 + 作者可「结束投票」。⚠️ 选项行 `.id()` 放到 `.hover()` 之后、直接挂 `.on_click()`（Stateful<Div> 上再调 `.hover()` 会类型错），点击安全性由 `vote_poll` 内部的 closed 判断保证。
 
+### 服务器日程约定
+- 数据：`data::ServerEvent { id, server, title, description, channel, host, attendees, starts_in_minutes, duration_minutes, category }` + `EventCategory {Game,Voice,Community,Other}`（label/color/ALL）+ `ServerEventStatus {Upcoming,Live,Ended}`，全自有字段 serde 直接派生。时间用「距现在分钟数」相对值，不依赖真实时钟：`status()` 为 starts>0 即将开始、starts+duration>0 进行中、否则已结束；`time_label()` 按状态出「N 分钟后/已开始 N 分钟/N 分钟前结束」。`Message` 无关，活动独立存 `app.events`。
+- 种子 `seed_events()` 3 条跨两服务器，覆盖三种状态；`Snapshot.events: Option<Vec<ServerEvent>>`，旧快照缺字段保留种子；restore 丢弃归属已删服务器的脏记录；服务器改名 `rename_events_server`、离开 `remove_events_of_server` 迁移。
+- app 字段：`events/show_events/event_filter(EventFilter::All|Upcoming|Live|Ended)/selected_event/event_notice` + 创建草稿 `show_event_create/event_title_edit/event_desc_edit/event_channel/event_category/event_starts_in/event_duration`。方法 `server_events()`（当前服务器、按开始时间升序）/ `visible_events()`（按 filter）/ `toggle_events/close_events/set_event_filter/select_event/toggle_event_create/set_event_category/set_event_channel/adjust_event_start/adjust_event_duration/create_event/delete_event/toggle_attendance`；新建与报名写 `AuditKind::Server` 日志。⚠️ `set_event_channel` 由表单「落地频道」chip 点击循环切换调用（否则 dead_code 警告）。
+- 互斥与清理：`toggle_events` 关 pins/inbox；`toggle_pins`/`toggle_inbox` 反向关 events；`reset_session` 与 `close_top_overlay`（Esc）收起面板并清提示。入口是 header 的 `chat-toggle-events`（`IconName::CalendarDays`，仅非 DM）。
+- 视图 `ui/events_panel.rs`：右侧 380px 全高浮层（同 pinned_panel 定位）；状态筛选 chips 用公共组件 `filter_chip`（带计数，⚠️ handler 是 3 参 `Fn(&mut DiscordApp,&mut Window,&mut Context)`，别写成 4 参）；内嵌创建表单（标题/描述 Input + 分类色块 + 开始/时长步进器 ±15 分钟 + 频道 chip + 创建按钮）；活动卡片显示分类色点、状态徽标、时间、频道、描述、报名人数与"你已报名/你发起"、报名按钮、未结束时可删除。新活动 id 用 `SystemTime` 毫秒戳。
+
 ### 主题切换约定
 
 - 色板不再是常量：`ui/theme.rs::palette` 里每个 token 都是 `fn() -> u32`，深/浅两套值写在 `tokens!` 宏表里（`名称 = 深色 => 浅色`）。主题状态是一个 `AtomicBool`，由 `palette::set_light(bool)` 写入、渲染时读取，所以**不需要**把主题逐层透传进视图。
