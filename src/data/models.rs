@@ -1498,6 +1498,8 @@ pub struct Friend {
 /// 好友请求：incoming 为收到的请求，否则为发出的请求。
 #[derive(Clone, Serialize, Deserialize)]
 pub struct FriendRequest {
+    #[serde(default)]
+    pub id: String,
     pub name: String,
     pub color: u32,
     pub incoming: bool,

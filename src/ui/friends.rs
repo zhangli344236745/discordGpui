@@ -206,6 +206,18 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
         .bg(rgb(palette::bg_chat()))
         .child(header)
         .child(tabs)
+        .when(app.friend_notice.is_some(), |el| {
+            el.child(
+                h_flex()
+                    .px_6()
+                    .py_2()
+                    .gap_2()
+                    .bg(rgb(palette::bg_reaction_mine()))
+                    .text_size(px(12.))
+                    .text_color(rgb(palette::text_secondary()))
+                    .child(app.friend_notice.clone().unwrap_or_default()),
+            )
+        })
         .child(content)
 }
 
@@ -367,7 +379,7 @@ fn blocked_section(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                         .child("取消屏蔽")
                         .id(format!("blocked-unblock-{index}"))
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.unblock_friend(value.clone());
+                            this.unblock_friend(value.clone(), cx);
                             cx.notify();
                         })),
                 ),
@@ -528,7 +540,7 @@ fn friend_row(
         ))
         .child(crate::ui::danger_icon_button(
             IconName::Ban, Size::XSmall, px(28.), format!("friend-block-{name}"),
-            Box::new(move |this, _, _| this.block_friend(name)), cx,
+            Box::new(move |this, _, cx| this.block_friend(name, cx)), cx,
         ))
 }
 

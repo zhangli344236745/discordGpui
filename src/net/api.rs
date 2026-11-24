@@ -166,6 +166,28 @@ pub fn friend_groups() -> ApiRequest {
     ApiRequest::new(Method::Get, "/api/v1/friend-groups")
 }
 
+pub fn create_friend_group(name: &str) -> ApiRequest {
+    ApiRequest::new(Method::Post, "/api/v1/friend-groups").with_body(json!({ "name": name }))
+}
+
+pub fn rename_friend_group(group_id: &str, name: &str) -> ApiRequest {
+    ApiRequest::new(Method::Patch, format!("/api/v1/friend-groups/{group_id}"))
+        .with_body(json!({ "name": name }))
+}
+
+pub fn delete_friend_group(group_id: &str) -> ApiRequest {
+    ApiRequest::new(Method::Delete, format!("/api/v1/friend-groups/{group_id}"))
+}
+
+pub fn order_friend_groups(ids: &[String]) -> ApiRequest {
+    ApiRequest::new(Method::Patch, "/api/v1/friend-groups/order").with_body(json!({ "ids": ids }))
+}
+
+pub fn move_friend(user_id: &str, group_id: Option<&str>) -> ApiRequest {
+    ApiRequest::new(Method::Patch, format!("/api/v1/friends/{user_id}"))
+        .with_body(json!({ "group_id": group_id }))
+}
+
 pub fn blocks() -> ApiRequest {
     ApiRequest::new(Method::Get, "/api/v1/blocks")
 }

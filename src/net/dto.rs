@@ -217,13 +217,56 @@ pub struct PermissionMatrixDto {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct FriendRequestUserDto {
+    pub id: String,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub tag: String,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub avatar_color: u32,
+    #[serde(default)]
+    pub status: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct FriendRequestDto {
+    pub id: String,
+    pub from_user: FriendRequestUserDto,
+    pub to_user: FriendRequestUserDto,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub message: String,
+    #[serde(default)]
+    pub direction: String,
+    #[serde(default)]
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 pub struct FriendRequestPageDto {
     #[serde(default)]
-    pub items: Vec<serde_json::Value>,
+    pub items: Vec<FriendRequestDto>,
     #[serde(default)]
     pub count: u32,
     #[serde(default)]
-    pub outgoing: Vec<serde_json::Value>,
+    pub outgoing: Vec<FriendRequestDto>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct BlockDto {
+    pub user_id: String,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default)]
+    pub created_at: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]

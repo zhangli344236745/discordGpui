@@ -9,12 +9,13 @@ use std::collections::HashMap;
 
 use crate::data::{
     Attachment, AttachmentKind, Category, Channel, ChannelKind, DmConversation, Friend,
-    Member, Message, MyProfile, NotifyLevel, PermissionGrant, PermissionState, Role,
+    FriendRequest, Member, Message, MyProfile, NotifyLevel, PermissionGrant, PermissionState, Role,
     Server,
 };
 
 use super::dto::{
-    ChannelDto, ChannelUnreadDto, DmDto, DmMessageDto, FriendDto, FriendGroupDto, MemberDto, MessageDto,
+    ChannelDto, ChannelUnreadDto, DmDto, DmMessageDto, FriendDto, FriendGroupDto, FriendRequestDto,
+    MemberDto, MessageDto,
     PermissionMatrixDto, RoleDto, ServerDto, ServerTreeDto, UnreadCountsDto, UserDto,
 };
 
@@ -26,6 +27,8 @@ pub struct RemoteIndex {
     pub members: HashMap<String, String>,
     pub roles: HashMap<String, String>,
     pub friends: HashMap<String, String>,
+    pub friend_groups: HashMap<String, String>,
+    pub blocks: HashMap<String, String>,
     pub dms: HashMap<String, String>,
 }
 
@@ -37,6 +40,8 @@ pub struct BootData {
     pub roles: Vec<Vec<RoleDto>>,
     pub permissions: Vec<PermissionMatrixDto>,
     pub friends: Vec<FriendDto>,
+    pub friend_requests: Vec<FriendRequestDto>,
+    pub blocks: Vec<super::dto::BlockDto>,
     pub groups: Vec<FriendGroupDto>,
     pub dms: Vec<DmDto>,
     pub counts: UnreadCountsDto,
@@ -57,6 +62,8 @@ pub struct Hydrated {
     pub roles_active: Vec<Role>,
     pub friends: Vec<Friend>,
     pub friend_groups: Vec<String>,
+    pub friend_requests: Vec<FriendRequest>,
+    pub blocked_users: Vec<String>,
     pub dm_conversations: Vec<DmConversation>,
     pub messages: Vec<Message>,
     pub index: RemoteIndex,
@@ -366,6 +373,41 @@ pub fn hydrate(data: BootData) -> Hydrated {
         .map(|group| (group.id.as_str(), group.name.as_str()))
         .collect();
     let groups = data.groups.iter().map(|group| group.name.clone()).collect();
+    for group in &data.groups {
+        index
+            .friend_groups
+            .insert(group.name.clone(), group.id.clone());
+    }
+    let mut blocked_users = Vec::new();
+    for block in &data.blocks {
+        index.blocks.insert(block.username.clone(), block.user_id.clone());
+        index.blocks.insert(block.display_name.clone(), block.user_id.clone());
+        blocked_users.push(if block.display_name.is_empty() {
+            block.username.clone()
+        } else {
+            block.display_name.clone()
+        });
+    }
+
+    let mut friend_requests = Vec::new();
+    for request in &data.friend_requests {
+        let incoming = request.direction != "outgoing";
+        let user = if incoming {
+            &request.from_user
+        } else {
+            &request.to_user
+        };
+        friend_requests.push(FriendRequest {
+            id: request.id.clone(),
+            name: if user.display_name.is_empty() {
+                user.username.clone()
+            } else {
+                user.display_name.clone()
+            },
+            color: user.avatar_color,
+            incoming,
+        });
+    }
 
     let mut friends = Vec::new();
     for friend in &data.friends {
@@ -434,6 +476,8 @@ pub fn hydrate(data: BootData) -> Hydrated {
         permissions_by_server,
         friends,
         friend_groups: groups,
+        friend_requests,
+        blocked_users,
         dm_conversations: dms,
         messages,
         index,
@@ -496,6 +540,8 @@ mod tests {
             ]],
             permissions: vec![dto(json!({"items":[{"role_id":"r1","permission":"MANAGE_ROLES","state":"allow"}]}))],
             friends: vec![],
+            friend_requests: vec![],
+            blocks: vec![],
             groups: vec![],
             dms: vec![],
             counts: dto(json!({"channels":[{"channel_id":"ch1","server_id":"s1","unread":3}]})),

@@ -488,6 +488,7 @@ pub struct DiscordApp {
     // 好友页：标签 + 请求 + 屏蔽列表 + 添加好友输入。
     pub(crate) friend_tab: FriendTab,
     pub(crate) friend_requests: Vec<FriendRequest>,
+    pub(crate) friend_notice: Option<String>,
     pub(crate) blocked_users: Vec<String>,
     pub(crate) add_friend_input: Entity<InputState>,
 
@@ -1343,6 +1344,7 @@ impl DiscordApp {
             channel_name_input,
             friend_tab: FriendTab::Online,
             friend_requests: seed_friend_requests(),
+            friend_notice: None,
             blocked_users: Vec::new(),
             add_friend_input,
             friend_groups: seed_friend_groups(),
@@ -5662,72 +5664,177 @@ impl DiscordApp {
         if raw.is_empty() {
             return;
         }
-        let name = raw.split('#').next().unwrap_or(&raw).trim().to_string();
-        if name.is_empty() {
+        let Some((username, tag)) = raw.split_once('#') else {
+            self.friend_notice = Some("请输入 用户名#标签，例如 Zoe#1234".into());
+            cx.notify();
+            return;
+        };
+        let username = username.trim().to_string();
+        let tag = tag.trim().to_string();
+        if username.is_empty() || tag.len() != 4 || !tag.chars().all(|ch| ch.is_ascii_digit()) {
+            self.friend_notice = Some("标签必须是 4 位数字".into());
+            cx.notify();
             return;
         }
-        let duplicate = self.friends.iter().any(|f| f.name == name)
+        if self.friends.iter().any(|friend| friend.name == username)
             || self
                 .friend_requests
                 .iter()
-                .any(|r| r.name == raw || r.name == name);
-        if duplicate {
+                .any(|request| request.name == username || request.name == raw)
+        {
+            self.friend_notice = Some("已经是好友或已有待处理请求".into());
+            cx.notify();
             return;
         }
-        self.friend_requests.push(FriendRequest {
-            name: raw,
-            color: palette::accent(),
-            incoming: false,
-        });
         self.add_friend_input
             .update(cx, |input, cx| input.set_value("", window, cx));
         self.friend_tab = FriendTab::Pending;
+        self.friend_notice = None;
+
+        let Some(net) = self.net.clone().filter(|_| self.is_online()) else {
+            self.friend_requests.push(FriendRequest {
+                id: String::new(),
+                name: raw,
+                color: palette::accent(),
+                incoming: false,
+            });
+            cx.notify();
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let result = net
+                .execute(api::send_friend_request(&username, &tag, ""), true)
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                match result {
+                    Ok(_) => app.refresh_structure(cx),
+                    Err(error) => {
+                        app.friend_notice = Some(error.user_message());
+                        cx.notify();
+                    }
+                }
+            });
+        })
+        .detach();
         cx.notify();
     }
 
     /// 接受收到的请求：从请求列表移除并加入好友。
     pub(crate) fn accept_request(&mut self, index: usize, cx: &mut Context<Self>) {
-        let request = self.friend_requests.get(index).cloned();
-        if let Some(request) = request {
-            if request.incoming {
-                self.friend_requests.remove(index);
-                // Demo 为纯前端静态数据模型，用泄漏字符串把动态名转为 &'static str。
-                let name: &'static str = Box::leak(request.name.into_boxed_str());
-                self.friends.push(Friend {
-                    name,
-                    color: request.color,
-                    online: false,
-                    activity: "离线",
-                    // 新通过的好友先落在「未分组」，用户可以再拖到别的分组。
-                    group: String::new(),
-                });
-            }
+        let Some(request) = self.friend_requests.get(index).cloned() else {
+            return;
+        };
+        if !request.incoming {
+            return;
         }
+        if self.is_online() && !request.id.is_empty() {
+            let Some(net) = self.net.clone() else {
+                return;
+            };
+            let request_id = request.id.clone();
+            cx.spawn(async move |this, cx| {
+                let result = net.execute(api::accept_friend_request(&request_id), true).await;
+                let _ = this.update(cx, |app, cx| {
+                    match result {
+                        Ok(_) => app.refresh_structure(cx),
+                        Err(error) => {
+                            app.friend_notice = Some(error.user_message());
+                            cx.notify();
+                        }
+                    }
+                });
+            })
+            .detach();
+            return;
+        }
+        self.friend_requests.remove(index);
+        let name: &'static str = Box::leak(request.name.into_boxed_str());
+        self.friends.push(Friend {
+            name,
+            color: request.color,
+            online: false,
+            activity: "离线",
+            group: String::new(),
+        });
         cx.notify();
     }
 
-    /// 拒绝请求：从列表移除。
     pub(crate) fn reject_request(&mut self, index: usize, cx: &mut Context<Self>) {
-        if index < self.friend_requests.len() {
-            self.friend_requests.remove(index);
+        let Some(request) = self.friend_requests.get(index).cloned() else {
+            return;
+        };
+        if self.is_online() && !request.id.is_empty() {
+            let Some(net) = self.net.clone() else {
+                return;
+            };
+            let request_id = request.id.clone();
+            cx.spawn(async move |this, cx| {
+                let result = net.execute(api::reject_friend_request(&request_id), true).await;
+                let _ = this.update(cx, |app, cx| {
+                    match result {
+                        Ok(_) => app.refresh_structure(cx),
+                        Err(error) => {
+                            app.friend_notice = Some(error.user_message());
+                            cx.notify();
+                        }
+                    }
+                });
+            })
+            .detach();
+            return;
         }
+        self.friend_requests.remove(index);
         cx.notify();
     }
 
     /// 屏蔽好友：从好友列表移除并记入屏蔽名单。
-    pub(crate) fn block_friend(&mut self, name: &'static str) {
+    pub(crate) fn block_friend(&mut self, name: &'static str, cx: &mut Context<Self>) {
         if let Some(pos) = self.friends.iter().position(|f| f.name == name) {
             self.friends.remove(pos);
             if !self.blocked_users.iter().any(|n| n == name) {
                 self.blocked_users.push(name.to_string());
             }
         }
+        if self.is_online()
+            && let (Some(user_id), Some(net)) = (
+                self.remote
+                    .friends
+                    .get(name)
+                    .or_else(|| self.remote.members.get(&format!("{}/{}", self.active_server_name(), name)))
+                    .cloned(),
+                self.net.clone(),
+            )
+        {
+            cx.spawn(async move |this, cx| {
+                if let Err(error) = net.execute(api::block_user(&user_id, ""), true).await {
+                    let _ = this.update(cx, |app, cx| {
+                        app.friend_notice = Some(error.user_message());
+                        cx.notify();
+                    });
+                }
+            })
+            .detach();
+        }
     }
 
     /// 取消屏蔽：从屏蔽名单移除。
-    pub(crate) fn unblock_friend(&mut self, name: String) {
+    pub(crate) fn unblock_friend(&mut self, name: String, cx: &mut Context<Self>) {
         if let Some(pos) = self.blocked_users.iter().position(|n| n == &name) {
             self.blocked_users.remove(pos);
+        }
+        if self.is_online()
+            && let (Some(user_id), Some(net)) =
+                (self.remote.blocks.get(&name).cloned(), self.net.clone())
+        {
+            cx.spawn(async move |this, cx| {
+                if let Err(error) = net.execute(api::unblock_user(&user_id), true).await {
+                    let _ = this.update(cx, |app, cx| {
+                        app.friend_notice = Some(error.user_message());
+                        cx.notify();
+                    });
+                }
+            })
+            .detach();
         }
     }
 
@@ -5824,10 +5931,28 @@ impl DiscordApp {
         {
             return;
         }
-        self.friend_groups.push(name);
         self.group_input
             .update(cx, |input, cx| input.set_value("", window, cx));
         self.show_create_group = false;
+        if self.is_online() {
+            if let Some(net) = self.net.clone() {
+                let group_name = name.clone();
+                cx.spawn(async move |this, cx| {
+                    let result = net.execute(api::create_friend_group(&group_name), true).await;
+                    let _ = this.update(cx, |app, cx| match result {
+                        Ok(_) => app.refresh_structure(cx),
+                        Err(error) => {
+                            app.friend_notice = Some(error.user_message());
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+                cx.notify();
+                return;
+            }
+        }
+        self.friend_groups.push(name);
         cx.notify();
     }
 
@@ -5869,6 +5994,29 @@ impl DiscordApp {
             return;
         }
 
+        if self.is_online()
+            && let (Some(group_id), Some(net)) = (
+                self.remote.friend_groups.get(&source).cloned(),
+                self.net.clone(),
+            )
+        {
+            let new_name = value.clone();
+            cx.spawn(async move |this, cx| {
+                let result = net
+                    .execute(api::rename_friend_group(&group_id, &new_name), true)
+                    .await;
+                let _ = this.update(cx, |app, cx| match result {
+                    Ok(_) => app.refresh_structure(cx),
+                    Err(error) => {
+                        app.friend_notice = Some(error.user_message());
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+            cx.notify();
+            return;
+        }
         if let Some(pos) = self.friend_groups.iter().position(|name| name == &source) {
             self.friend_groups[pos] = value.clone();
         }
@@ -5896,6 +6044,27 @@ impl DiscordApp {
         if name.is_empty() {
             return;
         }
+        if self.is_online()
+            && let (Some(group_id), Some(net)) = (
+                self.remote.friend_groups.get(&name).cloned(),
+                self.net.clone(),
+            )
+        {
+            cx.spawn(async move |this, cx| {
+                let result = net.execute(api::delete_friend_group(&group_id), true).await;
+                let _ = this.update(cx, |app, cx| match result {
+                    Ok(_) => app.refresh_structure(cx),
+                    Err(error) => {
+                        app.friend_notice = Some(error.user_message());
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+            self.friend_group_menu = None;
+            cx.notify();
+            return;
+        }
         self.friend_groups.retain(|existing| existing != &name);
         self.collapsed_groups.retain(|existing| existing != &name);
         for friend in self.friends.iter_mut() {
@@ -5919,6 +6088,27 @@ impl DiscordApp {
         }
         self.friend_groups.swap(pos, target as usize);
         self.friend_group_menu = None;
+        if self.is_online()
+            && let Some(net) = self.net.clone()
+        {
+            let ids: Vec<String> = self
+                .friend_groups
+                .iter()
+                .filter_map(|group| self.remote.friend_groups.get(group).cloned())
+                .collect();
+            if ids.len() == self.friend_groups.len() {
+                cx.spawn(async move |this, cx| {
+                    if let Err(error) = net.execute(api::order_friend_groups(&ids), true).await {
+                        let _ = this.update(cx, |app, cx| {
+                            app.friend_notice = Some(error.user_message());
+                            app.refresh_structure(cx);
+                            cx.notify();
+                        });
+                    }
+                })
+                .detach();
+            }
+        }
         cx.notify();
     }
 
@@ -5983,7 +6173,27 @@ impl DiscordApp {
             self.friends[pos].group = group.clone();
         }
         if !group.is_empty() && !self.friend_groups.iter().any(|name| name == &group) {
-            self.friend_groups.push(group);
+            self.friend_groups.push(group.clone());
+        }
+        if self.is_online()
+            && let (Some(user_id), Some(net)) = (
+                self.remote.friends.get(&friend).cloned(),
+                self.net.clone(),
+            )
+        {
+            let group_id = self.remote.friend_groups.get(&group).cloned();
+            cx.spawn(async move |this, cx| {
+                let result = net
+                    .execute(api::move_friend(&user_id, group_id.as_deref()), true)
+                    .await;
+                let _ = this.update(cx, |app, cx| {
+                    if let Err(error) = result {
+                        app.friend_notice = Some(error.user_message());
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
         }
         self.friend_group_picker = None;
         cx.notify();
@@ -8358,6 +8568,9 @@ impl DiscordApp {
 
         let friends: Vec<FriendDto> = net.execute_as(api::friends(), true).await?;
         let groups: Vec<FriendGroupDto> = net.execute_as(api::friend_groups(), true).await?;
+        let request_page: crate::net::dto::FriendRequestPageDto =
+            net.execute_as(api::friend_requests(), true).await?;
+        let blocks: Vec<crate::net::dto::BlockDto> = net.execute_as(api::blocks(), true).await?;
         let dms: Vec<DmDto> = net.execute_as(api::dms(), true).await?;
         let counts: UnreadCountsDto = net
             .execute_as(api::unread_counts(), true)
@@ -8393,6 +8606,8 @@ impl DiscordApp {
             roles,
             permissions,
             friends,
+            friend_requests: request_page.items.into_iter().chain(request_page.outgoing).collect(),
+            blocks,
             groups,
             dms,
             counts,
@@ -8453,6 +8668,8 @@ impl DiscordApp {
 
         self.friends = data.friends;
         self.friend_groups = data.friend_groups;
+        self.friend_requests = data.friend_requests;
+        self.blocked_users = data.blocked_users;
         self.dm_conversations = data.dm_conversations;
         self.active_dm = self.dm_conversations.first().map(|dm| dm.friend.to_string());
 
@@ -8476,7 +8693,6 @@ impl DiscordApp {
         self.welcome_joined.clear();
         self.boosts.clear();
         self.message_requests.clear();
-        self.friend_requests.clear();
         self.blocked_users.clear();
 
         if !keep_view {

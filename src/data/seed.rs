@@ -605,16 +605,19 @@ pub fn seed_dm_conversations() -> Vec<DmConversation> {
 pub fn seed_friend_requests() -> Vec<FriendRequest> {
     vec![
         FriendRequest {
+            id: String::new(),
             name: "Zoe".into(),
             color: 0xf0b232,
             incoming: true,
         },
         FriendRequest {
+            id: String::new(),
             name: "Ash".into(),
             color: 0x9b59b6,
             incoming: true,
         },
         FriendRequest {
+            id: String::new(),
             name: "Rin".into(),
             color: 0x00a8fc,
             incoming: false,
