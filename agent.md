@@ -329,9 +329,10 @@ gpui_kit::application()
 ### 服务器设置页约定
 
 - 入口：服务器下拉菜单第一项「服务器设置」（`server-menu-settings`）→ `app::open_server_settings`；它会把当前服务器名称/简介预填到 `server_name_edit` / `server_desc_edit`，并收起所有浮层（含用户设置页）。
-- 分类：`ServerSettingsSection`（Overview/Roles/Emoji/Invites/Members/Audit），文案与图标唯一数据源是 `ui/server_settings/mod.rs::SECTIONS`，切换走 `select_server_settings_section`。
+- 分类：`ServerSettingsSection`（Overview/Roles/Permissions/Emoji/Invites/Members/Audit），文案与图标唯一数据源是 `ui/server_settings/mod.rs::SECTIONS`，切换走 `select_server_settings_section`。
 - 概览：名称与简介各一个 Input，Enter（订阅在 `new` 里）或「保存」按钮都调用 `save_server_overview`。改名是**带迁移**的：同步搬走 `messages` 里 `旧名/` 前缀的键、重写 `collapsed` 里的折叠键，并按新名首字更新 `badge`；空名或未改名不生效。图标颜色由 6 个色块 `set_server_color` 点击即生效。
 - 角色：主从布局（左列表 / 右详情），数据来自 `app.roles` 与 `app.members`，见「角色管理约定」。
+- 权限：见下方「权限管理约定」；纯配置演示，不校验真实操作。
 - 表情：`server_emojis` / `removed_server_emojis` 两个向量，`remove_server_emoji` 与 `restore_server_emoji` 互转；Demo 不做真实上传。
 - 邀请：见下方「邀请管理约定」；入口按钮 `open_invite` 会关掉服务器设置页（弹层挂在主界面）。
 - 成员：见下方「成员管理约定」；搜索框、筛选与昵称弹层都在 app 层。
@@ -346,6 +347,17 @@ gpui_kit::application()
 - 布局：左列表（色点 + 角色名 + 人数 + 选中底色）与右详情（名称输入、6 色块、成员勾选行、删除按钮）都是纯视图，逻辑只在 app 层。
 - `ROLE_COLORS` 是 `pub(crate)`，UI 直接复用同一份色值，避免两处各写一套。
 - 持久化：`Snapshot.members` / `Snapshot.roles` 都是 `Option`，旧快照没有这两个字段时保留种子而不是清空。
+
+### 权限管理约定
+
+- 数据：`PermissionState` 三态枚举（`Unset` 继承 / `Allow` 允许 / `Deny` 拒绝，`next()` 循环、`label()` 文案），`PermissionGrant { role: String, permission: String, state }`（全自有类型，serde 直接派生，无 `*Owned` 镜像）。
+- 权限清单是 data 层常量 `PERMISSIONS: &[PermissionDef]`（`key` 是快照稳定键，13 项，分 `PermissionGroup::{General,Text,Voice,Advanced}` 四组），视图遍历它按组渲染；`key` 一旦写入快照就不要改。种子 `seed_permissions()` 给三个角色预置 35 条非默认项。
+- 只存非默认项：`app.role_permissions` 里没有对应记录即视为 `Unset`。`app::permission_state(role, key)` 是唯一查询入口；`permission_role()` 取当前选中角色，没选中回落到第一个。
+- 写操作 `app::cycle_permission(role, key, label, cx)`：读旧态 → `next()` → 有记录则改态（`Unset` 时删除记录）/无记录且非 `Unset` 则新增 → 写 `permission_notice` → 记 `AuditKind::Role` 日志。视图行按钮用 `ui/server_settings/pages.rs::permission_state_button`，颜色走 `palette::success/danger/bg_rail`，点击回调四参闭包里直接调 `cycle_permission`。
+- 角色改名 `save_role_name` 要把 `role_permissions` 里的 `grant.role` 一起迁移；`delete_role` 要 `retain` 掉该角色记录；`restore_state` 也要丢弃指向已不存在角色的脏记录。
+- 页面状态复用 `selected_role`（角色页共用）：顶部角色 tabs 走 `select_permission_role`（只切聚焦、不写角色名输入草稿）；进权限分类时若没选中会自动选第一个；切分类清 `permission_notice`。
+- 视图布局：`shell` + 角色 tabs 卡 + 按 `PermissionGroup::ALL` 分组的权限行卡（每行：标签 + hint + 76px 三态按钮，id `permission-toggle-{role}-{key}`）。纯演示，**权限位不校验任何真实操作**。
+- 持久化：`Snapshot.permissions: Option<Vec<PermissionGrant>>`，旧快照缺字段时保留种子；往返测试已覆盖。
 
 ### 成员管理约定
 

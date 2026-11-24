@@ -11,11 +11,12 @@ use crate::data::{
     gif_categories, help_categories, seed_friend_groups, seed_friends, seed_gifs,
     seed_audit, seed_help_articles, seed_invites, seed_me, seed_roles,
     seed_members, seed_messages, seed_servers,
-    seed_bans, seed_stickers, seed_threads, sticker_packs, Attachment, AuditEntry, AuditKind,
-    BannedUser, Category, Channel, ChannelKind,
+    seed_bans, seed_permissions, seed_stickers, seed_threads, sticker_packs, Attachment, AuditEntry,
+    AuditKind, BannedUser, Category, Channel, ChannelKind,
     ChatThread, DiscoverServer,     DmConversation, EditRevision, ForwardOrigin, ForwardTarget, Friend, FriendRequest,
     FriendTab, Gif, HelpArticle, Invite, InviteExpiry, Member, MyProfile,
-    MemberGroup, Message, Notification, NotificationKind, NotificationTarget, NotifyLevel, Reaction,
+    MemberGroup, Message, Notification, NotificationKind, NotificationTarget, NotifyLevel,
+    PermissionGrant, PermissionState, Reaction,
     ReadReceipt,
     ReplyRef, Role, SearchHit, Server, Sticker, ThreadReply, UserStatus, VoiceParticipant,
 };
@@ -177,6 +178,7 @@ impl ThemeChoice {
 pub(crate) enum ServerSettingsSection {
     Overview,
     Roles,
+    Permissions,
     Emoji,
     Invites,
     Members,
@@ -366,6 +368,10 @@ pub struct DiscordApp {
     pub(crate) selected_role: Option<String>,
     pub(crate) role_name_edit: Entity<InputState>,
     pub(crate) role_notice: Option<&'static str>,
+
+    // 权限管理：角色 × 权限的三态设置（只存非默认项）+ 操作提示。
+    pub(crate) role_permissions: Vec<PermissionGrant>,
+    pub(crate) permission_notice: Option<&'static str>,
 
     // 邀请管理：全部邀请 + 新建表单（频道 / 有效期 / 次数上限）+ 最近复制的邀请码。
     pub(crate) invites: Vec<Invite>,
@@ -977,6 +983,8 @@ impl DiscordApp {
             selected_role: None,
             role_name_edit,
             role_notice: None,
+            role_permissions: seed_permissions(),
+            permission_notice: None,
             invites: seed_invites(),
             invite_channel: String::new(),
             invite_expiry: InviteExpiry::OneDay,
@@ -4778,8 +4786,9 @@ impl DiscordApp {
         self.server_settings_section = section;
         self.invite_copied_code = None;
         self.role_notice = None;
-        // 进角色页时默认选中第一个角色，右侧详情不至于空白。
-        if section == ServerSettingsSection::Roles
+        self.permission_notice = None;
+        // 进角色页/权限页时默认选中第一个角色，右侧详情不至于空白。
+        if (section == ServerSettingsSection::Roles || section == ServerSettingsSection::Permissions)
             && self.selected_role.is_none()
             && let Some(first) = self.roles.first().map(|role| role.name.clone())
         {
@@ -4965,6 +4974,12 @@ impl DiscordApp {
                 *key = new_key.clone();
             }
         }
+        // 角色名同时是权限归属键，一起迁移。
+        for grant in self.role_permissions.iter_mut() {
+            if grant.role == current {
+                grant.role = new_name.clone();
+            }
+        }
 
         self.log_audit(
             AuditKind::Role,
@@ -5012,6 +5027,7 @@ impl DiscordApp {
         }
         let key = format!("role-{current}");
         self.collapsed_roles.retain(|item| item != &key);
+        self.role_permissions.retain(|grant| grant.role != current);
         self.log_audit(AuditKind::Role, "删除了角色", current.clone());
         self.selected_role = None;
         self.role_notice = Some("角色已删除，相关成员回到「无角色」");
@@ -5044,6 +5060,69 @@ impl DiscordApp {
                 format!("{member_name} → {current}"),
             );
         }
+        cx.notify();
+    }
+
+    // ---------------------------- 权限管理 ----------------------------
+
+    /// 查询某角色对某权限位的当前状态；没有显式设置就是「继承」。
+    pub(crate) fn permission_state(&self, role: &str, key: &str) -> PermissionState {
+        self.role_permissions
+            .iter()
+            .find(|grant| grant.role == role && grant.permission == key)
+            .map(|grant| grant.state)
+            .unwrap_or(PermissionState::Unset)
+    }
+
+    /// 循环切换角色权限位：继承 → 允许 → 拒绝 → 继承；允许/拒绝落库，回到继承删除记录。
+    pub(crate) fn cycle_permission(
+        &mut self,
+        role: String,
+        key: &'static str,
+        label: &'static str,
+        cx: &mut Context<Self>,
+    ) {
+        let before = self.permission_state(&role, key);
+        let after = before.next();
+        if let Some(index) = self
+            .role_permissions
+            .iter()
+            .position(|grant| grant.role == role && grant.permission == key)
+        {
+            if after == PermissionState::Unset {
+                self.role_permissions.remove(index);
+            } else {
+                self.role_permissions[index].state = after;
+            }
+        } else if after != PermissionState::Unset {
+            self.role_permissions
+                .push(PermissionGrant::new(role.clone(), key, after));
+        }
+
+        self.permission_notice = Some(match after {
+            PermissionState::Unset => "已恢复为继承默认",
+            PermissionState::Allow => "已设为允许",
+            PermissionState::Deny => "已设为拒绝",
+        });
+        self.log_audit(
+            AuditKind::Role,
+            "更新了角色权限",
+            format!("{role} · {label}：{} → {}", before.label(), after.label()),
+        );
+        cx.notify();
+    }
+
+    /// 当前权限页聚焦的角色：优先用角色页选中项，否则回落到第一个角色。
+    pub(crate) fn permission_role(&self) -> Option<String> {
+        self.selected_role
+            .clone()
+            .or_else(|| self.roles.first().map(|role| role.name.clone()))
+    }
+
+    /// 权限页切换聚焦角色（不写角色页的名称输入草稿）。
+    pub(crate) fn select_permission_role(&mut self, name: String, cx: &mut Context<Self>) {
+        self.selected_role = Some(name);
+        self.permission_notice = None;
         cx.notify();
     }
 
@@ -5519,6 +5598,7 @@ impl DiscordApp {
             bans: Some(self.bans.clone()),
             members: Some(self.members.clone()),
             roles: Some(self.roles.clone()),
+            permissions: Some(self.role_permissions.clone()),
             friend_requests: self.friend_requests.clone(),
             blocked_users: self.blocked_users.clone(),
             me: self.me.clone(),
@@ -5595,6 +5675,12 @@ impl DiscordApp {
         if let Some(roles) = saved.roles {
             self.roles = roles;
         }
+        // 权限：旧快照没有就保留种子；丢弃指向已不存在角色的脏记录。
+        if let Some(permissions) = saved.permissions {
+            self.role_permissions = permissions;
+        }
+        self.role_permissions
+            .retain(|grant| self.roles.iter().any(|role| role.name == grant.role));
         if let Some(selected) = self.selected_role.take() {
             self.selected_role = self
                 .roles
@@ -5670,6 +5756,8 @@ impl DiscordApp {
         self.roles = seed_roles();
         self.selected_role = None;
         self.role_notice = None;
+        self.role_permissions = seed_permissions();
+        self.permission_notice = None;
         self.invites = seed_invites();
         self.invite_copied_code = None;
         self.audit = seed_audit();

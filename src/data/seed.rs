@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use super::models::{
     Attachment, AuditEntry, AuditKind, BannedUser, Category, Channel, ChatThread, DiscoverServer,
     DmConversation, Friend, FriendRequest, Gif, HelpArticle, Invite, InviteExpiry, Member, Message,
-    MyProfile, NotifyLevel, ReadReceipt, Role, Server, Sticker, ThreadReply,
+    MyProfile, NotifyLevel, PermissionGrant, PermissionState, ReadReceipt, Role, Server, Sticker,
+    ThreadReply,
 };
 
 /// 前端模拟服务器数据。
@@ -258,6 +259,83 @@ pub fn seed_roles() -> Vec<Role> {
         Role::new("版主", 0x57f287),
         Role::new("贡献者", 0x00a8fc),
     ]
+}
+
+/// 角色权限种子：管理员几乎全部允许，版主有 moderation 权限并禁用管理频道，
+/// 贡献者只允许基础互动，其余权限位留空（继承默认）。
+pub fn seed_permissions() -> Vec<PermissionGrant> {
+    let mut grants = Vec::new();
+    let grant_all = |role: &str, keys: &[&str], state: PermissionState, out: &mut Vec<PermissionGrant>| {
+        for key in keys {
+            out.push(PermissionGrant::new(role, *key, state));
+        }
+    };
+
+    grant_all(
+        "管理员",
+        &[
+            "view_channels",
+            "invite_people",
+            "change_nickname",
+            "send_messages",
+            "embed_links",
+            "attach_files",
+            "add_reactions",
+            "mention_everyone",
+            "connect",
+            "speak",
+            "screen_share",
+            "manage_messages",
+        ],
+        PermissionState::Allow,
+        &mut grants,
+    );
+    grant_all(
+        "版主",
+        &[
+            "view_channels",
+            "invite_people",
+            "change_nickname",
+            "send_messages",
+            "embed_links",
+            "attach_files",
+            "add_reactions",
+            "mention_everyone",
+            "connect",
+            "speak",
+            "screen_share",
+            "manage_messages",
+        ],
+        PermissionState::Allow,
+        &mut grants,
+    );
+    grant_all(
+        "版主",
+        &["manage_channels"],
+        PermissionState::Deny,
+        &mut grants,
+    );
+    grant_all(
+        "贡献者",
+        &[
+            "view_channels",
+            "send_messages",
+            "embed_links",
+            "attach_files",
+            "add_reactions",
+            "connect",
+            "speak",
+        ],
+        PermissionState::Allow,
+        &mut grants,
+    );
+    grant_all(
+        "贡献者",
+        &["manage_messages", "manage_channels", "mention_everyone"],
+        PermissionState::Deny,
+        &mut grants,
+    );
+    grants
 }
 
 /// 前端模拟成员数据。角色按名称归属 `seed_roles()`，None 表示无角色。

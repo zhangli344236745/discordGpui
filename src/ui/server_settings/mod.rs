@@ -16,6 +16,11 @@ pub(crate) const SECTIONS: &[(ServerSettingsSection, &str, IconName)] = &[
     (ServerSettingsSection::Overview, "概览", IconName::Server),
     (ServerSettingsSection::Roles, "角色", IconName::Shield),
     (
+        ServerSettingsSection::Permissions,
+        "权限",
+        IconName::ShieldCheck,
+    ),
+    (
         ServerSettingsSection::Emoji,
         "表情",
         IconName::FaceSlightlySmiling,

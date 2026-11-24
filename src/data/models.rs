@@ -896,6 +896,172 @@ impl Role {
     }
 }
 
+/// 角色权限的三态。`Unset` 表示继承服务器默认，`Allow` / `Deny` 为显式覆盖。
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+pub enum PermissionState {
+    #[default]
+    Unset,
+    Allow,
+    Deny,
+}
+
+impl PermissionState {
+    /// 按钮/单元格文案。
+    pub fn label(self) -> &'static str {
+        match self {
+            PermissionState::Unset => "继承",
+            PermissionState::Allow => "允许",
+            PermissionState::Deny => "拒绝",
+        }
+    }
+
+    /// 点击时在 继承 → 允许 → 拒绝 → 继承 之间循环。
+    pub fn next(self) -> Self {
+        match self {
+            PermissionState::Unset => PermissionState::Allow,
+            PermissionState::Allow => PermissionState::Deny,
+            PermissionState::Deny => PermissionState::Unset,
+        }
+    }
+}
+
+/// 权限分组：决定权限矩阵里的分组标题与顺序。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PermissionGroup {
+    General,
+    Text,
+    Voice,
+    Advanced,
+}
+
+impl PermissionGroup {
+    /// 全部分组，顺序即矩阵展示顺序。
+    pub const ALL: [PermissionGroup; 4] = [
+        PermissionGroup::General,
+        PermissionGroup::Text,
+        PermissionGroup::Voice,
+        PermissionGroup::Advanced,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            PermissionGroup::General => "通用权限",
+            PermissionGroup::Text => "文字频道",
+            PermissionGroup::Voice => "语音频道",
+            PermissionGroup::Advanced => "高级权限",
+        }
+    }
+}
+
+/// 一条权限位的静态定义。`key` 是持久化用的稳定键，改动会破坏旧快照里的设置。
+#[derive(Clone, Copy)]
+pub struct PermissionDef {
+    pub key: &'static str,
+    pub label: &'static str,
+    pub hint: &'static str,
+    pub group: PermissionGroup,
+}
+
+/// 权限清单：视图遍历它渲染矩阵，不持有任何状态。
+pub const PERMISSIONS: &[PermissionDef] = &[
+    PermissionDef {
+        key: "view_channels",
+        label: "查看频道",
+        hint: "在服务器栏看到并进入频道",
+        group: PermissionGroup::General,
+    },
+    PermissionDef {
+        key: "invite_people",
+        label: "邀请好友",
+        hint: "生成邀请链接并邀请他人加入",
+        group: PermissionGroup::General,
+    },
+    PermissionDef {
+        key: "change_nickname",
+        label: "修改昵称",
+        hint: "更改自己在本服务器的昵称",
+        group: PermissionGroup::General,
+    },
+    PermissionDef {
+        key: "send_messages",
+        label: "发送消息",
+        hint: "在文字频道发送消息与附件",
+        group: PermissionGroup::Text,
+    },
+    PermissionDef {
+        key: "embed_links",
+        label: "嵌入链接",
+        hint: "消息中的链接展示为预览卡片",
+        group: PermissionGroup::Text,
+    },
+    PermissionDef {
+        key: "attach_files",
+        label: "上传附件",
+        hint: "在消息中附加文件与图片",
+        group: PermissionGroup::Text,
+    },
+    PermissionDef {
+        key: "add_reactions",
+        label: "添加回应",
+        hint: "给消息添加表情回应",
+        group: PermissionGroup::Text,
+    },
+    PermissionDef {
+        key: "mention_everyone",
+        label: "提及所有人",
+        hint: "使用 @everyone 与 @here",
+        group: PermissionGroup::Text,
+    },
+    PermissionDef {
+        key: "connect",
+        label: "连接语音",
+        hint: "加入语音频道",
+        group: PermissionGroup::Voice,
+    },
+    PermissionDef {
+        key: "speak",
+        label: "语音发言",
+        hint: "在语音频道中说话",
+        group: PermissionGroup::Voice,
+    },
+    PermissionDef {
+        key: "screen_share",
+        label: "屏幕分享",
+        hint: "在语音或通话中分享屏幕",
+        group: PermissionGroup::Voice,
+    },
+    PermissionDef {
+        key: "manage_messages",
+        label: "管理消息",
+        hint: "删除他人消息与置顶消息",
+        group: PermissionGroup::Advanced,
+    },
+    PermissionDef {
+        key: "manage_channels",
+        label: "管理频道",
+        hint: "创建、编辑与删除频道",
+        group: PermissionGroup::Advanced,
+    },
+];
+
+/// 一个角色对一条权限的设置。只保存非默认项；查不到的键一律按 `Unset` 处理。
+#[derive(Clone, Serialize, Deserialize)]
+pub struct PermissionGrant {
+    pub role: String,
+    pub permission: String,
+    pub state: PermissionState,
+}
+
+impl PermissionGrant {
+    pub fn new(role: impl Into<String>, permission: impl Into<String>, state: PermissionState) -> Self {
+        Self {
+            role: role.into(),
+            permission: permission.into(),
+            state,
+        }
+    }
+}
+
 /// 成员条目。`role` 存角色名，None 表示无角色（归入在线 / 离线兜底组）；
 /// `nick` 是服务器昵称，只影响展示，`name` 始终是身份键。
 #[derive(Clone, Copy, Serialize)]
@@ -1293,5 +1459,29 @@ mod tests {
         assert_eq!(entry(newest - 3 * 24 * 60).time_label(newest), "3 天前");
         // 序号比最新还大（理论上不会发生）也不应下溢。
         assert_eq!(entry(newest + 3).time_label(newest), "刚刚");
+    }
+
+    /// 权限三态循环一圈回到原点，文案与默认状态稳定。
+    #[test]
+    fn permission_state_cycles_and_labels() {
+        assert_eq!(PermissionState::default(), PermissionState::Unset);
+        let mut state = PermissionState::Unset;
+        assert_eq!(state.label(), "继承");
+        state = state.next();
+        assert_eq!(state, PermissionState::Allow);
+        assert_eq!(state.label(), "允许");
+        state = state.next();
+        assert_eq!(state, PermissionState::Deny);
+        assert_eq!(state.label(), "拒绝");
+        state = state.next();
+        assert_eq!(state, PermissionState::Unset);
+
+        // 权限清单的 key 必须唯一且与分组对应，避免矩阵与快照错位。
+        let mut keys = std::collections::HashSet::new();
+        for def in PERMISSIONS {
+            assert!(keys.insert(def.key), "重复的权限 key: {}", def.key);
+            assert!(!def.label.is_empty());
+            assert!(PermissionGroup::ALL.contains(&def.group));
+        }
     }
 }

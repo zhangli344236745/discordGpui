@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize, Serializer};
 
 use super::models::{
     AuditEntry, BannedUser, ChatThread, DmConversation, Friend, FriendRequest, Invite, InviteExpiry,
-    Member, Message, MyProfile, Role, Server, UserStatus,
+    Member, Message, MyProfile, PermissionGrant, Role, Server, UserStatus,
 };
 
 /// 快照版本号；字段语义变化时递增，加载端按需丢弃旧数据。
@@ -55,6 +55,9 @@ pub struct Snapshot {
     /// 封禁列表。旧快照缺字段时保留种子数据。
     #[serde(default)]
     pub bans: Option<Vec<BannedUser>>,
+    /// 角色权限位（只存非默认项）。旧快照缺字段时保留种子权限。
+    #[serde(default)]
+    pub permissions: Option<Vec<PermissionGrant>>,
     /// 好友分组的顺序（只存分组名，成员关系在 `Friend.group` 上）。
     #[serde(default)]
     pub friend_groups: Vec<String>,
@@ -544,6 +547,7 @@ mod tests {
             invites: Some(crate::data::seed_invites()),
             members: Some(crate::data::seed_members()),
             roles: Some(crate::data::seed_roles()),
+            permissions: Some(crate::data::seed_permissions()),
             audit: Some(crate::data::seed_audit()),
             bans: Some(crate::data::seed_bans()),
             me: crate::data::seed_me(),
@@ -604,6 +608,14 @@ mod tests {
         assert_eq!(after_roles.len(), before_roles.len());
         assert_eq!(after_roles[0].name, before_roles[0].name);
         assert_eq!(after_roles[0].color, before_roles[0].color);
+
+        // 权限：角色归属 / 权限 key / 三态枚举都要完整往返。
+        let before_permissions = snapshot.permissions.clone().unwrap_or_default();
+        let after_permissions = back.permissions.clone().unwrap_or_default();
+        assert_eq!(after_permissions.len(), before_permissions.len());
+        assert_eq!(after_permissions[0].role, before_permissions[0].role);
+        assert_eq!(after_permissions[0].permission, before_permissions[0].permission);
+        assert_eq!(after_permissions[0].state, before_permissions[0].state);
 
         // 审核日志：类别枚举、序号与两段文本都要完整往返。
         let before_audit = snapshot.audit.clone().unwrap_or_default();

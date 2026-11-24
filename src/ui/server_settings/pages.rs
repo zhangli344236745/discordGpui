@@ -6,7 +6,7 @@ use gpui_kit::component::input::Input;
 use gpui_kit::component::{h_flex, v_flex, Size, Sizable};
 
 use crate::app::{DiscordApp, MemberFilter, ROLE_COLORS, ServerSettingsSection};
-use crate::data::{AuditKind, InviteExpiry};
+use crate::data::{AuditKind, InviteExpiry, PermissionGroup, PermissionState, PERMISSIONS};
 use crate::ui::theme::palette;
 use crate::ui::{avatar, danger_icon_button, filter_chip, ico, icon_button};
 
@@ -20,6 +20,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
     match app.server_settings_section {
         ServerSettingsSection::Overview => overview(app, cx),
         ServerSettingsSection::Roles => roles(app, cx),
+        ServerSettingsSection::Permissions => permissions(app, cx),
         ServerSettingsSection::Emoji => emoji(app, cx),
         ServerSettingsSection::Invites => invites(app, cx),
         ServerSettingsSection::Members => members(app, cx),
@@ -538,6 +539,182 @@ fn roles(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
             .child(left)
             .child(div().flex_1().min_w_0().child(detail)),
     )
+}
+
+// ---------------------------------------------------------------------------
+// 权限
+// ---------------------------------------------------------------------------
+
+/// 单个权限行的三态按钮：继承（灰）/ 允许（绿勾）/ 拒绝（红叉），点击循环切换。
+fn permission_state_button(
+    role: &str,
+    key: &'static str,
+    label: &'static str,
+    state: PermissionState,
+    id: String,
+    cx: &mut Context<DiscordApp>,
+) -> Stateful<Div> {
+    let (bg, icon, icon_color) = match state {
+        PermissionState::Unset => (palette::bg_rail(), IconName::Minus, palette::text_muted()),
+        PermissionState::Allow => (palette::success(), IconName::Check, palette::WHITE),
+        PermissionState::Deny => (palette::danger(), IconName::X, palette::WHITE),
+    };
+    let owned_role = role.to_string();
+    div()
+        .w(px(76.))
+        .h(px(28.))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap_1()
+        .rounded(px(5.))
+        .bg(rgb(bg))
+        .hover(|el| el.opacity(0.85))
+        .child(ico(icon, Size::XSmall).text_color(rgb(icon_color)))
+        .child(
+            div()
+                .text_size(px(11.))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(rgb(icon_color))
+                .child(state.label()),
+        )
+        .id(id)
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.cycle_permission(owned_role.clone(), key, label, cx);
+        }))
+}
+
+fn permissions(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
+    // 顶部角色 tabs：复用 selected_role，点击只切聚焦角色。
+    let mut tabs = h_flex().w_full().gap_2().flex_wrap();
+    let current = app.permission_role();
+    for (index, role) in app.roles.iter().enumerate() {
+        let active = current.as_deref() == Some(role.name.as_str());
+        let name = role.name.clone();
+        let count = app.role_member_count(&role.name);
+        tabs = tabs.child(
+            h_flex()
+                .h(px(34.))
+                .px_3()
+                .gap_2()
+                .items_center()
+                .rounded(px(6.))
+                .border_1()
+                .border_color(rgb(if active {
+                    palette::accent()
+                } else {
+                    palette::border_default()
+                }))
+                .bg(rgb(if active {
+                    palette::bg_channel_selected()
+                } else {
+                    palette::bg_sidebar()
+                }))
+                .hover(|el| el.bg(rgb(palette::bg_channel_hover())))
+                .child(div().w(px(8.)).h(px(8.)).rounded_full().bg(rgb(role.color)))
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(rgb(palette::text_primary()))
+                        .child(name.clone()),
+                )
+                .child(
+                    div()
+                        .text_size(px(10.))
+                        .text_color(rgb(palette::text_muted()))
+                        .child(format!("{count}")),
+                )
+                .id(format!("permission-role-tab-{index}"))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.select_permission_role(name.clone(), cx);
+                })),
+        );
+    }
+
+    let mut body = v_flex().w_full().gap(px(14.));
+    if let Some(role) = current.as_deref() {
+        let role_color = app.role_color(role);
+        // 按权限分组渲染：每组一个标题 + 若干权限行。
+        for group in PermissionGroup::ALL {
+            let mut group_card = card().child(
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        div()
+                            .w(px(4.))
+                            .h(px(14.))
+                            .rounded(px(2.))
+                            .bg(rgb(role_color)),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(rgb(palette::text_primary()))
+                            .child(group.label()),
+                    ),
+            );
+            for def in PERMISSIONS.iter().filter(|def| def.group == group) {
+                let state = app.permission_state(role, def.key);
+                let row = h_flex()
+                    .w_full()
+                    .min_h(px(40.))
+                    .px_2()
+                    .gap_3()
+                    .items_center()
+                    .justify_between()
+                    .rounded(px(6.))
+                    .hover(|el| el.bg(rgb(palette::bg_message_hover())))
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap(px(2.))
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .text_color(rgb(palette::text_primary()))
+                                    .child(def.label),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(rgb(palette::text_dim()))
+                                    .child(def.hint),
+                            ),
+                    )
+                    .child(permission_state_button(
+                        role,
+                        def.key,
+                        def.label,
+                        state,
+                        format!("permission-toggle-{}-{}", role, def.key),
+                        cx,
+                    ));
+                group_card = group_card.child(row);
+            }
+            body = body.child(group_card);
+        }
+    } else {
+        body = body.child(card().child(hint("当前服务器没有角色，请先在「角色」分类创建")));
+    }
+
+    shell(
+        "权限",
+        "按角色配置权限位：继承跟随服务器默认，允许 / 拒绝显式覆盖（演示数据，不影响真实操作）。",
+    )
+    .child(
+        card()
+            .child(chip_label("选择角色"))
+            .child(tabs)
+            .child(hint(app.permission_notice.unwrap_or(
+                "点每行右侧按钮循环切换：继承 → 允许 → 拒绝；变更会写入审核日志。",
+            ))),
+    )
+    .child(body)
 }
 
 // ---------------------------------------------------------------------------
