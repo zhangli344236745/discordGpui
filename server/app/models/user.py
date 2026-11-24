@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import utcnow
@@ -38,6 +38,8 @@ class UserSettings(Base):
     show_emoji: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     compact_messages: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     notify_level: Mapped[str] = mapped_column(String(16), default="all", nullable=False)
+    # WebPush / APNs 端点：[{endpoint, keys, created_at}]；Demo 只存不投递
+    push_endpoints: Mapped[list | None] = mapped_column(JSON, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
     )

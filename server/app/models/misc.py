@@ -39,6 +39,8 @@ class CallSession(Base, IdMixin, CreatedAtMixin):
     state: Mapped[str] = mapped_column(String(16), default="ringing", nullable=False)
     caller_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
     callee_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
+    # accepted / declined / timeout / hangup，用于区分结束原因
+    outcome: Mapped[str] = mapped_column(String(16), default="", nullable=False)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 

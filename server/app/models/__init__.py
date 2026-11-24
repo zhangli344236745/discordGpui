@@ -41,6 +41,7 @@ from app.models.message import (
 )
 from app.models.misc import CallSession, Draft, MessageRequest, Notification
 from app.models.moderation import AuditEntry, AutoModKeyword, AutoModRule, Invite
+from app.models.realtime import GatewayEvent
 from app.models.social import Block, FriendGroup, FriendRequest, Friendship
 from app.models.user import AuthToken, Session, User, UserSettings
 
@@ -70,6 +71,7 @@ __all__ = [
     "FriendGroup",
     "FriendRequest",
     "Friendship",
+    "GatewayEvent",
     "Invite",
     "MemberRole",
     "Message",

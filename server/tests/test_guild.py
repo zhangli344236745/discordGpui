@@ -213,6 +213,7 @@ async def test_upload_and_attach(client: AsyncClient) -> None:
 
 async def test_stub_endpoint_returns_501(client: AsyncClient) -> None:
     headers = await auth_headers(client)
-    resp = await client.get("/api/v1/friends", headers=headers)
+    server = await _create_server(client, headers)
+    resp = await client.post(f"/api/v1/servers/{server['id']}/boost/subscribe", headers=headers)
     assert resp.status_code == 501
     assert resp.json()["error"]["code"] == "NOT_IMPLEMENTED"

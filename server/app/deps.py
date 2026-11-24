@@ -101,7 +101,7 @@ async def channel_context(
     )
     if member is None:
         raise not_found("频道")
-    perms = await effective_permissions(db, server.id, user.id)
+    perms = await effective_permissions(db, server.id, user.id, channel.id)
     if "VIEW_CHANNEL" not in perms:
         raise not_found("频道")
     return ChannelContext(channel=channel, server=server, member=member, perms=perms, user=user)

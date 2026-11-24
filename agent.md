@@ -10,7 +10,7 @@
 - **优先级**：界面与交互功能优先；数据层保持可替换，方便未来接入真实 API。
 - **技术栈**：Rust 2024 edition + gpui-kit `0.10.0` + serde / serde_json（仅数据层与快照使用）。
 - **配色**：Discord 深色主题；涨红跌绿等金融约定与本项目无关。
-- **后端（已落地骨架）**：`docs/backend-api.md` 是唯一后端契约（167 端点 / 30 事件 / 50 表），`server/` 是它的 FastAPI 实现——P0 全部可运行，P1/P2 已注册但返回 501。**改界面行为后必须回看文档是否需要同步；改接口后必须同时改 `server/` 与文档**。
+- **后端（已落地骨架）**：`docs/backend-api.md` 是唯一后端契约（167 端点 / 30 事件 / 51 表），`server/` 是它的 FastAPI 实现——166 个端点可运行，`/servers/{id}/boost/subscribe` 按 Demo 约定返回 501。**改界面行为后必须回看文档是否需要同步；改接口后必须同时改 `server/` 与文档**。
 - `server/` 与 Rust 工程完全解耦：不参与 `cargo` 构建，`server/.venv`、`server/data/*.db`、`server/data/uploads/*` 都在 `.gitignore` 里。
 
 ---
@@ -821,7 +821,7 @@ uv run alembic upgrade head    # 建表（首次或改模型后）
 ```
 
 - **改了 ORM 模型必须生成迁移**：`uv run alembic revision --autogenerate -m "xxx"`，不要只靠 `create_all`（那只用于测试与开发）。
-- 新增接口的流程：先在 `docs/backend-api.md` 对应小节加行 → 在 `app/api/v1/stubs.py` 删掉占位 → 新模块实现 → `app/api/v1/__init__.py` 注册 → 补 pytest。
+- 新增接口的流程：先在 `docs/backend-api.md` 对应小节加行 → 在 `app/api/v1/<域>.py` 实现并按需拆 `services/` → `app/api/v1/__init__.py` 注册 → 补 pytest 与 `scripts/smoke.py` 链路；写操作统一走 `realtime/outbox.queue()`。
 - 端到端冒烟：`uv run uvicorn app.main:app --port 8099` 后另开一条 `uv run python scripts/smoke.py http://127.0.0.1:8099`，它会验证真实 WS 广播与 LiveKit token。
 - ⚠️ 本机 `http_proxy` 常指向一个失效的本地代理：跑 `uv sync` / `pytest` / `smoke.py` 前先 `env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY`，否则报 `Empty reply from server`；访问本地端口再加 `no_proxy=127.0.0.1,localhost`。
 - ⚠️ SQLite 的 `PRAGMA foreign_keys=ON` 已在 `db.py` 打开，所以**没有 relationship 的批量插入不会自动排序**：先 `db.add(parent)` + `await db.flush()`，再插子表，否则报 `FOREIGN KEY constraint failed`。

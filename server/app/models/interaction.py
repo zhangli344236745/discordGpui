@@ -60,13 +60,18 @@ class ThreadReply(Base, IdMixin, CreatedAtMixin):
 
 
 class Bookmark(Base):
-    """存 message_id 引用而不是正文副本——原消息删除后由 join 决定展示墓碑。"""
+    """存消息 id 引用而不是正文副本；target_kind 区分频道消息与私信消息。
+
+    原消息删除后由查询决定展示墓碑，不在这里复制正文。
+    """
 
     __tablename__ = "bookmarks"
 
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
-    message_id: Mapped[str] = mapped_column(ForeignKey("messages.id", ondelete="CASCADE"), primary_key=True)
-    scope: Mapped[str] = mapped_column(String(16), default="channel", nullable=False)
+    target_kind: Mapped[str] = mapped_column(String(8), default="channel", primary_key=True)
+    target_id: Mapped[str] = mapped_column(String(24), primary_key=True)
+    # 跳转用：频道 id 或 dm id
+    scope: Mapped[str] = mapped_column(String(24), default="", nullable=False)
     note: Mapped[str] = mapped_column(String(190), default="", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 

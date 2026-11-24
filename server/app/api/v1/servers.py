@@ -152,6 +152,7 @@ async def create_server(
         db.add(PermissionGrant(server_id=server.id, role_id=everyone.id, permission=perm, state="allow"))
 
     db.add(ServerMember(server_id=server.id, user_id=user.id, nickname=""))
+    db.add(MemberRole(server_id=server.id, user_id=user.id, role_id=everyone.id))
 
     recommended = await _default_layout(db, server.id, template)
     await _provision_welcome(db, server.id, template, recommended)

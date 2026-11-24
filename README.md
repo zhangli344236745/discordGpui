@@ -220,7 +220,7 @@ src/
 
 配套的两个目录：
 
-- `docs/backend-api.md`：后端接口清单与架构设计（167 个端点 / 50 张表 / Gateway 事件 / LiveKit 接入）
+- `docs/backend-api.md`：后端接口清单与架构设计（167 个端点 / 51 张表 / Gateway 事件 / LiveKit 接入）
 - `server/`：上述设计的可运行骨架（FastAPI + SQLite + alembic + pytest，详见 `server/README.md`）
 
 ---
@@ -255,11 +255,11 @@ main → app → data
 
 | 状态 | 内容 |
 | --- | --- |
-| **已实现 70 个端点** | 认证（argon2 + JWT 轮换）、用户与偏好、服务器与模板、分类/频道、消息（分页·幂等·编辑历史·置顶·软删）、回应、转发、附件上传、语音 token 与 LiveKit webhook、Gateway 实时通道、系统信息 |
-| **占位 101 个** | 其余 P1/P2 端点已注册进 OpenAPI，统一 `501` 并在 summary 标注对应文档小节，替换时只需删掉一条 |
-| 数据层 | **50 张表**（SQLAlchemy 2.0 + alembic 初版迁移），SQLite 开 WAL / busy_timeout |
+| **已实现 166 个端点** | 认证（argon2 + JWT 轮换）、用户与偏好、服务器与模板、分类/频道、消息（分页·幂等·编辑历史·置顶·软删）、回应、转发、附件上传、语音 token 与 LiveKit webhook、Gateway 实时通道、系统信息；好友/分组/屏蔽、私信与消息请求、私信呼叫、成员/角色/权限覆盖、邀请、自动审核、审核日志、限流、投票/话题/书签、论坛、日程、欢迎屏幕、加成、搜索、频道状态/草稿、通知与推送注册、Gateway `?since` 补偿 |
+| **Demo 边界 1 个** | `/servers/{id}/boost/subscribe` 按文档约定返回 `501`，避免接入真实计费 |
+| 数据层 | **51 张表**（SQLAlchemy 2.0 + alembic 迁移），SQLite 开 WAL / busy_timeout；含 `gateway_events` 事件日志与 FTS5 索引 |
 | 服务端真正执行的规则 | 13 项权限矩阵、自动审核（block 返 422 且不落库 / warn 带 warnings）、至少保留一个文字频道、owner 不能直接离开 |
-| 验证 | `ruff check` 0 error、`pytest` 21 passed、真实起服务跑通「注册→建服→加入→WS 收消息→语音 token」 |
+| 验证 | `ruff check` 0 error、`pytest` 72 passed、真实起服务跑通「注册→建服→加入→WS 收消息→语音 token→好友→私信→消息请求→呼叫→邀请→角色→权限拒绝→审计→欢迎→活动→投票→书签→论坛→搜索→草稿→通知→Gateway 补发」 |
 
 ```bash
 cd server

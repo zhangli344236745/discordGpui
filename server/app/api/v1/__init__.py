@@ -1,6 +1,29 @@
 from fastapi import APIRouter
 
-from app.api.v1 import auth, channels, messages, servers, stubs, system, uploads, users, voice
+from app.api.v1 import (
+    auth,
+    boosts,
+    calls,
+    channels,
+    content,
+    dms,
+    events,
+    forums,
+    invites,
+    me,
+    members,
+    messages,
+    moderation,
+    notifications,
+    search,
+    servers,
+    social,
+    system,
+    uploads,
+    users,
+    voice,
+    welcome,
+)
 
 api_router = APIRouter()
 api_router.include_router(system.router)
@@ -12,7 +35,19 @@ api_router.include_router(channels.router)
 api_router.include_router(messages.router)
 api_router.include_router(uploads.router)
 api_router.include_router(voice.router)
-# 占位路由放最后：具体路径优先于这里注册的同名前缀通配
-api_router.include_router(stubs.router)
+api_router.include_router(social.router)
+api_router.include_router(dms.router)
+api_router.include_router(calls.router)
+api_router.include_router(members.router)
+api_router.include_router(invites.router)
+api_router.include_router(content.router)
+api_router.include_router(forums.router)
+api_router.include_router(events.router)
+api_router.include_router(welcome.router)
+api_router.include_router(boosts.router)
+api_router.include_router(search.router)
+api_router.include_router(me.router)
+api_router.include_router(notifications.router)
+api_router.include_router(moderation.router)
 
 __all__ = ["api_router"]

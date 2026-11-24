@@ -20,6 +20,7 @@ from app.security import (
     hash_password,
     verify_password,
 )
+from app.services import ratelimit
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -78,6 +79,11 @@ async def register(body: RegisterIn, request: Request, db: AsyncSession = Depend
 
 @router.post("/login", response_model=TokenOut)
 async def login(body: LoginIn, request: Request, db: AsyncSession = Depends(get_db)) -> TokenOut:
+    ratelimit.check(
+        f"login:{_client_ip(request)}",
+        settings.rate_limit_logins,
+        settings.rate_limit_login_window_seconds,
+    )
     user = await db.scalar(select(User).where(User.email == body.email.lower()))
     if user is None or not verify_password(body.password, user.password_hash):
         raise unauthorized("邮箱或密码不正确")

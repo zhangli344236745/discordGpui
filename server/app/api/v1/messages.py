@@ -2,8 +2,10 @@ from dataclasses import dataclass
 
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.db import get_db, utcnow
 from app.deps import current_user
 from app.errors import ApiError, ErrorCode, conflict, forbidden, not_found
@@ -15,6 +17,9 @@ from app.models import (
     DmChannel,
     Message,
     MessageEdit,
+    Poll,
+    PollOption,
+    PollVote,
     Reaction,
     ReadState,
     ServerMember,
@@ -23,7 +28,7 @@ from app.models import (
 from app.realtime.events import Event
 from app.realtime.hub import hub
 from app.schemas.message import MessageCreate, MessageOut, MessagePatch, ReactionIn
-from app.services import automod, storage
+from app.services import automod, notifications, ratelimit, storage
 from app.services.permissions import effective_permissions
 
 router = APIRouter(tags=["messages"])
@@ -57,7 +62,7 @@ async def _load_message(db: AsyncSession, message_id: str, user: User) -> Messag
     )
     if member is None:
         raise not_found("消息")
-    perms = await effective_permissions(db, channel.server_id, user.id)
+    perms = await effective_permissions(db, channel.server_id, user.id, channel.id)
     if "VIEW_CHANNEL" not in perms:
         raise not_found("消息")
     return MessageContext(message=msg, channel=channel, perms=perms, user=user)
@@ -73,6 +78,54 @@ async def serialize(db: AsyncSession, msgs: list[Message], viewer_id: str) -> li
     msg_ids = [m.id for m in msgs]
     reactions = (await db.scalars(select(Reaction).where(Reaction.message_id.in_(msg_ids)))).all()
     attachments = (await db.scalars(select(Attachment).where(Attachment.message_id.in_(msg_ids)))).all()
+    polls = list((await db.scalars(select(Poll).where(Poll.message_id.in_(msg_ids)))).all())
+    poll_options = (
+        list(
+            (
+                await db.scalars(
+                    select(PollOption)
+                    .where(PollOption.poll_id.in_([p.id for p in polls] or [""]))
+                    .order_by(PollOption.position)
+                )
+            ).all()
+        )
+        if polls
+        else []
+    )
+    poll_votes = (
+        list((await db.scalars(select(PollVote).where(PollVote.poll_id.in_([p.id for p in polls])))).all())
+        if polls
+        else []
+    )
+    votes_by_option: dict[str, int] = {}
+    mine: set[str] = set()
+    for vote in poll_votes:
+        votes_by_option[vote.option_id] = votes_by_option.get(vote.option_id, 0) + 1
+        if vote.user_id == viewer_id:
+            mine.add(vote.option_id)
+    poll_by_message = {p.message_id: p for p in polls}
+    poll_payload: dict[str, dict] = {}
+    for poll in polls:
+        options = [
+            {
+                "id": option.id,
+                "label": option.label,
+                "position": option.position,
+                "votes": votes_by_option.get(option.id, 0),
+                "me": option.id in mine,
+            }
+            for option in poll_options
+            if option.poll_id == poll.id
+        ]
+        poll_payload[poll.message_id] = {
+            "id": poll.id,
+            "question": poll.question,
+            "multi": poll.multi,
+            "closed": poll.closed,
+            "created_by": poll.created_by,
+            "total_votes": sum(option["votes"] for option in options),
+            "options": options,
+        }
 
     reaction_map: dict[str, dict[str, dict]] = {}
     for r in reactions:
@@ -117,6 +170,7 @@ async def serialize(db: AsyncSession, msgs: list[Message], viewer_id: str) -> li
                 created_at=m.created_at.isoformat(),
                 reactions=list(reaction_map.get(m.id, {}).values()),
                 attachments=attachment_map.get(m.id, []),
+                poll=poll_payload.get(m.id) if m.id in poll_by_message else None,
             )
         )
     return out
@@ -134,7 +188,7 @@ async def list_messages(
     channel = await db.get(Channel, channel_id)
     if channel is None:
         raise not_found("频道")
-    perms = await effective_permissions(db, channel.server_id, user.id)
+    perms = await effective_permissions(db, channel.server_id, user.id, channel.id)
     if "VIEW_CHANNEL" not in perms:
         raise not_found("频道")
 
@@ -163,7 +217,7 @@ async def send_message(
     channel = await db.get(Channel, channel_id)
     if channel is None:
         raise not_found("频道")
-    perms = await effective_permissions(db, channel.server_id, user.id)
+    perms = await effective_permissions(db, channel.server_id, user.id, channel.id)
     if "VIEW_CHANNEL" not in perms:
         raise not_found("频道")
     if "SEND_MESSAGES" not in perms:
@@ -171,6 +225,9 @@ async def send_message(
     if channel.kind != "text":
         raise conflict("该频道不接受消息", "kind")
 
+    ratelimit.check(
+        f"msg:{user.id}", settings.rate_limit_messages, settings.rate_limit_window_seconds
+    )
     if body.client_nonce:
         existing = await db.scalar(select(Message).where(Message.client_nonce == body.client_nonce))
         if existing is not None:
@@ -197,6 +254,7 @@ async def send_message(
         msg_type = "attachment"
         payload = {"attachment_ids": body.attachment_ids}
 
+    viewer_id = user.id
     message = Message(
         id=new_id(),
         channel_id=channel.id,
@@ -208,7 +266,18 @@ async def send_message(
         client_nonce=body.client_nonce,
     )
     db.add(message)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError:
+        await db.rollback()
+        existing = (
+            await db.scalar(select(Message).where(Message.client_nonce == body.client_nonce))
+            if body.client_nonce
+            else None
+        )
+        if existing is None:
+            raise
+        return (await serialize(db, [existing], viewer_id))[0]
 
     for att_id in body.attachment_ids:
         att = await db.get(Attachment, att_id)
@@ -225,13 +294,28 @@ async def send_message(
     if read is not None:
         read.last_read_message_id = message.id
 
-    await db.commit()
+    await notifications.channel_mentions(
+        db, message, channel, user, can_everyone="MENTION_EVERYONE" in perms
+    )
+    try:
+        await db.commit()
+    except IntegrityError:
+        # 并发同 client_nonce：唯一索引兜底，回滚后返回已存在那条
+        await db.rollback()
+        existing = (
+            await db.scalar(select(Message).where(Message.client_nonce == body.client_nonce))
+            if body.client_nonce
+            else None
+        )
+        if existing is None:
+            raise
+        return (await serialize(db, [existing], viewer_id))[0]
 
     out = (await serialize(db, [message], user.id))[0]
+    if scan.warnings:
+        out.warnings = [{"rule": w.rule_name, "keyword": w.keyword, "rule_id": w.rule_id} for w in scan.warnings]
     data = out.model_dump()
     data["server_id"] = channel.server_id
-    if scan.warnings:
-        data["warnings"] = [{"rule": w.rule_name, "keyword": w.keyword} for w in scan.warnings]
     await hub.to_server(channel.server_id, Event.MESSAGE_CREATE, data)
     return out
 
@@ -257,6 +341,17 @@ async def edit_message(
     if body.version is not None and body.version != ctx.message.version:
         raise conflict("消息已被修改，请刷新", "version")
 
+    scan = await automod.scan(db, ctx.channel.server_id, body.content)
+    if scan.is_blocked:
+        assert scan.blocked is not None
+        raise ApiError(
+            422,
+            ErrorCode.AUTOMOD_BLOCKED,
+            f"消息被自动审核拦截：{scan.blocked.rule_name}",
+            "content",
+            extra={"rule_id": scan.blocked.rule_id, "matched_keyword": scan.blocked.keyword},
+        )
+
     if body.content != ctx.message.content:
         db.add(
             MessageEdit(
@@ -272,6 +367,10 @@ async def edit_message(
         await db.commit()
 
     out = (await serialize(db, [ctx.message], user.id))[0]
+    if scan.warnings:
+        out.warnings = [
+            {"rule": w.rule_name, "keyword": w.keyword, "rule_id": w.rule_id} for w in scan.warnings
+        ]
     await hub.to_server(
         ctx.channel.server_id,
         Event.MESSAGE_UPDATE,
@@ -336,7 +435,7 @@ async def list_pins(
     channel = await db.get(Channel, channel_id)
     if channel is None:
         raise not_found("频道")
-    perms = await effective_permissions(db, channel.server_id, user.id)
+    perms = await effective_permissions(db, channel.server_id, user.id, channel.id)
     if "VIEW_CHANNEL" not in perms:
         raise not_found("频道")
     rows = (
@@ -418,7 +517,7 @@ async def forward_message(
         raise not_found("目标会话")
 
     if target_channel is not None:
-        perms = await effective_permissions(db, target_channel.server_id, user.id)
+        perms = await effective_permissions(db, target_channel.server_id, user.id, target_channel.id)
         if "SEND_MESSAGES" not in perms:
             raise forbidden("SEND_MESSAGES")
         forwarded = Message(
@@ -448,7 +547,7 @@ async def read_states(
     channel = await db.get(Channel, channel_id)
     if channel is None:
         raise not_found("频道")
-    perms = await effective_permissions(db, channel.server_id, user.id)
+    perms = await effective_permissions(db, channel.server_id, user.id, channel.id)
     if "VIEW_CHANNEL" not in perms:
         raise not_found("频道")
     rows = (await db.scalars(select(ReadState).where(ReadState.channel_id == channel_id))).all()
@@ -467,7 +566,7 @@ async def typing(channel_id: str, db: AsyncSession = Depends(get_db), user: User
     channel = await db.get(Channel, channel_id)
     if channel is None:
         raise not_found("频道")
-    perms = await effective_permissions(db, channel.server_id, user.id)
+    perms = await effective_permissions(db, channel.server_id, user.id, channel.id)
     if "VIEW_CHANNEL" not in perms:
         raise not_found("频道")
     await hub.to_server(

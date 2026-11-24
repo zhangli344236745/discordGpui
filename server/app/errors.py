@@ -27,12 +27,14 @@ class ApiError(Exception):
         message: str,
         field: str | None = None,
         extra: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         self.status_code = status_code
         self.code = code
         self.message = message
         self.field = field
         self.extra = extra or {}
+        self.headers = headers or {}
 
 
 def not_found(what: str = "资源") -> ApiError:
@@ -65,4 +67,4 @@ async def api_error_handler(request: Request, exc: ApiError) -> JSONResponse:
         }
     }
     body["error"].update(exc.extra)
-    return JSONResponse(status_code=exc.status_code, content=body)
+    return JSONResponse(status_code=exc.status_code, content=body, headers=exc.headers or None)

@@ -81,6 +81,8 @@ class MessageOut(BaseModel):
     created_at: str
     reactions: list[dict] = []
     attachments: list[AttachmentOut] = []
+    poll: dict | None = None
+    warnings: list[dict] = []
 
 
 class MessageCreate(BaseModel):

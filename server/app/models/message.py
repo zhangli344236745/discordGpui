@@ -51,6 +51,11 @@ class DmChannel(Base, IdMixin, CreatedAtMixin):
     user_b: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     last_message_id: Mapped[str | None] = mapped_column(String(24), nullable=True)
     closed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # 双方各自的已读位置与置顶：user_a 用 *_a 列，user_b 用 *_b 列
+    last_read_a: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    last_read_b: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    pinned_a: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    pinned_b: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     __table_args__ = (Index("ux_dm_pair", "user_a", "user_b", unique=True),)
 

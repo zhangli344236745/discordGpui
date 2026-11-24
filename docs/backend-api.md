@@ -10,10 +10,10 @@
 
 | 项 | 数量 |
 | --- | --- |
-| REST 端点 | **167 个**（GET 58 / POST 55 / PATCH 21 / DELETE 22 / PUT 11） |
+| REST 端点 | **167 个**（GET 58 / POST 54 / PATCH 21 / DELETE 22 / PUT 12） |
 | WebSocket 通道 | 2 条（Gateway 主通道 + 语音信令走 LiveKit） |
 | 下行事件 | 30 类 |
-| 数据表 | 50 张 |
+| 数据表 | 51 张 |
 | 对象存储桶 | 1 个（`attachments`） |
 
 分期：**P0 跑通「登录 → 服务器 → 频道 → 聊天」= 55 个端点**；**P1 补「好友 → 私信 → 权限 → 语音」= 64 个**；**P2 长尾（论坛、日程、加成、模板、搜索）= 48 个**，合计 167。
@@ -28,11 +28,16 @@
 | --- | --- | --- |
 | P0 认证 / 用户 / 服务器 / 频道 / 消息 / 附件 | ✅ 已实现 | 含游标分页、`client_nonce` 幂等、编辑历史、软删、权限矩阵、自动审核 |
 | P1 语音（LiveKit） | ✅ 已实现（频道语音） | 自签 AccessToken + webhook 验签回写 + 广播；私信通话仍是 501 |
-| P0 实时 Gateway | ✅ 已实现 | `/ws/gateway` 订阅制广播，28 类事件常量已定义 |
-| P1 好友 / 私信 / 成员角色 / 邀请 / 通知 | ⏳ 501 占位 | 路由已注册进 OpenAPI，summary 标注本节小节号 |
-| P2 论坛 / 投票 / 话题 / 书签 / 日程 / 审核 / 加成 / 欢迎写入 / 搜索 | ⏳ 501 占位 | 同上 |
+| P0 实时 Gateway | ✅ 已实现 | `/ws/gateway` 订阅制广播，事件目录已补齐 |
+| P1/P2 地基 | ✅ 已实现 | `gateway_events` 事件日志 + outbox、FTS5 双索引、频道权限覆盖、DM 已读/置顶列、书签通用目标 |
+| P1 好友 / 好友分组 / 屏蔽 / 私信 / 消息请求 / 私信通话 | ✅ 已实现 | 双向好友、分组排序、屏蔽门禁、DM 复用、消息请求三态、呼叫状态机与 60s 超时 |
+| P1 成员 / 角色 / 权限覆盖 / 封禁 / 邀请 | ✅ 已实现 | 角色层级、13 项三态矩阵、频道覆盖、封禁拦截、邀请三态与原子占名额 |
+| P1 通知 | ⏳ 501 占位 | 路由已注册进 OpenAPI，summary 标注本节小节号 |
+| P2 自动审核 / 审核日志 | ✅ 已实现 | 规则 CRUD、发送与编辑扫描、block 422 / warn warnings、日志过滤与 owner 清空 |
+| P2 论坛 / 投票 / 话题 / 书签 / 日程 / 加成 / 欢迎写入 | ✅ 已实现 | 计票与结束、话题回复、跨端书签、论坛排序与锁定、活动状态机、欢迎同意、加成等级 |
+| P2 搜索 / 用户级视图状态 / 通知 | ✅ 已实现 | FTS5 trigram + 操作符、视图状态与草稿、通知聚合/未读/推送注册；Gateway `?since` 补偿 |
 
-替换占位端点的做法：删掉 `server/app/api/v1/stubs.py` 里对应的一行，在 `app/api/v1/` 新建模块实现并在 `__init__.py` 注册。
+101 个占位已全部替换，`server/app/api/v1/stubs.py` 已删除；唯一保留的 501 是 `/servers/{id}/boost/subscribe`（Demo 不接计费）。
 
 ---
 
@@ -460,13 +465,13 @@ GET /channels/{id}/messages?before=<msg_id>&limit=50
 
 ## 5. SQLite 数据模型
 
-### 5.1 表清单（50）
+### 5.1 表清单（51）
 
 ```text
 users(id, username, tag, email, password_hash, display_name, avatar_color,
       about, status, created_at, updated_at)
 user_settings(user_id PK, theme, locale, volume, show_timestamps, show_emoji,
-      compact_messages, notify_level, ...)
+      compact_messages, notify_level, push_endpoints_json, ...)
 sessions(id, user_id, refresh_hash, device, ip, expires_at, created_at)
 auth_tokens(id, user_id, kind, code_hash, expires_at)      -- 邮箱验证 / 重置
 
@@ -491,7 +496,8 @@ channel_user_state(user_id, channel_id, collapsed, notify_level,
 
 messages(id, channel_id, author_id, content, reply_to, type,
          pinned, edited_at, deleted_at, version, client_nonce, created_at)
-dm_channels(id, user_a, user_b, created_at)               -- 规范化 a<b
+dm_channels(id, user_a, user_b, last_message_id, closed,
+            last_read_a, last_read_b, pinned_a, pinned_b, created_at)  -- 规范化 a<b
 dm_messages(id, dm_id, author_id, content, ...同 messages)
 message_edits(message_id, content, edited_at)
 attachments(id, owner_id, message_id, filename, mime, size, storage_key, created_at)
@@ -504,7 +510,8 @@ poll_votes(poll_id, option_id, user_id, PRIMARY KEY(poll_id,option_id,user_id))
 
 threads(id, message_id, channel_id, created_at)
 thread_replies(id, thread_id, author_id, content, created_at)
-bookmarks(user_id, message_id, scope, created_at, PRIMARY KEY(user_id,message_id))
+bookmarks(user_id, target_kind, target_id, scope, note, created_at,
+          PRIMARY KEY(user_id,target_kind,target_id))          -- channel/dm 消息通用
 
 forum_posts(id, channel_id, author_id, title, body, pinned, locked,
             reply_count, created_at, last_activity_at)
@@ -530,8 +537,11 @@ voice_participants(room, user_id, mic, camera, screen, joined_at,
 
 notifications(id, user_id, kind, target_kind, target_id, read, created_at)
 message_requests(id, from_user, to_user, state, first_message, created_at)
-call_sessions(id, dm_id, kind, state, started_at, ended_at)
+call_sessions(id, dm_id, kind, state, outcome, caller_id, callee_id, created_at, ended_at)
 drafts(user_id, scope, content, attachments_json, updated_at)
+
+gateway_events(id, scope_kind, scope_id, event, payload_json, created_at)
+  -- 实时事件日志：提交后广播，?since 24h 内补偿
 ```
 
 ### 5.2 关键索引
@@ -542,7 +552,9 @@ CREATE INDEX ix_messages_channel ON messages(channel_id, id DESC);
 CREATE INDEX ix_dm_messages_dm ON dm_messages(dm_id, id DESC);
 CREATE INDEX ix_audit_server ON audit_entries(server_id, id DESC);
 CREATE INDEX ix_notifications_user ON notifications(user_id, read, id DESC);
-CREATE VIRTUAL TABLE messages_fts USING fts5(content, tokenize='trigram');
+CREATE VIRTUAL TABLE messages_fts USING fts5(content, content='messages', content_rowid='rowid', tokenize='trigram');
+CREATE VIRTUAL TABLE dm_messages_fts USING fts5(content, content='dm_messages', content_rowid='rowid', tokenize='trigram');
+CREATE INDEX ix_gateway_events_scope ON gateway_events(scope_kind, scope_id, id);
 ```
 
 ### 5.3 SQLite 参数
