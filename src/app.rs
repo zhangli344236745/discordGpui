@@ -11,8 +11,8 @@ use crate::data::{
     gif_categories, help_categories, seed_friend_groups, seed_friends, seed_gifs,
     seed_audit, seed_help_articles, seed_invites, seed_me, seed_roles,
     seed_members, seed_messages, seed_servers,
-    seed_stickers, seed_threads, sticker_packs, Attachment, AuditEntry, AuditKind, Category,
-    Channel, ChannelKind,
+    seed_bans, seed_stickers, seed_threads, sticker_packs, Attachment, AuditEntry, AuditKind,
+    BannedUser, Category, Channel, ChannelKind,
     ChatThread, DiscoverServer,     DmConversation, EditRevision, ForwardOrigin, ForwardTarget, Friend, FriendRequest,
     FriendTab, Gif, HelpArticle, Invite, InviteExpiry, Member, MyProfile,
     MemberGroup, Message, Notification, NotificationKind, NotificationTarget, NotifyLevel, Reaction,
@@ -23,7 +23,7 @@ use crate::ui::theme::palette;
 use crate::ui::{
     category_dialog, category_menu, channel_menu, channel_sidebar, chat, create_dialog, dm_call_panel,
     dm_sidebar, discover, friend_group_dialog, friend_group_menu, friends, help_center,
-    invite_dialog, member_list, profile_card,
+    invite_dialog, member_list, member_nick_dialog, profile_card,
     server_menu, server_rail,
     member_menu, search_center, server_settings, settings, status_menu, topic_dialog, voice_room,
     voice_status,
@@ -179,7 +179,16 @@ pub(crate) enum ServerSettingsSection {
     Roles,
     Emoji,
     Invites,
+    Members,
     Audit,
+}
+
+/// 成员管理页的角色筛选：全部 / 某个角色 / 无角色。
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) enum MemberFilter {
+    All,
+    Role(String),
+    NoRole,
 }
 
 /// 审核日志最多保留的条数：超出后丢最旧的，避免快照无限膨胀。
@@ -365,6 +374,14 @@ pub struct DiscordApp {
     /// 新建邀请的次数上限；0 表示不限。
     pub(crate) invite_max_uses: u32,
     pub(crate) invite_copied_code: Option<String>,
+
+    // 成员管理：搜索框 + 角色筛选 + 昵称弹层（目标成员 + 输入框）+ 封禁列表。
+    pub(crate) bans: Vec<BannedUser>,
+    pub(crate) member_search: Entity<InputState>,
+    pub(crate) member_filter: MemberFilter,
+    pub(crate) show_member_nick: bool,
+    pub(crate) member_nick_target: String,
+    pub(crate) member_nick_input: Entity<InputState>,
 
     // 审核日志：按 seq 升序的条目 + 当前筛选类别（None = 全部）。
     pub(crate) audit: Vec<AuditEntry>,
@@ -642,6 +659,9 @@ impl DiscordApp {
         let server_name_edit =
             cx.new(|cx| InputState::new(window, cx).placeholder("服务器名称"));
         let role_name_edit = cx.new(|cx| InputState::new(window, cx).placeholder("角色名称"));
+        let member_search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索成员"));
+        let member_nick_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("服务器昵称"));
         let server_desc_edit =
             cx.new(|cx| InputState::new(window, cx).placeholder("用一两句话介绍这个服务器"));
         let discover_search =
@@ -824,6 +844,14 @@ impl DiscordApp {
         })
         .detach();
 
+        // 昵称输入框按 Enter 保存（空值表示清除昵称）。
+        cx.subscribe_in(&member_nick_input, window, |this, _, event: &InputEvent, window, cx| {
+            if matches!(event, InputEvent::PressEnter { secondary: false, .. }) {
+                this.save_member_nick(window, cx);
+            }
+        })
+        .detach();
+
         // 角色名称输入框按 Enter 保存重命名。
         cx.subscribe_in(&role_name_edit, window, |this, _, event: &InputEvent, _, cx| {
             if matches!(event, InputEvent::PressEnter { secondary: false, .. }) {
@@ -954,6 +982,12 @@ impl DiscordApp {
             invite_expiry: InviteExpiry::OneDay,
             invite_max_uses: 0,
             invite_copied_code: None,
+            bans: seed_bans(),
+            member_search,
+            member_filter: MemberFilter::All,
+            show_member_nick: false,
+            member_nick_target: String::new(),
+            member_nick_input,
             audit: seed_audit(),
             audit_filter: None,
             show_voice_room: false,
@@ -2886,7 +2920,9 @@ impl DiscordApp {
 
     /// Esc：按「最上层优先」顺序关闭当前浮层 / 整屏页，不误伤底层状态。
     fn close_top_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.show_create_group || self.show_rename_group {
+        if self.show_member_nick {
+            self.close_member_nick(cx);
+        } else if self.show_create_group || self.show_rename_group {
             self.close_group_dialog(cx);
         } else if self.friend_group_picker.is_some() {
             self.friend_group_picker = None;
@@ -4727,6 +4763,8 @@ impl DiscordApp {
     pub(crate) fn close_server_settings(&mut self, cx: &mut Context<Self>) {
         self.show_server_settings = false;
         self.invite_copied_code = None;
+        self.show_member_nick = false;
+        self.member_nick_target.clear();
         cx.notify();
     }
 
@@ -5128,6 +5166,169 @@ impl DiscordApp {
         cx.notify();
     }
 
+    // ---------------------------- 成员管理 ----------------------------
+
+    /// 搜索框关键词（转小写，匹配时不用再转）。
+    pub(crate) fn member_query(&self, cx: &Context<Self>) -> String {
+        self.member_search.read(cx).value().trim().to_lowercase()
+    }
+
+    /// 单个成员是否命中筛选与搜索：名字和昵称都参与匹配。
+    fn member_matches(&self, index: usize, filter: &MemberFilter, query: &str) -> bool {
+        let Some(member) = self.members.get(index) else {
+            return false;
+        };
+        let by_filter = match filter {
+            MemberFilter::All => true,
+            MemberFilter::Role(role) => member.role == Some(role.as_str()),
+            MemberFilter::NoRole => member.role.is_none(),
+        };
+        if !by_filter {
+            return false;
+        }
+        query.is_empty()
+            || member.name.to_lowercase().contains(query)
+            || member.display().to_lowercase().contains(query)
+    }
+
+    /// 当前搜索 + 筛选下命中的成员索引（保持 members 原顺序）。
+    pub(crate) fn filtered_members(&self, cx: &Context<Self>) -> Vec<usize> {
+        let query = self.member_query(cx);
+        (0..self.members.len())
+            .filter(|index| self.member_matches(*index, &self.member_filter, &query))
+            .collect()
+    }
+
+    /// 某个筛选下的成员数（不看搜索，用于筛选条计数）。
+    pub(crate) fn member_count_of(&self, filter: &MemberFilter) -> usize {
+        (0..self.members.len())
+            .filter(|index| self.member_matches(*index, filter, ""))
+            .count()
+    }
+
+    pub(crate) fn set_member_filter(&mut self, filter: MemberFilter, cx: &mut Context<Self>) {
+        self.member_filter = filter;
+        cx.notify();
+    }
+
+    pub(crate) fn clear_member_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.member_search
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        cx.notify();
+    }
+
+    /// 打开昵称弹层：输入框预填当前昵称，没昵称就填原名。
+    pub(crate) fn open_member_nick(
+        &mut self,
+        name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let current = self
+            .members
+            .iter()
+            .find(|member| member.name == name)
+            .map(|member| member.display().to_string())
+            .unwrap_or_default();
+        self.member_nick_input
+            .update(cx, |input, cx| input.set_value(current, window, cx));
+        self.member_nick_target = name;
+        self.show_member_nick = true;
+        cx.notify();
+    }
+
+    /// 保存昵称：留空或填回原名都等于清除昵称。
+    pub(crate) fn save_member_nick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let value = self.member_nick_input.read(cx).value().trim().to_string();
+        let target = std::mem::take(&mut self.member_nick_target);
+        self.show_member_nick = false;
+        self.member_nick_input
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        if target.is_empty() {
+            cx.notify();
+            return;
+        }
+        let Some(index) = self.members.iter().position(|member| member.name == target) else {
+            cx.notify();
+            return;
+        };
+        let before = self.members[index].display().to_string();
+        if value.is_empty() || value == target {
+            self.members[index].nick = None;
+        } else {
+            self.members[index].nick = Some(persist::leak(value.clone()));
+        }
+        let after = self.members[index].display().to_string();
+        if before != after {
+            self.log_audit(
+                AuditKind::Member,
+                "更新了成员昵称",
+                format!("{before} → {after}"),
+            );
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn close_member_nick(&mut self, cx: &mut Context<Self>) {
+        self.show_member_nick = false;
+        self.member_nick_target.clear();
+        cx.notify();
+    }
+
+    /// 把成员移出服务器（演示：只从本地列表删除）。
+    pub(crate) fn kick_member(&mut self, name: &str, cx: &mut Context<Self>) {
+        let Some(index) = self.members.iter().position(|member| member.name == name) else {
+            return;
+        };
+        let display = self.members[index].display().to_string();
+        self.members.remove(index);
+        // 被移除的人如果正被资料卡或右键菜单指着，一并关掉。
+        if self.profile_target.is_some_and(|target| target == name) {
+            self.profile_target = None;
+        }
+        if self.member_menu.as_ref().is_some_and(|menu| menu.name == name) {
+            self.member_menu = None;
+        }
+        self.log_audit(AuditKind::Member, "将成员移出了服务器", display);
+        cx.notify();
+    }
+
+    /// 封禁成员：移出列表并记入封禁列表（原因留空，等后续补）。
+    pub(crate) fn ban_member(&mut self, name: &str, cx: &mut Context<Self>) {
+        let Some(index) = self.members.iter().position(|member| member.name == name) else {
+            return;
+        };
+        let display = self.members[index].display().to_string();
+        let by = self.me.display_name.clone();
+        self.members.remove(index);
+        self.bans.insert(
+            0,
+            BannedUser {
+                name: display.clone(),
+                reason: String::new(),
+                minutes: 0,
+                by,
+            },
+        );
+        if self.profile_target.is_some_and(|target| target == name) {
+            self.profile_target = None;
+        }
+        if self.member_menu.as_ref().is_some_and(|menu| menu.name == name) {
+            self.member_menu = None;
+        }
+        self.log_audit(AuditKind::Member, "封禁了成员", display);
+        cx.notify();
+    }
+
+    /// 撤销封禁：只清掉列表里的记录，不自动把人加回服务器。
+    pub(crate) fn unban_member(&mut self, name: &str, cx: &mut Context<Self>) {
+        if let Some(position) = self.bans.iter().position(|entry| entry.name == name) {
+            let removed = self.bans.remove(position);
+            self.log_audit(AuditKind::Member, "撤销了对成员的封禁", removed.name);
+        }
+        cx.notify();
+    }
+
     // ---------------------------- 审核日志 ----------------------------
 
     /// 最新一条日志的序号；日志为空时是 0，新条目自然从 1 开始。
@@ -5315,6 +5516,7 @@ impl DiscordApp {
             friend_groups: self.friend_groups.clone(),
             invites: Some(self.invites.clone()),
             audit: Some(self.audit.clone()),
+            bans: Some(self.bans.clone()),
             members: Some(self.members.clone()),
             roles: Some(self.roles.clone()),
             friend_requests: self.friend_requests.clone(),
@@ -5381,6 +5583,10 @@ impl DiscordApp {
         // 审核日志：旧快照没有就保留种子日志。
         if let Some(audit) = saved.audit {
             self.audit = audit;
+        }
+        // 封禁列表：旧快照没有就保留种子数据。
+        if let Some(bans) = saved.bans {
+            self.bans = bans;
         }
         // 成员与角色：旧快照没有就保留种子；选中角色若已不存在则清空。
         if let Some(members) = saved.members {
@@ -5468,6 +5674,10 @@ impl DiscordApp {
         self.invite_copied_code = None;
         self.audit = seed_audit();
         self.audit_filter = None;
+        self.bans = seed_bans();
+        self.member_filter = MemberFilter::All;
+        self.show_member_nick = false;
+        self.member_nick_target.clear();
         self.sync_invite_channel();
         self.collapsed_groups.clear();
         self.friend_requests = seed_friend_requests();
@@ -5690,6 +5900,9 @@ impl DiscordApp {
             })
             .when(self.show_create_group || self.show_rename_group, |el| {
                 el.child(friend_group_dialog::render(self, cx))
+            })
+            .when(self.show_member_nick, |el| {
+                el.child(member_nick_dialog::render(self, cx))
             })
             .when(self.friend_group_menu.is_some(), |el| {
                 el.child(friend_group_menu::render(self, cx))

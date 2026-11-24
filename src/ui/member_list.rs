@@ -9,15 +9,17 @@ use crate::ui::{avatar, ico};
 use gpui_kit::assets::IconName;
 
 /// 单个成员行：头像 + 名字 + 状态，点击打开资料卡。
+/// `identity` 是身份键（找资料卡 / 菜单用），`display` 是展示名（可能是昵称）。
 fn member_row(
     cx: &mut Context<DiscordApp>,
     short: char,
     color: u32,
     online: bool,
-    display_name: &'static str,
+    identity: &'static str,
+    display: &'static str,
     index: usize,
 ) -> impl IntoElement {
-    let member_name = display_name;
+    let member_name = identity;
     let member_id = format!("member-{index}");
     h_flex()
         .h(px(42.))
@@ -53,7 +55,7 @@ fn member_row(
                         } else {
                             rgb(palette::text_dim())
                         })
-                        .child(display_name),
+                        .child(display),
                 )
                 .child(
                     div()
@@ -141,10 +143,11 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
             if let Some(member) = app.members.get(index) {
                 panel = panel.child(member_row(
                     cx,
-                    member.name.chars().next().unwrap_or('?'),
+                    member.display().chars().next().unwrap_or('?'),
                     member.color,
                     member.online,
                     member.name,
+                    member.display(),
                     index,
                 ));
             }

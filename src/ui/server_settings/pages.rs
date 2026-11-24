@@ -5,10 +5,10 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::input::Input;
 use gpui_kit::component::{h_flex, v_flex, Size, Sizable};
 
-use crate::app::{DiscordApp, ROLE_COLORS, ServerSettingsSection};
+use crate::app::{DiscordApp, MemberFilter, ROLE_COLORS, ServerSettingsSection};
 use crate::data::{AuditKind, InviteExpiry};
 use crate::ui::theme::palette;
-use crate::ui::{avatar, danger_icon_button, filter_chip, ico};
+use crate::ui::{avatar, danger_icon_button, filter_chip, ico, icon_button};
 
 /// 可选的服务器图标颜色。
 const SERVER_COLORS: [u32; 6] = [
@@ -22,6 +22,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
         ServerSettingsSection::Roles => roles(app, cx),
         ServerSettingsSection::Emoji => emoji(app, cx),
         ServerSettingsSection::Invites => invites(app, cx),
+        ServerSettingsSection::Members => members(app, cx),
         ServerSettingsSection::Audit => audit(app, cx),
     }
 }
@@ -919,6 +920,7 @@ fn audit_icon(kind: AuditKind) -> IconName {
         AuditKind::Server => IconName::Server,
         AuditKind::Channel => IconName::Hash,
         AuditKind::Role => IconName::Shield,
+        AuditKind::Member => IconName::Users,
         AuditKind::Invite => IconName::Link,
         AuditKind::Emoji => IconName::FaceSlightlySmiling,
     }
@@ -1083,4 +1085,329 @@ fn audit(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
         "记录本机的服务器、频道、角色、邀请与表情变更，按操作时间倒序排列。",
     )
     .child(card().child(filters).child(header).child(rows))
+}
+
+// ---------------------------------------------------------------------------
+// 成员
+// ---------------------------------------------------------------------------
+
+fn members(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
+    let query = app.member_search.read(cx).value().trim().to_string();
+    let visible = app.filtered_members(cx);
+    let total = app.members.len();
+
+    // 搜索行：图标 + 输入框 + 条数（有内容时多一个清除按钮）。
+    let mut search = h_flex()
+        .w_full()
+        .gap_2()
+        .items_center()
+        .px_3()
+        .h(px(36.))
+        .rounded(px(6.))
+        .bg(rgb(palette::bg_rail()))
+        .child(ico(IconName::Search, Size::Small))
+        .child(<Input as Sizable>::with_size(Input::new(&app.member_search), Size::Small).flex_1())
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_size(px(12.))
+                .text_color(rgb(palette::text_muted()))
+                .child(format!("共 {total} 位成员")),
+        );
+    if !query.is_empty() {
+        search = search.child(
+            div()
+                .w(px(22.))
+                .h(px(22.))
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(3.))
+                .text_color(rgb(palette::text_dim()))
+                .hover(|el| el.bg(rgb(palette::bg_channel_hover())))
+                .child(ico(IconName::X, Size::XSmall))
+                .id("member-search-clear")
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.clear_member_search(window, cx);
+                })),
+        );
+    }
+
+    // 筛选条：全部 / 每个角色 / 无角色，各带人数。
+    let mut filters = h_flex().flex_wrap().gap_2();
+    filters = filters.child(filter_chip(
+        format!("全部 {}", app.member_count_of(&MemberFilter::All)),
+        app.member_filter == MemberFilter::All,
+        "member-filter-all",
+        Box::new(|this: &mut DiscordApp, _, cx| {
+            this.set_member_filter(MemberFilter::All, cx);
+        }),
+        cx,
+    ));
+    for (index, role) in app.roles.iter().enumerate() {
+        let name = role.name.clone();
+        let selected = app.member_filter == MemberFilter::Role(name.clone());
+        let count = app.member_count_of(&MemberFilter::Role(name.clone()));
+        let target = name.clone();
+        filters = filters.child(filter_chip(
+            format!("{name} {count}"),
+            selected,
+            format!("member-filter-role-{index}"),
+            Box::new(move |this: &mut DiscordApp, _, cx| {
+                this.set_member_filter(MemberFilter::Role(target.clone()), cx);
+            }),
+            cx,
+        ));
+    }
+    filters = filters.child(filter_chip(
+        format!("无角色 {}", app.member_count_of(&MemberFilter::NoRole)),
+        app.member_filter == MemberFilter::NoRole,
+        "member-filter-none",
+        Box::new(|this: &mut DiscordApp, _, cx| {
+            this.set_member_filter(MemberFilter::NoRole, cx);
+        }),
+        cx,
+    ));
+
+    // 成员行：头像 + 昵称/原名 + 角色 badge + 加入时间 + 三个操作。
+    let mut rows = v_flex().w_full().gap(px(2.));
+    if visible.is_empty() {
+        rows = rows.child(
+            h_flex()
+                .w_full()
+                .py(px(24.))
+                .justify_center()
+                .text_size(px(12.))
+                .text_color(rgb(palette::text_dim()))
+                .child(if total == 0 {
+                    "服务器里还没有成员"
+                } else {
+                    "没有匹配的成员，换个关键词或筛选试试"
+                }),
+        );
+    }
+    for &index in &visible {
+        let Some(member) = app.members.get(index) else {
+            continue;
+        };
+        let name = member.name.to_string();
+        let nick_name = name.clone();
+        let kick_name = name.clone();
+        let ban_name = name.clone();
+        let aliased = member.nick.is_some();
+
+        let mut title_row = h_flex()
+            .gap_2()
+            .items_center()
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_size(px(13.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(rgb(palette::text_primary()))
+                    .child(member.display().to_string()),
+            );
+        if aliased {
+            title_row = title_row.child(
+                div()
+                    .flex_shrink_0()
+                    .text_size(px(11.))
+                    .text_color(rgb(palette::text_dim()))
+                    .child(format!("@{name}")),
+            );
+        }
+        if let Some(role) = member.role {
+            title_row = title_row.child(
+                h_flex()
+                    .flex_shrink_0()
+                    .h(px(18.))
+                    .px_2()
+                    .gap_1()
+                    .items_center()
+                    .rounded_full()
+                    .bg(rgb(palette::bg_rail()))
+                    .child(
+                        div()
+                            .w(px(6.))
+                            .h(px(6.))
+                            .rounded_full()
+                            .bg(rgb(app.role_color(role))),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(rgb(palette::text_secondary()))
+                            .child(role.to_string()),
+                    ),
+            );
+        }
+
+        rows = rows.child(
+            h_flex()
+                .w_full()
+                .items_center()
+                .gap_3()
+                .px(px(12.))
+                .py(px(8.))
+                .rounded(px(6.))
+                .hover(|el| el.bg(rgb(palette::bg_rail())))
+                .child(avatar(
+                    member.name.chars().next().unwrap_or('?'),
+                    member.color,
+                    px(32.),
+                    member.online,
+                ))
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .gap(px(2.))
+                        .child(title_row)
+                        .child(
+                            h_flex()
+                                .gap_1()
+                                .text_size(px(11.))
+                                .text_color(rgb(palette::text_dim()))
+                                .child(member.joined_label())
+                                .child("·")
+                                .child(if member.online { "在线" } else { "离线" }),
+                        ),
+                )
+                .child(icon_button(
+                    IconName::Pen,
+                    Size::XSmall,
+                    px(28.),
+                    format!("member-nick-{index}"),
+                    false,
+                    Box::new(move |this: &mut DiscordApp, window, cx| {
+                        this.open_member_nick(nick_name.clone(), window, cx);
+                    }),
+                    cx,
+                ))
+                .child(danger_icon_button(
+                    IconName::UserMinus,
+                    Size::XSmall,
+                    px(28.),
+                    format!("member-kick-{index}"),
+                    Box::new(move |this: &mut DiscordApp, _, cx| {
+                        this.kick_member(&kick_name, cx);
+                    }),
+                    cx,
+                ))
+                .child(danger_icon_button(
+                    IconName::Ban,
+                    Size::XSmall,
+                    px(28.),
+                    format!("member-ban-{index}"),
+                    Box::new(move |this: &mut DiscordApp, _, cx| {
+                        this.ban_member(&ban_name, cx);
+                    }),
+                    cx,
+                )),
+        );
+    }
+
+    // 封禁列表：一行一条，右侧撤销。
+    let mut ban_rows = v_flex().w_full().gap(px(2.));
+    if app.bans.is_empty() {
+        ban_rows = ban_rows.child(
+            h_flex()
+                .w_full()
+                .py(px(16.))
+                .justify_center()
+                .text_size(px(12.))
+                .text_color(rgb(palette::text_dim()))
+                .child("没有被封禁的用户"),
+        );
+    }
+    for (index, ban) in app.bans.iter().enumerate() {
+        let target = ban.name.clone();
+        ban_rows = ban_rows.child(
+            h_flex()
+                .w_full()
+                .items_center()
+                .gap_3()
+                .px(px(12.))
+                .py(px(8.))
+                .rounded(px(6.))
+                .hover(|el| el.bg(rgb(palette::bg_rail())))
+                .child(avatar(
+                    ban.name.chars().next().unwrap_or('?'),
+                    0x80848e,
+                    px(28.),
+                    false,
+                ))
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .gap(px(2.))
+                        .child(
+                            div()
+                                .truncate()
+                                .text_size(px(13.))
+                                .text_color(rgb(palette::text_primary()))
+                                .child(ban.name.clone()),
+                        )
+                        .child(
+                            h_flex()
+                                .gap_1()
+                                .text_size(px(11.))
+                                .text_color(rgb(palette::text_dim()))
+                                .child(ban.reason_label().to_string())
+                                .child("·")
+                                .child(ban.time_label())
+                                .child("·")
+                                .child(format!("by {}", ban.by)),
+                        ),
+                )
+                .child(
+                    div()
+                        .h(px(26.))
+                        .px_2()
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .rounded(px(4.))
+                        .text_size(px(11.))
+                        .text_color(rgb(palette::text_link()))
+                        .hover(|el| el.bg(rgb(palette::bg_channel_hover())))
+                        .child("撤销封禁")
+                        .id(format!("member-unban-{index}"))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.unban_member(&target, cx);
+                        })),
+                ),
+        );
+    }
+
+    shell(
+        "成员",
+        "搜索、改昵称、移出或封禁成员；封禁记录只在本机留存，可随时撤销。",
+    )
+    .child(card().child(search).child(filters).child(rows))
+    .child(
+        card()
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(palette::text_primary()))
+                            .child("封禁列表"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(rgb(palette::text_muted()))
+                            .child(format!("{} 人", app.bans.len())),
+                    ),
+            )
+            .child(ban_rows),
+    )
 }

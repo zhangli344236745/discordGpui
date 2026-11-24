@@ -14,6 +14,7 @@ pub mod help_center;
 pub mod invite_dialog;
 pub mod member_list;
 pub mod member_menu;
+pub mod member_nick_dialog;
 pub mod profile_card;
 pub mod server_menu;
 pub mod search_center;

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use super::models::{
-    Attachment, AuditEntry, AuditKind, Category, Channel, ChatThread, DiscoverServer,
+    Attachment, AuditEntry, AuditKind, BannedUser, Category, Channel, ChatThread, DiscoverServer,
     DmConversation, Friend, FriendRequest, Gif, HelpArticle, Invite, InviteExpiry, Member, Message,
     MyProfile, NotifyLevel, ReadReceipt, Role, Server, Sticker, ThreadReply,
 };
@@ -268,38 +268,60 @@ pub fn seed_members() -> Vec<Member> {
             color: 0x00a8fc,
             online: true,
             role: Some("管理员"),
+            nick: None,
+            joined_minutes: 180 * 24 * 60,
         },
         Member {
             name: "阿哲",
             color: 0x5865f2,
             online: true,
             role: Some("管理员"),
+            nick: Some("阿哲（夜猫子）"),
+            joined_minutes: 150 * 24 * 60,
         },
         Member {
             name: "小满",
             color: 0xfaa61c,
             online: true,
             role: Some("版主"),
+            nick: None,
+            joined_minutes: 96 * 24 * 60,
         },
         Member {
             name: "Lin",
             color: 0x57f287,
             online: true,
             role: Some("贡献者"),
+            nick: Some("Lin 🌿"),
+            joined_minutes: 40 * 24 * 60,
         },
         Member {
             name: "Mia",
             color: 0xeb459e,
             online: false,
             role: None,
+            nick: None,
+            joined_minutes: 12 * 24 * 60,
         },
         Member {
             name: "Kai",
             color: 0x80848e,
             online: false,
             role: None,
+            nick: None,
+            joined_minutes: 3 * 24 * 60,
         },
     ]
+}
+
+/// 初始封禁列表：演示态，只在本机留存。
+pub fn seed_bans() -> Vec<BannedUser> {
+    vec![BannedUser {
+        name: "raider#4040".into(),
+        reason: "刷屏与恶意邀请链接".into(),
+        minutes: 6 * 24 * 60,
+        by: "Nova".into(),
+    }]
 }
 
 /// 前端模拟好友数据。
@@ -961,6 +983,20 @@ pub fn seed_audit() -> Vec<AuditEntry> {
             "Riven",
             "更新了服务器简介",
             "欢迎分享作品与踩坑记录",
+        ),
+        AuditEntry::new(
+            9,
+            AuditKind::Member,
+            "Nova",
+            "封禁了成员",
+            "raider#4040 · 刷屏与恶意邀请链接",
+        ),
+        AuditEntry::new(
+            10,
+            AuditKind::Member,
+            "阿哲",
+            "将成员移出了服务器",
+            "旧号#0002",
         ),
     ]
 }

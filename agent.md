@@ -329,11 +329,12 @@ gpui_kit::application()
 ### 服务器设置页约定
 
 - 入口：服务器下拉菜单第一项「服务器设置」（`server-menu-settings`）→ `app::open_server_settings`；它会把当前服务器名称/简介预填到 `server_name_edit` / `server_desc_edit`，并收起所有浮层（含用户设置页）。
-- 分类：`ServerSettingsSection`（Overview/Roles/Emoji/Invites/Audit），文案与图标唯一数据源是 `ui/server_settings/mod.rs::SECTIONS`，切换走 `select_server_settings_section`。
+- 分类：`ServerSettingsSection`（Overview/Roles/Emoji/Invites/Members/Audit），文案与图标唯一数据源是 `ui/server_settings/mod.rs::SECTIONS`，切换走 `select_server_settings_section`。
 - 概览：名称与简介各一个 Input，Enter（订阅在 `new` 里）或「保存」按钮都调用 `save_server_overview`。改名是**带迁移**的：同步搬走 `messages` 里 `旧名/` 前缀的键、重写 `collapsed` 里的折叠键，并按新名首字更新 `badge`；空名或未改名不生效。图标颜色由 6 个色块 `set_server_color` 点击即生效。
 - 角色：主从布局（左列表 / 右详情），数据来自 `app.roles` 与 `app.members`，见「角色管理约定」。
 - 表情：`server_emojis` / `removed_server_emojis` 两个向量，`remove_server_emoji` 与 `restore_server_emoji` 互转；Demo 不做真实上传。
 - 邀请：见下方「邀请管理约定」；入口按钮 `open_invite` 会关掉服务器设置页（弹层挂在主界面）。
+- 成员：见下方「成员管理约定」；搜索框、筛选与昵称弹层都在 app 层。
 - 审核日志：见下方「审核日志约定」；纯列表页，不持有表单状态。
 - 打开用户设置页（`open_settings`）会关闭服务器设置页；切换分类时清掉 `invite_copied_code`（列表里的「已复制」标记）。
 
@@ -345,6 +346,17 @@ gpui_kit::application()
 - 布局：左列表（色点 + 角色名 + 人数 + 选中底色）与右详情（名称输入、6 色块、成员勾选行、删除按钮）都是纯视图，逻辑只在 app 层。
 - `ROLE_COLORS` 是 `pub(crate)`，UI 直接复用同一份色值，避免两处各写一套。
 - 持久化：`Snapshot.members` / `Snapshot.roles` 都是 `Option`，旧快照没有这两个字段时保留种子而不是清空。
+
+### 成员管理约定
+
+- 数据：`Member` 除 `name`（身份键）/ `role` 外，新增 `nick: Option<&'static str>`（服务器昵称，只影响展示）与 `joined_minutes`；`display()` 返回昵称或原名，`joined_label()` 给「3 天前加入」这类文案。昵称用 `opt_leaked_str` 持久化，`Member` 仍保持 `Copy`。
+- 封禁：`data::BannedUser { name, reason, minutes, by }` 全自有 String，serde 直接派生；`reason_label()` 对空原因回退「未填写原因」，`time_label()` 给「刚刚封禁 / N 分钟前封禁」。
+- 页面状态：`member_search`（InputState）、`member_filter: MemberFilter`（`All / Role(String) / NoRole`）、昵称弹层的 `show_member_nick` + `member_nick_target` + `member_nick_input`。
+- 查询与筛选：`member_query(cx)` 取小写关键词；`filtered_members(cx)` 返回命中成员的索引（名字与昵称都参与匹配，保持 `members` 原顺序），`member_count_of(&filter)` 只按角色筛选计数，供筛选条显示人数。
+- 操作：`open_member_nick` 预填当前展示名 → `save_member_nick`（留空或填回原名都等于清昵称；只在展示名真的变化时写日志）、`kick_member`（移出列表，顺带关掉指着他的资料卡 / 右键菜单）、`ban_member`（移出 + 插入封禁列表，原因留空）、`unban_member`（只删记录，不自动加回）。三者都写 `AuditKind::Member` 日志。
+- 视图：地址栏式的搜索行（图标 + Input + 条数 + 有内容时的清除按钮）、筛选 chips（全部 / 每个角色 / 无角色，都带人数）、成员行（头像 + 展示名 + `@原名` + 角色色点 badge + 加入时间 + 三个图标按钮）、封禁卡（原因 · 时间 · 操作人 + 撤销）。
+- 成员栏（`ui/member_list.rs`）与成员行同源：`member_row` 的 `identity` 用于资料卡 / 菜单，`display` 只用于渲染首字与文字。
+- 持久化：`Snapshot.members` 已含 `nick` / `joined_minutes`，`Snapshot.bans` 是 `Option<Vec<BannedUser>>`，旧快照缺字段时保留种子。
 
 ### 邀请管理约定
 
@@ -588,7 +600,7 @@ gpui_kit::application()
 
 ### 本地持久化约定
 
-- 位置：`data/persist.rs`。`Snapshot` 只装**内容状态**（servers / messages / dm_conversations / dm_messages / threads / friends / friend_groups / invites / audit / members / roles / friend_requests / blocked_users / me / 当前会话索引 / 通知与主题等偏好 / read_notifications），浮层显隐、输入焦点、语音连接、草稿、通话状态、好友分组的折叠状态一律不持久化。
+- 位置：`data/persist.rs`。`Snapshot` 只装**内容状态**（servers / messages / dm_conversations / dm_messages / threads / friends / friend_groups / invites / audit / bans / members / roles / friend_requests / blocked_users / me / 当前会话索引 / 通知与主题等偏好 / read_notifications），浮层显隐、输入焦点、语音连接、草稿、通话状态、好友分组的折叠状态一律不持久化。
 - 文件：macOS 写 `~/Library/Application Support/discord-gpui/state.json`，其他平台 `~/.discord-gpui/state.json`；`state_path()` 是唯一入口，UI 只通过 `app.snapshot_path()` 展示，不自己拼路径。
 - 写入时机：`DiscordApp::render` 开头调 `self.autosave()`——把当前状态序列化一次，与 `saved_json` 比较，**只有内容变化才落盘**。不要在每个业务方法里手动调 save，漏一处就会丢改动。
 - 读取时机：`DiscordApp::new` 末尾 `restore_state(window, cx)`；无文件 / 版本不符 / servers 为空则保留种子数据。加载后要校验 `active_server` 越界、`active_channel` 是否仍存在（退回 `first_text_channel()`）、`active_dm` 是否在会话列表里；主题变化才调 `set_theme`，避免启动时多余的 `Theme::change`。
@@ -671,9 +683,11 @@ cargo run       # 启动确认窗口创建正常
 13. 邀请管理回归：服务器设置 → 邀请 → 顶部列出「已创建的邀请 3 条」：`dev-community` 显示「6 / 不限」「永不过期」，`dev-weekly-5` 标红「已用完」，`dev-tmp-30m` 标红「已过期」→ 选频道 `#作品展示`、有效期「1 小时」、次数「10 次」，点「生成并复制链接」：列表头部出现 `discord.gg/dev-community-4`、使用次数「0 / 10」、剩余「1 小时后过期」，同时系统剪贴板已写入该链接 → 点该行的「复制」变「已复制」，点另一行后只有新行高亮 → 点某行垃圾桶撤销，行消失、复制的标记清空，条数减一 → 切换服务器再看邀请页只剩该服务器的邀请，落地频道自动落到它的第一个文字频道 → 打开服务器菜单「邀请好友」，弹层预填的是当前服务器最新一条邀请码；重启应用后邀请列表（含新增与撤销结果）保持不变。
 14. 角色管理回归：服务器设置 → 角色，左侧是「管理员（2 人）/ 版主（1 人）/ 贡献者（1 人）」三段并按角色色着色，右侧默认选中「管理员」并显示 Nova、阿哲已勾选 → 把名称改成「管理组」回车：左列表与成员栏分组同时改名、成员仍在组内；清空名称再保存提示「角色名不能为空」不生效 → 点绿色块：角色圆点与成员栏分组标题颜色同步变化，资料卡里仍显示角色名 → 点 Lin 行：Lin 加入「管理员」；再点一次退出，成员栏「贡献者」随之消失、Lin 回到「在线 / 离线」→ 新建角色（名称 `新角色 4`）后改名「实习生」，点 Kai 授予该角色，成员栏末尾出现「实习生」分组且 Kai 移出「离线」→ 删除该角色：成员栏分组消失、Kai 回到「离线」→ 重启应用，角色表顺序、颜色与各成员归属全部保留（旧的 `Nova —— 管理员` 式名字已不再出现）。
 
-15. 审核日志回归：服务器设置 → 审核日志，顶部「共 8 条」、筛选条为「全部 8 / 服务器 2 / 频道 2 / 角色 2 / 邀请 1 / 表情 1」，第一行是「更新了服务器简介」并显示「Riven · 刚刚」→ 切到「角色 2」只剩两条角色记录，条数变「2 / 8」→ 回「全部」，去概览把服务器名改成「开发社区邦」：返回日志页第一行变成「更新了服务器名称 / 开发者社区 → 开发社区邦」，第二行降级为「1 分钟前」→ 去角色页新建角色、改个颜色，日志里多出「创建了角色」「更新了角色颜色」→ 回日志页点「清空日志」：列表变成空状态「日志是空的…」，筛选条只剩「全部 0」，清空按钮消失 → 再改一次服务器简介，日志只剩这 1 条且显示「刚刚」→ 重启应用后日志内容（含清空后的新记录）保持不变。
+15. 审核日志回归：服务器设置 → 审核日志，顶部「共 10 条」、筛选条为「全部 10 / 服务器 2 / 频道 2 / 角色 2 / 成员 2 / 邀请 1 / 表情 1」，第一行是「将成员移出了服务器 / 旧号#0002」并显示「阿哲 · 刚刚」→ 切到「角色 2」只剩两条角色记录，条数变「2 / 8」→ 回「全部」，去概览把服务器名改成「开发社区邦」：返回日志页第一行变成「更新了服务器名称 / 开发者社区 → 开发社区邦」，第二行降级为「1 分钟前」→ 去角色页新建角色、改个颜色，日志里多出「创建了角色」「更新了角色颜色」→ 回日志页点「清空日志」：列表变成空状态「日志是空的…」，筛选条只剩「全部 0」，清空按钮消失 → 再改一次服务器简介，日志只剩这 1 条且显示「刚刚」→ 重启应用后日志内容（含清空后的新记录）保持不变。
 
-16. 测试结束后**必须关闭应用进程**，不要留后台残留：
+16. 成员管理回归：服务器设置 → 成员，搜索行显示「共 6 位成员」，筛选条「全部 6 / 管理员 2 / 版主 1 / 贡献者 1 / 无角色 2」，成员栏里已设昵称的人显示昵称（`阿哲（夜猫子）`、`Lin 🌿`）→ 搜索「lin」只剩 Lin 一行，点 X 清除后恢复 → 切「管理员 2」只剩 Nova 与阿哲 → 点阿哲行的笔：弹层预填「阿哲（夜猫子）」，改成「阿哲」保存，列表与右侧成员栏同步改名、行上的 `@阿哲` 消失；再点开留空保存，昵称清空但仍显示原名 → 点 Kai 的移出按钮：Kai 从列表与成员栏消失，计数变「全部 5 / 无角色 1」，审核日志多一条「将成员移出了服务器 / Kai」→ 点 Mia 的封禁按钮：Mia 从成员列表消失，封禁卡出现「Mia · 未填写原因 · 刚刚封禁 · by Riven」，日志多一条「封禁了成员 / Mia」→ 点该行「撤销封禁」：封禁卡只剩种子那条，日志多一条「撤销了对成员的封禁 / Mia」（撤销不会把人加回服务器）→ 重启应用，昵称、移出结果与封禁列表保持不变。
+
+17. 测试结束后**必须关闭应用进程**，不要留后台残留：
 
 ```bash
 pgrep -fl 'target/debug/discord-gpui'   # 确认无残留

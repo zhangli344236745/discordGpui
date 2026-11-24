@@ -739,16 +739,18 @@ pub enum AuditKind {
     Server,
     Channel,
     Role,
+    Member,
     Invite,
     Emoji,
 }
 
 impl AuditKind {
     /// 全部类别，顺序即筛选条的展示顺序。
-    pub const ALL: [AuditKind; 5] = [
+    pub const ALL: [AuditKind; 6] = [
         AuditKind::Server,
         AuditKind::Channel,
         AuditKind::Role,
+        AuditKind::Member,
         AuditKind::Invite,
         AuditKind::Emoji,
     ];
@@ -758,6 +760,7 @@ impl AuditKind {
             AuditKind::Server => "服务器",
             AuditKind::Channel => "频道",
             AuditKind::Role => "角色",
+            AuditKind::Member => "成员",
             AuditKind::Invite => "邀请",
             AuditKind::Emoji => "表情",
         }
@@ -769,6 +772,7 @@ impl AuditKind {
             AuditKind::Server => 0x5865f2,
             AuditKind::Channel => 0x00a8fc,
             AuditKind::Role => 0xfaa61c,
+            AuditKind::Member => 0xf23f43,
             AuditKind::Invite => 0x57f287,
             AuditKind::Emoji => 0xeb459e,
         }
@@ -892,7 +896,8 @@ impl Role {
     }
 }
 
-/// 成员栏条目。`role` 存角色名，None 表示无角色（归入在线 / 离线兜底组）。
+/// 成员条目。`role` 存角色名，None 表示无角色（归入在线 / 离线兜底组）；
+/// `nick` 是服务器昵称，只影响展示，`name` 始终是身份键。
 #[derive(Clone, Copy, Serialize)]
 #[serde(from = "crate::data::persist::MemberOwned")]
 pub struct Member {
@@ -902,6 +907,66 @@ pub struct Member {
     pub online: bool,
     #[serde(with = "crate::data::persist::opt_leaked_str")]
     pub role: Option<&'static str>,
+    #[serde(with = "crate::data::persist::opt_leaked_str")]
+    pub nick: Option<&'static str>,
+    /// 加入于多少分钟前（演示值是静态的）。
+    pub joined_minutes: u32,
+}
+
+impl Member {
+    /// 展示名：设置过昵称就用昵称。
+    pub fn display(&self) -> &'static str {
+        self.nick.unwrap_or(self.name)
+    }
+
+    /// 加入时间文案：刚刚 / 分钟 / 小时 / 天。
+    pub fn joined_label(&self) -> String {
+        let minutes = self.joined_minutes;
+        if minutes == 0 {
+            "刚刚加入".into()
+        } else if minutes < 60 {
+            format!("{minutes} 分钟前加入")
+        } else if minutes < 24 * 60 {
+            format!("{} 小时前加入", minutes / 60)
+        } else {
+            format!("{} 天前加入", minutes / (24 * 60))
+        }
+    }
+}
+
+/// 被封禁的用户。Demo 里只在本机列表留存，不连任何后端。
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct BannedUser {
+    pub name: String,
+    /// 封禁原因，空串按「未填写原因」展示。
+    pub reason: String,
+    /// 封禁于多少分钟前。
+    pub minutes: u32,
+    /// 操作人显示名。
+    pub by: String,
+}
+
+impl BannedUser {
+    pub fn reason_label(&self) -> &str {
+        if self.reason.trim().is_empty() {
+            "未填写原因"
+        } else {
+            &self.reason
+        }
+    }
+
+    pub fn time_label(&self) -> String {
+        let minutes = self.minutes;
+        if minutes == 0 {
+            "刚刚封禁".into()
+        } else if minutes < 60 {
+            format!("{minutes} 分钟前封禁")
+        } else if minutes < 24 * 60 {
+            format!("{} 小时前封禁", minutes / 60)
+        } else {
+            format!("{} 天前封禁", minutes / (24 * 60))
+        }
+    }
 }
 
 /// 语音房间里的其他参与者（Demo：连接语音时从在线成员里抽几位）。
@@ -1179,6 +1244,41 @@ mod tests {
         );
         assert_eq!(invite(0, InviteExpiry::OneHour, 61, 0).expiry_label(), "已过期");
         assert_eq!(invite(0, InviteExpiry::Never, 0, 0).link(), "discord.gg/demo-1");
+    }
+
+    /// 成员加入时间与封禁原因兜底文案。
+    #[test]
+    fn member_and_ban_labels_read_naturally() {
+        let member = |minutes| Member {
+            name: "Nova",
+            color: 0x00a8fc,
+            online: true,
+            role: None,
+            nick: None,
+            joined_minutes: minutes,
+        };
+        assert_eq!(member(0).joined_label(), "刚刚加入");
+        assert_eq!(member(30).joined_label(), "30 分钟前加入");
+        assert_eq!(member(5 * 60).joined_label(), "5 小时前加入");
+        assert_eq!(member(3 * 24 * 60).joined_label(), "3 天前加入");
+
+        // 有昵称优先用昵称展示，原名仍是身份键。
+        let aliased = Member {
+            nick: Some("Nova ✨"),
+            ..member(10)
+        };
+        assert_eq!(aliased.display(), "Nova ✨");
+        assert_eq!(aliased.name, "Nova");
+
+        let ban = |reason: &str| BannedUser {
+            name: "raider".into(),
+            reason: reason.into(),
+            minutes: 0,
+            by: "Riven".into(),
+        };
+        assert_eq!(ban("  ").reason_label(), "未填写原因");
+        assert_eq!(ban("刷屏").reason_label(), "刷屏");
+        assert_eq!(ban("").time_label(), "刚刚封禁");
     }
 
     /// 审核日志的相对时间：最新一条「刚刚」，其余按序号差换成分钟 / 小时 / 天。

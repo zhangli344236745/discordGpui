@@ -15,8 +15,8 @@ use gpui_kit::{rgb, Rgba};
 use serde::{Deserialize, Serialize, Serializer};
 
 use super::models::{
-    AuditEntry, ChatThread, DmConversation, Friend, FriendRequest, Invite, InviteExpiry, Member,
-    Message, MyProfile, Role, Server, UserStatus,
+    AuditEntry, BannedUser, ChatThread, DmConversation, Friend, FriendRequest, Invite, InviteExpiry,
+    Member, Message, MyProfile, Role, Server, UserStatus,
 };
 
 /// 快照版本号；字段语义变化时递增，加载端按需丢弃旧数据。
@@ -52,6 +52,9 @@ pub struct Snapshot {
     /// 审核日志（按 `seq` 升序）。旧快照缺字段时保留种子日志。
     #[serde(default)]
     pub audit: Option<Vec<AuditEntry>>,
+    /// 封禁列表。旧快照缺字段时保留种子数据。
+    #[serde(default)]
+    pub bans: Option<Vec<BannedUser>>,
     /// 好友分组的顺序（只存分组名，成员关系在 `Friend.group` 上）。
     #[serde(default)]
     pub friend_groups: Vec<String>,
@@ -414,6 +417,10 @@ pub struct MemberOwned {
     pub online: bool,
     #[serde(default)]
     pub role: Option<String>,
+    #[serde(default)]
+    pub nick: Option<String>,
+    #[serde(default)]
+    pub joined_minutes: u32,
 }
 
 impl From<MemberOwned> for super::models::Member {
@@ -423,6 +430,8 @@ impl From<MemberOwned> for super::models::Member {
             color: value.color,
             online: value.online,
             role: value.role.map(leak),
+            nick: value.nick.map(leak),
+            joined_minutes: value.joined_minutes,
         }
     }
 }
@@ -536,6 +545,7 @@ mod tests {
             members: Some(crate::data::seed_members()),
             roles: Some(crate::data::seed_roles()),
             audit: Some(crate::data::seed_audit()),
+            bans: Some(crate::data::seed_bans()),
             me: crate::data::seed_me(),
             ..Default::default()
         };
@@ -587,6 +597,8 @@ mod tests {
         assert_eq!(after_members.len(), before_members.len());
         assert_eq!(after_members[0].name, before_members[0].name);
         assert_eq!(after_members[0].role, before_members[0].role);
+        assert_eq!(after_members[0].nick, before_members[0].nick);
+        assert_eq!(after_members[0].joined_minutes, before_members[0].joined_minutes);
         let before_roles = snapshot.roles.clone().unwrap_or_default();
         let after_roles = back.roles.clone().unwrap_or_default();
         assert_eq!(after_roles.len(), before_roles.len());
@@ -602,5 +614,14 @@ mod tests {
         assert_eq!(after_audit[0].actor, before_audit[0].actor);
         assert_eq!(after_audit[0].action, before_audit[0].action);
         assert_eq!(after_audit[0].detail, before_audit[0].detail);
+
+        // 封禁列表：原因 / 操作人与时间都是自有字符串，直接往返。
+        let before_bans = snapshot.bans.clone().unwrap_or_default();
+        let after_bans = back.bans.clone().unwrap_or_default();
+        assert_eq!(after_bans.len(), before_bans.len());
+        assert_eq!(after_bans[0].name, before_bans[0].name);
+        assert_eq!(after_bans[0].reason, before_bans[0].reason);
+        assert_eq!(after_bans[0].by, before_bans[0].by);
+        assert_eq!(after_bans[0].minutes, before_bans[0].minutes);
     }
 }
