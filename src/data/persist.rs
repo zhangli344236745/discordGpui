@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize, Serializer};
 use super::models::{
     AuditEntry, AutoModRule, BannedUser, Bookmark, ChatThread, DmConversation, ForumPost, Friend,
     FriendRequest, Invite, InviteExpiry, Member, Message, MessageRequest, MyProfile,
-    PermissionGrant, Role, Server, ServerEvent, ServerWelcome, UserStatus,
+    PermissionGrant, Role, Server, ServerBoost, ServerEvent, ServerWelcome, UserStatus,
 };
 
 /// 快照版本号；字段语义变化时递增，加载端按需丢弃旧数据。
@@ -80,6 +80,9 @@ pub struct Snapshot {
     /// 已走完欢迎屏幕（同意规则）的服务器名，避免重复弹出。
     #[serde(default)]
     pub welcome_joined: Vec<String>,
+    /// 服务器加成。旧快照缺字段时保留种子加成。
+    #[serde(default)]
+    pub boosts: Option<Vec<ServerBoost>>,
     /// 好友分组的顺序（只存分组名，成员关系在 `Friend.group` 上）。
     #[serde(default)]
     pub friend_groups: Vec<String>,
@@ -579,6 +582,7 @@ mod tests {
             forum_posts: Some(crate::data::seed_forum_posts()),
             bookmarks: Some(crate::data::seed_bookmarks()),
             welcome_screens: Some(crate::data::seed_welcome_screens()),
+            boosts: Some(crate::data::seed_boosts()),
             audit: Some(crate::data::seed_audit()),
             bans: Some(crate::data::seed_bans()),
             me: crate::data::seed_me(),
@@ -669,6 +673,19 @@ mod tests {
         assert_eq!(welcome_after[0].rules[0].title, welcome_before[0].rules[0].title);
         assert_eq!(welcome_after[0].recommended, welcome_before[0].recommended);
         assert_eq!(welcome_after[0].require_rules, welcome_before[0].require_rules);
+
+        // 服务器加成：服务器归属、加成者与时间都要完整往返。
+        let boosts_before = snapshot.boosts.clone().unwrap_or_default();
+        let boosts_after = back.boosts.clone().unwrap_or_default();
+        assert_eq!(boosts_after.len(), boosts_before.len());
+        assert_eq!(boosts_after[0].server, boosts_before[0].server);
+        assert_eq!(boosts_after[0].count(), boosts_before[0].count());
+        assert_eq!(boosts_after[0].level(), 2);
+        assert_eq!(boosts_after[0].boosters[0].name, boosts_before[0].boosters[0].name);
+        assert_eq!(
+            boosts_after[0].boosters[0].minutes_ago,
+            boosts_before[0].boosters[0].minutes_ago
+        );
 
         // 好友分组：顺序表与成员身上的分组名都要能完整往返。
         assert_eq!(back.friend_groups, snapshot.friend_groups);

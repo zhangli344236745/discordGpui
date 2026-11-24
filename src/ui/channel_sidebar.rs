@@ -43,6 +43,76 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
         .id("sidebar-server-menu")
         .on_click(cx.listener(|this, _, _, cx| this.toggle_server_menu(cx)));
 
+    // 加成条：等级 + 当前区间进度，点一下直达服务器设置的「加成」页。
+    let boost = app.active_boost();
+    let boost_level = boost.level();
+    let boost_count = boost.count();
+    let boost_target = boost
+        .remaining()
+        .map(|left| boost_count + left)
+        .map(|target| format!("{boost_count}/{target}"))
+        .unwrap_or_else(|| format!("{boost_count} · 满级"));
+    let boost_bar = v_flex()
+        .w_full()
+        .flex_shrink_0()
+        .px_2()
+        .pt_2()
+        .child(
+            v_flex()
+                .w_full()
+                .px_2()
+                .py(px(6.))
+                .gap_1()
+                .rounded(px(4.))
+                .hover(|el| el.bg(rgb(palette::bg_channel_hover())))
+                .child(
+                    h_flex()
+                        .justify_between()
+                        .items_center()
+                        .child(
+                            h_flex()
+                                .gap_1()
+                                .items_center()
+                                .child(
+                                    ico(IconName::Sparkles, Size::XSmall)
+                                        .text_color(rgb(palette::accent())),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(11.))
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(rgb(palette::text_muted()))
+                                        .child(format!("加成 · 等级 {boost_level}")),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(rgb(palette::text_dim()))
+                                .child(boost_target),
+                        ),
+                )
+                .child(
+                    div()
+                        .relative()
+                        .w_full()
+                        .h(px(4.))
+                        .rounded(px(2.))
+                        .bg(rgb(palette::bg_divider()))
+                        .child(
+                            div()
+                                .w(relative(boost.progress().clamp(0.0, 1.0)))
+                                .h_full()
+                                .rounded(px(2.))
+                                .bg(rgb(palette::accent())),
+                        ),
+                )
+                .id("sidebar-boost-bar")
+                .on_click(
+                    cx.listener(|this, _, window, cx| this.open_boost_page(window, cx)),
+                ),
+        );
+
     let mut channels = v_flex()
         .flex_1()
         .min_h_0()
@@ -227,6 +297,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
         .flex_shrink_0()
         .bg(rgb(palette::bg_sidebar()))
         .child(header)
+        .child(boost_bar)
         .child(channels)
         .child(user_footer::render(app, cx))
 }

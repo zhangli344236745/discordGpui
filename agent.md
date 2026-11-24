@@ -334,7 +334,7 @@ gpui_kit::application()
 ### 服务器设置页约定
 
 - 入口：服务器下拉菜单第一项「服务器设置」（`server-menu-settings`）→ `app::open_server_settings`；它会把当前服务器名称/简介预填到 `server_name_edit` / `server_desc_edit`，并收起所有浮层（含用户设置页）。
-- 分类：`ServerSettingsSection`（Overview/Roles/Permissions/AutoMod/Emoji/Invites/Members/Audit），文案与图标唯一数据源是 `ui/server_settings/mod.rs::SECTIONS`，切换走 `select_server_settings_section`。
+- 分类：`ServerSettingsSection`（Overview/Roles/Permissions/AutoMod/Emoji/Invites/Members/Audit/Boost），文案与图标唯一数据源是 `ui/server_settings/mod.rs::SECTIONS`，切换走 `select_server_settings_section`。
 - 概览：名称与简介各一个 Input，Enter（订阅在 `new` 里）或「保存」按钮都调用 `save_server_overview`。改名是**带迁移**的：同步搬走 `messages` 里 `旧名/` 前缀的键、重写 `collapsed` 里的折叠键，并按新名首字更新 `badge`；空名或未改名不生效。图标颜色由 6 个色块 `set_server_color` 点击即生效。
 - 角色：主从布局（左列表 / 右详情），数据来自 `app.roles` 与 `app.members`，见「角色管理约定」。
 - 权限：见下方「权限管理约定」；纯配置演示，不校验真实操作。
@@ -553,6 +553,16 @@ gpui_kit::application()
 - 持久化：`Snapshot.welcome_screens: Option<Vec<ServerWelcome>>`（缺字段保留种子）+ `welcome_joined: Vec<String>`；`restore_state` 丢弃服务器已不存在的配置与完成记录。
 - 渲染：挂在根节点**最后**（`show_quick_switcher` 之后、`voice_status` 之前）保证盖住菜单与面板；`close_top_overlay` 里放**最前面**，Esc 等价「稍后再说」。视图 `ui/welcome.rs` 用「全屏容器 → 遮罩 div（兄弟）+ 居中 flex 容器（兄弟，无 click handler）→ 卡片」的三层结构：不要像 `create_dialog` 那样把卡片嵌进带 `on_click` 的遮罩里，否则点频道 chip 会顺带关掉模态。
 - 服务器菜单「欢迎屏幕」项在未完成时用 `menu_item` 的 `trailing` 参数挂一个「未同意」小角标（`welcome_done_for` 唯一的调用点，别删）。
+
+### 服务器加成约定
+
+- 数据：`data::BOOST_TIERS = [2, 7, 14]` 是等级门槛的唯一来源（UI 的特权表 `BOOST_PERKS` 也用 `BOOST_TIERS[i]` 作门槛，别重复写常量）。`ServerBoost { server, boosters: Vec<Booster> }`，`Booster { name, color, minutes_ago }`，全自有字段 serde 直接派生。
+- 等级只由人数推导：`count()/level()`（达到几档门槛就是几级）/`remaining()`（距下一级差几次，满级 `None`）/`progress()`（**当前等级区间内**的 0..=1 进度，不是总进度；满级恒 1.0）。别把 progress 实现成 `count / 14`，否则等级 1 的进度条会一直是 20% 左右的短条。
+- 空记录不要存进 `Vec`：`app.boost_of(server)` 找不到时**现场合成** `ServerBoost::new(server)`（0 次），所以新建服务器、离开再回来都不会出现 `unwrap` 风险。`active_boost()` 只是对当前服务器调 `boost_of`。
+- app：字段 `boosts/boost_notice`；方法 `boost_of/active_boost/toggle_boost/open_boost_page/dismiss_boost_notice` + 迁移 `remove_boost_of_server/rename_boost_server`。「你」的身份固定为 `Booster::new("你", 0x5865f2, 0)`，加成 / 撤销都先写数据再 `log_audit(AuditKind::Server, ...)`（注意先释放 `iter_mut` 借用，别在持有可变引用时调 `log_audit`）。
+- 持久化：`Snapshot.boosts: Option<Vec<ServerBoost>>`（缺字段保留种子）；`restore_state` 丢弃服务器已不存在的记录。种子 `seed_boosts()`：开发者社区 8 人（等级 2、距 3 级差 6 次，含「你」）、设计工坊 1 人（等级 0、差 1 次）。
+- 入口两处：`ui/server_settings/pages.rs::boost()`（设置页 9 个分类之一）+ `ui/channel_sidebar.rs` 服务器名下方的紧凑加成条（等级 + `relative(progress)` 进度条，点击 `open_boost_page`）。`open_boost_page` 必须**先** `open_server_settings`（它会把分类重置为 Overview）**再**把分类改成 Boost。
+- 图标：等级用 `Sparkles`，未达成特权用 `Circle`、已达成用 `Check`（assets 里仍没有 `Lock`）。
 
 ### 主题切换约定
 

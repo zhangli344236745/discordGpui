@@ -9,7 +9,7 @@ use crate::data::{
     persist,
     seed_discover_servers, seed_dm_conversations, seed_dm_messages, seed_friend_requests,
     seed_forum_posts, seed_message_requests, gif_categories, help_categories, seed_friend_groups,
-    seed_friends, seed_gifs, seed_bookmarks, seed_welcome_screens,
+    seed_friends, seed_gifs, seed_bookmarks, seed_welcome_screens, seed_boosts,
     seed_audit, seed_events, seed_help_articles, seed_invites, seed_me, seed_roles,
     seed_members, seed_messages, seed_servers,
     seed_automod_rules, seed_bans, seed_permissions, seed_stickers, seed_threads, sticker_packs,
@@ -21,7 +21,7 @@ use crate::data::{
     MemberGroup, Message, Notification, NotificationKind, NotificationTarget, NotifyLevel,
     PermissionGrant, PermissionState, Poll, Reaction,
     ReadReceipt,
-    ReplyRef, Role, SearchHit, Server, ServerEvent, ServerWelcome, Sticker, ThreadReply,
+    ReplyRef, Role, SearchHit, Server, ServerBoost, Booster, ServerEvent, ServerWelcome, Sticker, ThreadReply,
     UserStatus, VoiceParticipant, WelcomeRule,
 };
 use crate::ui::theme::palette;
@@ -235,6 +235,7 @@ pub(crate) enum ServerSettingsSection {
     Invites,
     Members,
     Audit,
+    Boost,
 }
 
 /// 成员管理页的角色筛选：全部 / 某个角色 / 无角色。
@@ -362,6 +363,10 @@ pub struct DiscordApp {
     pub(crate) welcome_rule_agreed: bool,
     pub(crate) welcome_selected: Vec<String>,
     pub(crate) welcome_joined: Vec<String>,
+
+    // 服务器加成：每台服务器一条记录（没人加成时按 0 次合成），提示条只显示最近一次操作结果。
+    pub(crate) boosts: Vec<ServerBoost>,
+    pub(crate) boost_notice: Option<String>,
 
     /// 当前语音连接：(服务器索引, 频道名)；跨会话保持，符合 Discord 行为。
     pub(crate) voice_channel: Option<(usize, String)>,
@@ -1182,6 +1187,8 @@ impl DiscordApp {
             welcome_rule_agreed: false,
             welcome_selected: Vec::new(),
             welcome_joined: Vec::new(),
+            boosts: seed_boosts(),
+            boost_notice: None,
             voice_channel: None,
             my_status: UserStatus::Online,
             show_status_menu: false,
@@ -2792,6 +2799,7 @@ impl DiscordApp {
         self.remove_forum_posts_of_server(&name);
         self.remove_bookmarks_of_server(&name);
         self.remove_welcome_of_server(&name);
+        self.remove_boost_of_server(&name);
 
         if leaving_voice {
             self.leave_voice();
@@ -4686,6 +4694,85 @@ impl DiscordApp {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // 服务器加成
+    // -----------------------------------------------------------------------
+
+    /// 某服务器的加成记录；没有记录时返回 0 次的空记录（新建服务器也会走这里）。
+    pub(crate) fn boost_of(&self, server: &str) -> ServerBoost {
+        self.boosts
+            .iter()
+            .find(|boost| boost.server == server)
+            .cloned()
+            .unwrap_or_else(|| ServerBoost::new(server))
+    }
+
+    /// 当前服务器的加成记录。
+    pub(crate) fn active_boost(&self) -> ServerBoost {
+        self.boost_of(&self.active_server_name())
+    }
+
+    /// 加成 / 撤销加成当前服务器（Demo 里只有「你」能真的操作）。
+    pub(crate) fn toggle_boost(&mut self, cx: &mut Context<Self>) {
+        let server = self.active_server_name();
+        if server.is_empty() {
+            return;
+        }
+        let boosted = self.active_boost().boosted_by("你");
+
+        if boosted {
+            if let Some(boost) = self.boosts.iter_mut().find(|boost| boost.server == server) {
+                boost.remove_by("你");
+            }
+            self.boost_notice = Some(format!("已撤销对「{server}」的加成"));
+            self.log_audit(AuditKind::Server, "撤销加成", format!("「{server}」"));
+        } else {
+            let me = Booster::new("你", 0x5865f2, 0);
+            match self.boosts.iter_mut().find(|boost| boost.server == server) {
+                Some(boost) => boost.boosters.insert(0, me),
+                None => self.boosts.push(ServerBoost::new(server.clone()).with(vec![me])),
+            }
+            let boost = self.boost_of(&server);
+            self.boost_notice = Some(match boost.remaining() {
+                Some(left) => format!(
+                    "已加成「{server}」，距离等级 {} 还差 {left} 次",
+                    boost.level() + 1
+                ),
+                None => format!("已加成「{server}」，服务器已经是最高等级"),
+            });
+            self.log_audit(AuditKind::Server, "服务器加成", format!("「{server}」"));
+        }
+        // 加成会抬高头像/表情等配额，提示条不自动消失，由用户关掉或切页时清理。
+        cx.notify();
+    }
+
+    /// 从侧栏加成条或菜单直达「加成」设置页。
+    pub(crate) fn open_boost_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_server_settings(window, cx);
+        self.server_settings_section = ServerSettingsSection::Boost;
+        self.boost_notice = None;
+        cx.notify();
+    }
+
+    pub(crate) fn dismiss_boost_notice(&mut self, cx: &mut Context<Self>) {
+        self.boost_notice = None;
+        cx.notify();
+    }
+
+    /// 离开服务器时清掉它的加成记录。
+    pub(crate) fn remove_boost_of_server(&mut self, server: &str) {
+        self.boosts.retain(|boost| boost.server != server);
+    }
+
+    /// 服务器改名时迁移加成记录。
+    pub(crate) fn rename_boost_server(&mut self, old: &str, new: &str) {
+        for boost in self.boosts.iter_mut() {
+            if boost.server == old {
+                boost.server = new.to_string();
+            }
+        }
+    }
+
     /// 删除服务器时清掉其名下所有活动。
     pub(crate) fn remove_events_of_server(&mut self, server: &str) {
         self.events.retain(|event| event.server != server);
@@ -6246,6 +6333,7 @@ impl DiscordApp {
         self.close_thread(); self.close_read_receipts(); self.close_edit_history();
         self.member_menu = None;
         self.server_settings_section = ServerSettingsSection::Overview;
+        self.boost_notice = None;
         self.invite_copied_code = None;
         self.show_settings = false;
         self.show_server_menu = false;
@@ -6287,6 +6375,7 @@ impl DiscordApp {
         self.role_notice = None;
         self.permission_notice = None;
         self.automod_notice = None;
+        self.boost_notice = None;
         // 进角色页/权限页时默认选中第一个角色，右侧详情不至于空白。
         if (section == ServerSettingsSection::Roles || section == ServerSettingsSection::Permissions)
             && self.selected_role.is_none()
@@ -6341,6 +6430,7 @@ impl DiscordApp {
             self.rename_forum_server(&current, &new_name);
             self.rename_bookmarks_server(&current, &new_name);
             self.rename_welcome_server(&current, &new_name);
+            self.rename_boost_server(&current, &new_name);
 
             let badge = new_name.chars().next().unwrap_or('?').to_string();
             self.servers[index].name = new_name;
@@ -7311,6 +7401,7 @@ impl DiscordApp {
             bookmarks: Some(self.bookmarks.clone()),
             welcome_screens: Some(self.welcome_screens.clone()),
             welcome_joined: self.welcome_joined.clone(),
+            boosts: Some(self.boosts.clone()),
             friend_requests: self.friend_requests.clone(),
             blocked_users: self.blocked_users.clone(),
             me: self.me.clone(),
@@ -7455,6 +7546,12 @@ impl DiscordApp {
             .retain(|welcome| self.servers.iter().any(|server| server.name == welcome.server));
         self.welcome_joined
             .retain(|name| self.servers.iter().any(|server| &server.name == name));
+        // 加成记录同样按服务器名归属，丢弃已不存在的服务器。
+        if let Some(boosts) = saved.boosts {
+            self.boosts = boosts;
+        }
+        self.boosts
+            .retain(|boost| self.servers.iter().any(|server| server.name == boost.server));
         if let Some(selected) = self.selected_automod.take() {
             self.selected_automod = self
                 .automod_rules
@@ -7572,6 +7669,8 @@ impl DiscordApp {
         self.welcome_rule_agreed = false;
         self.welcome_selected.clear();
         self.welcome_joined.clear();
+        self.boosts = seed_boosts();
+        self.boost_notice = None;
         self.invites = seed_invites();
         self.invite_copied_code = None;
         self.audit = seed_audit();

@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 
 use super::models::{
-    Attachment, AuditEntry, AuditKind, AutoModAction, AutoModRule, BannedUser, Bookmark, Category,
-    Channel, ChatThread, DiscoverServer, DmConversation, Friend, FriendRequest, Gif, HelpArticle,
-    Invite, EventCategory, ForumPost, ForumReply, InviteExpiry, Member, Message, MessageRequest,
-    MessageRequestState, MyProfile, NotifyLevel, PermissionGrant, PermissionState, Poll,
-    ReadReceipt, Role, Server, ServerEvent, ServerWelcome, Sticker, ThreadReply, WelcomeRule,
+    Attachment, AuditEntry, AuditKind, AutoModAction, AutoModRule, BannedUser, Bookmark, Booster,
+    Category, Channel, ChatThread, DiscoverServer, DmConversation, Friend, FriendRequest, Gif,
+    HelpArticle, Invite, EventCategory, ForumPost, ForumReply, InviteExpiry, Member, Message,
+    MessageRequest, MessageRequestState, MyProfile, NotifyLevel, PermissionGrant, PermissionState,
+    Poll, ReadReceipt, Role, Server, ServerBoost, ServerEvent, ServerWelcome, Sticker, ThreadReply,
+    WelcomeRule,
 };
 
 /// 前端模拟服务器数据。
@@ -793,6 +794,23 @@ pub fn seed_welcome_screens() -> Vec<ServerWelcome> {
             ),
         ])
         .recommended(&["灵感", "反馈", "素材"]),
+    ]
+}
+
+/// 服务器加成：开发者社区已到 2 级（8 次，距 3 级还差 6 次），设计工坊刚有 1 次。
+pub fn seed_boosts() -> Vec<ServerBoost> {
+    vec![
+        ServerBoost::new("开发者社区").with(vec![
+            Booster::new("Nova", 0x00a8fc, 12 * 24 * 60),
+            Booster::new("阿哲", 0x5865f2, 9 * 24 * 60),
+            Booster::new("小满", 0xfaa61c, 6 * 24 * 60),
+            Booster::new("Lin", 0x57f287, 4 * 24 * 60),
+            Booster::new("Mia", 0xeb459e, 3 * 24 * 60),
+            Booster::new("Kai", 0x80848e, 2 * 24 * 60),
+            Booster::new("Rowan", 0xf23f43, 30 * 60),
+            Booster::new("你", 0x5865f2, 96),
+        ]),
+        ServerBoost::new("设计工坊").with(vec![Booster::new("Lin", 0x57f287, 5 * 24 * 60)]),
     ]
 }
 

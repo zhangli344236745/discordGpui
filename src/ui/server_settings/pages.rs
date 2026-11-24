@@ -7,7 +7,8 @@ use gpui_kit::component::{h_flex, v_flex, Size, Sizable};
 
 use crate::app::{DiscordApp, MemberFilter, ROLE_COLORS, ServerSettingsSection};
 use crate::data::{
-    AuditKind, AutoModAction, InviteExpiry, PermissionGroup, PermissionState, PERMISSIONS,
+    AuditKind, AutoModAction, InviteExpiry, PermissionGroup, PermissionState, BOOST_TIERS,
+    PERMISSIONS,
 };
 use crate::ui::theme::palette;
 use crate::ui::{avatar, danger_icon_button, filter_chip, ico, icon_button};
@@ -28,6 +29,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
         ServerSettingsSection::Invites => invites(app, cx),
         ServerSettingsSection::Members => members(app, cx),
         ServerSettingsSection::Audit => audit(app, cx),
+        ServerSettingsSection::Boost => boost(app, cx),
     }
 }
 
@@ -1990,5 +1992,347 @@ fn members(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                     ),
             )
             .child(ban_rows),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// 服务器加成
+// ---------------------------------------------------------------------------
+
+/// 三个等级的门槛与特权。门槛复用 `BOOST_TIERS`，改数值只改一处。
+const BOOST_PERKS: [(u32, &str, [&str; 3]); 3] = [
+    (
+        BOOST_TIERS[0],
+        "等级 1",
+        ["自定义服务器邀请链接", "128 kbps 语音音质", "50 个自定义表情槽位"],
+    ),
+    (
+        BOOST_TIERS[1],
+        "等级 2",
+        ["1080p 60fps 画面分享", "服务器横幅与背景", "100 个自定义表情槽位"],
+    ),
+    (
+        BOOST_TIERS[2],
+        "等级 3",
+        ["384 kbps 语音音质", "动画服务器图标", "无限自定义表情槽位"],
+    ),
+];
+
+fn boost(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
+    let boost = app.active_boost();
+    let count = boost.count();
+    let level = boost.level();
+    let remaining = boost.remaining();
+    let mine = boost.boosted_by("你");
+
+    let next_text = match remaining {
+        Some(left) => format!("再 {left} 次加成升到等级 {}", level + 1),
+        None => "已经是最高等级，感谢每一位加成者".to_string(),
+    };
+    let bar = div()
+        .relative()
+        .w_full()
+        .h(px(8.))
+        .rounded(px(4.))
+        .bg(rgb(palette::bg_divider()))
+        .child(
+            div()
+                .w(relative(boost.progress().clamp(0.0, 1.0)))
+                .h_full()
+                .rounded(px(4.))
+                .bg(rgb(palette::accent())),
+        );
+
+    // 主按钮：没加成时显示「加成此服务器」，已加成时可撤销。
+    let (label, bg, fg) = if mine {
+        ("撤销我的加成", palette::bg_channel_selected(), palette::text_primary())
+    } else {
+        ("加成此服务器", palette::accent(), palette::WHITE)
+    };
+    let toggle = div()
+        .flex_shrink_0()
+        .h(px(36.))
+        .px_4()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(4.))
+        .bg(rgb(bg))
+        .hover(|el| el.opacity(0.9))
+        .text_size(px(13.))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(rgb(fg))
+        .child(label)
+        .id("boost-toggle")
+        .on_click(cx.listener(|this, _, _, cx| this.toggle_boost(cx)));
+
+    let mut page = shell(
+        "加成",
+        "成员用加成把服务器升到更高等级，解锁更好的音质、画质与表情槽位。",
+    );
+
+    if let Some(notice) = app.boost_notice.clone() {
+        page = page.child(
+            h_flex()
+                .w_full()
+                .px_3()
+                .h(px(32.))
+                .gap_2()
+                .items_center()
+                .rounded(px(6.))
+                .bg(rgb(palette::bg_sidebar()))
+                .border_1()
+                .border_color(rgb(palette::accent()))
+                .text_size(px(12.))
+                .text_color(rgb(palette::text_primary()))
+                .child(ico(IconName::Sparkles, Size::XSmall).text_color(rgb(palette::accent())))
+                .child(div().flex_1().child(notice))
+                .child(
+                    div()
+                        .w(px(18.))
+                        .h(px(18.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(3.))
+                        .hover(|el| el.bg(rgb(palette::bg_channel_hover())))
+                        .child(ico(IconName::X, Size::XSmall))
+                        .id("boost-notice-close")
+                        .on_click(cx.listener(|this, _, _, cx| this.dismiss_boost_notice(cx))),
+                ),
+        );
+    }
+
+    // 等级总览：大数字 + 进度条 + 加成按钮。
+    page = page.child(
+        div()
+            .w_full()
+            .p(px(20.))
+            .rounded(px(10.))
+            .bg(rgb(palette::bg_reaction_mine()))
+            .child(
+                h_flex()
+                    .gap_4()
+                    .items_center()
+                    .child(
+                        div()
+                            .w(px(56.))
+                            .h(px(56.))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(16.))
+                            .bg(rgb(palette::accent()))
+                            .child(
+                                ico(IconName::Sparkles, Size::Large)
+                                    .text_color(rgb(palette::WHITE)),
+                            ),
+                    )
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_2()
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .items_center()
+                                    .child(
+                                        div()
+                                            .text_size(px(18.))
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(rgb(palette::text_primary()))
+                                            .child(format!("等级 {level}")),
+                                    )
+                                    .child(
+                                        div()
+                                            .px_2()
+                                            .py(px(1.))
+                                            .rounded(px(10.))
+                                            .bg(rgb(palette::accent()))
+                                            .text_size(px(11.))
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(rgb(palette::WHITE))
+                                            .child(format!("{count} 次加成")),
+                                    ),
+                            )
+                            .child(bar)
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(rgb(palette::text_secondary()))
+                                    .child(next_text),
+                            ),
+                    )
+                    .child(toggle),
+            ),
+    );
+
+    // 三级特权：已达成的卡片用品牌色描边并列出已解锁。
+    let mut tiers = h_flex().w_full().gap_3();
+    for (threshold, title, perks) in BOOST_PERKS.iter() {
+        let reached = count >= *threshold;
+        let left = threshold.saturating_sub(count);
+        let mut list = v_flex().gap_1();
+        for perk in perks.iter() {
+            list = list.child(
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        ico(
+                            if reached {
+                                IconName::Check
+                            } else {
+                                IconName::Circle
+                            },
+                            Size::XSmall,
+                        )
+                        .text_color(rgb(if reached {
+                            palette::success()
+                        } else {
+                            palette::text_dim()
+                        })),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(rgb(if reached {
+                                palette::text_secondary()
+                            } else {
+                                palette::text_muted()
+                            }))
+                            .child(*perk),
+                    ),
+            );
+        }
+
+        tiers = tiers.child(
+            v_flex()
+                .flex_1()
+                .p(px(14.))
+                .gap_3()
+                .rounded(px(8.))
+                .bg(rgb(palette::bg_sidebar()))
+                .border_1()
+                .border_color(rgb(if reached {
+                    palette::accent()
+                } else {
+                    palette::border_default()
+                }))
+                .child(
+                    h_flex()
+                        .justify_between()
+                        .items_center()
+                        .child(
+                            div()
+                                .text_size(px(14.))
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(rgb(palette::text_primary()))
+                                .child(*title),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(rgb(palette::text_muted()))
+                                .child(format!("{threshold} 次加成")),
+                        ),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(if reached {
+                            palette::success()
+                        } else {
+                            palette::text_dim()
+                        }))
+                        .child(if reached {
+                            "已解锁".to_string()
+                        } else {
+                            format!("还差 {left} 次")
+                        }),
+                )
+                .child(list),
+        );
+    }
+    page = page.child(tiers);
+
+    // 加成者列表。
+    let mut people = h_flex().flex_wrap().gap_2();
+    for booster in boost.boosters.iter() {
+        let letter = booster
+            .name
+            .chars()
+            .next()
+            .unwrap_or('?')
+            .to_uppercase()
+            .next()
+            .unwrap_or('?');
+        people = people.child(
+            h_flex()
+                .w(px(160.))
+                .gap_2()
+                .items_center()
+                .px_2()
+                .py(px(6.))
+                .rounded(px(6.))
+                .bg(rgb(palette::bg_sidebar()))
+                .child(avatar(letter, booster.color, px(28.), true))
+                .child(
+                    v_flex()
+                        .min_w_0()
+                        .gap(px(1.))
+                        .child(
+                            div()
+                                .truncate()
+                                .text_size(px(13.))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(rgb(palette::text_primary()))
+                                .child(booster.name.clone()),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(rgb(palette::text_muted()))
+                                .child(booster.time_label()),
+                        ),
+                ),
+        );
+    }
+    if count == 0 {
+        people = people.child(
+            div()
+                .text_size(px(12.))
+                .text_color(rgb(palette::text_muted()))
+                .child("还没有人加成，服务器停在等级 0。"),
+        );
+    }
+
+    page.child(
+        v_flex()
+            .w_full()
+            .gap_3()
+            .child(
+                h_flex()
+                    .justify_between()
+                    .items_center()
+                    .child(
+                        div()
+                            .text_size(px(14.))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(rgb(palette::text_primary()))
+                            .child("加成者"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(rgb(palette::text_muted()))
+                            .child(format!("共 {count} 人次")),
+                    ),
+            )
+            .child(people)
+            .child(hint("Demo 里只有你能加成或撤销，其他人是种子数据。")),
     )
 }

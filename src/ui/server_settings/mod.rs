@@ -33,6 +33,7 @@ pub(crate) const SECTIONS: &[(ServerSettingsSection, &str, IconName)] = &[
     (ServerSettingsSection::Invites, "邀请", IconName::Link),
     (ServerSettingsSection::Members, "成员", IconName::Users),
     (ServerSettingsSection::Audit, "审核日志", IconName::Logs),
+    (ServerSettingsSection::Boost, "加成", IconName::Sparkles),
 ];
 
 /// 当前分类的标题文案。

@@ -2012,6 +2012,99 @@ impl ServerWelcome {
     }
 }
 
+/// 服务器加成的等级门槛：累计加成次数达到这些值时升到 1 / 2 / 3 级。
+pub const BOOST_TIERS: [u32; 3] = [2, 7, 14];
+
+/// 一次服务器加成（谁在什么时候加的）。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Booster {
+    pub name: String,
+    pub color: u32,
+    /// 加成时间（距今分钟数），用于「N 小时前」展示。
+    pub minutes_ago: u32,
+}
+
+impl Booster {
+    pub fn new(name: impl Into<String>, color: u32, minutes_ago: u32) -> Self {
+        Self {
+            name: name.into(),
+            color,
+            minutes_ago,
+        }
+    }
+
+    pub fn time_label(&self) -> String {
+        relative_label(self.minutes_ago)
+    }
+}
+
+/// 某服务器的加成情况。归属用服务器名标记，没有记录的服务器按 0 次处理。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ServerBoost {
+    pub server: String,
+    pub boosters: Vec<Booster>,
+}
+
+impl ServerBoost {
+    pub fn new(server: impl Into<String>) -> Self {
+        Self {
+            server: server.into(),
+            boosters: Vec::new(),
+        }
+    }
+
+    pub fn with(mut self, boosters: Vec<Booster>) -> Self {
+        self.boosters = boosters;
+        self
+    }
+
+    pub fn count(&self) -> u32 {
+        self.boosters.len() as u32
+    }
+
+    /// 当前等级 0..=3。
+    pub fn level(&self) -> u32 {
+        BOOST_TIERS
+            .iter()
+            .filter(|tier| self.count() >= **tier)
+            .count() as u32
+    }
+
+    /// 距离下一级还差几次；已满级返回 `None`。
+    pub fn remaining(&self) -> Option<u32> {
+        BOOST_TIERS
+            .iter()
+            .copied()
+            .find(|tier| self.count() < *tier)
+            .map(|tier| tier - self.count())
+    }
+
+    /// 当前等级区间内的进度（0.0..=1.0）；已满级恒为 1.0。
+    pub fn progress(&self) -> f32 {
+        let level = self.level() as usize;
+        if level >= BOOST_TIERS.len() {
+            return 1.0;
+        }
+        let floor = if level == 0 { 0 } else { BOOST_TIERS[level - 1] };
+        let ceil = BOOST_TIERS[level];
+        let span = ceil.saturating_sub(floor);
+        if span == 0 {
+            1.0
+        } else {
+            (self.count().saturating_sub(floor)) as f32 / span as f32
+        }
+    }
+
+    pub fn boosted_by(&self, name: &str) -> bool {
+        self.boosters.iter().any(|booster| booster.name == name)
+    }
+
+    /// 撤销某人的加成（Demo 里只用于「你」）。
+    pub fn remove_by(&mut self, name: &str) {
+        self.boosters.retain(|booster| booster.name != name);
+    }
+}
+
 /// 分钟数转相对时间标签（发帖与回帖共用）。
 fn relative_label(minutes: u32) -> String {
     match minutes {
@@ -2375,5 +2468,51 @@ mod tests {
         };
         assert!(!relaxed.require_rules);
         assert!(welcome.require_rules);
+    }
+
+    #[test]
+    fn boost_levels_progress_and_remaining() {
+        let people = |count: usize| {
+            (0..count)
+                .map(|index| Booster::new(format!("人{index}"), 0x5865f2, index as u32))
+                .collect::<Vec<_>>()
+        };
+
+        // 0/1 次 → 等级 0；2 次 → 1 级；7 次 → 2 级；14 次 → 3 级。
+        for (count, level) in [(0, 0), (1, 0), (2, 1), (6, 1), (7, 2), (13, 2), (14, 3)] {
+            let boost = ServerBoost::new("开发者社区").with(people(count));
+            assert_eq!(boost.count(), count as u32);
+            assert_eq!(boost.level(), level, "{count} 次应为等级 {level}");
+        }
+
+        // 距离下一级的差值与进度。
+        let empty = ServerBoost::new("空服");
+        assert_eq!(empty.remaining(), Some(2));
+        assert_eq!(empty.progress(), 0.0);
+
+        let one = ServerBoost::new("空服").with(people(1));
+        assert_eq!(one.remaining(), Some(1));
+        assert!((one.progress() - 0.5).abs() < f32::EPSILON);
+
+        let mid = ServerBoost::new("空服").with(people(9));
+        assert_eq!(mid.remaining(), Some(5));
+        assert!((mid.progress() - 2.0 / 7.0).abs() < 1e-6);
+
+        let full = ServerBoost::new("空服").with(people(15));
+        assert_eq!(full.level(), 3);
+        assert_eq!(full.remaining(), None);
+        assert!((full.progress() - 1.0).abs() < f32::EPSILON);
+
+        // 加成者查询与撤销。
+        let mut boost = ServerBoost::new("空服").with(vec![
+            Booster::new("你", 0x5865f2, 0),
+            Booster::new("Nova", 0x00a8fc, 30),
+        ]);
+        assert!(boost.boosted_by("你"));
+        boost.remove_by("你");
+        assert!(!boost.boosted_by("你"));
+        assert_eq!(boost.count(), 1);
+        // 时间标签走相对时间格式化。
+        assert_eq!(boost.boosters[0].time_label(), "30 分钟前");
     }
 }
