@@ -5,8 +5,8 @@ use super::models::{
     Category, Channel, ChatThread, DiscoverServer, DmConversation, Friend, FriendRequest, Gif,
     HelpArticle, Invite, EventCategory, ForumPost, ForumReply, InviteExpiry, Member, Message,
     MessageRequest, MessageRequestState, MyProfile, NotifyLevel, PermissionGrant, PermissionState,
-    Poll, ReadReceipt, Role, Server, ServerBoost, ServerEvent, ServerWelcome, Sticker, ThreadReply,
-    WelcomeRule,
+    Poll, ReadReceipt, Role, Server, ServerBoost, ServerEvent, ServerTemplate, ServerWelcome,
+    Sticker, TemplateCategory, TemplateChannel, ThreadReply, WelcomeRule,
 };
 
 /// 前端模拟服务器数据。
@@ -813,6 +813,134 @@ pub fn seed_boosts() -> Vec<ServerBoost> {
         ServerBoost::new("设计工坊").with(vec![Booster::new("Lin", 0x57f287, 5 * 24 * 60)]),
     ]
 }
+
+/// 新建服务器时可选的模板：静态数据，不进快照（创建出来的服务器才进快照）。
+pub fn server_templates() -> &'static [ServerTemplate] {
+    TEMPLATES
+}
+
+const TEMPLATES: &[ServerTemplate] = &[
+    ServerTemplate {
+        key: "gaming",
+        name: "游戏公会",
+        tagline: "开黑组队、战报与语音房，适合小队或社区公会。",
+        badge: "游",
+        color: 0xeb459e,
+        categories: &[
+            TemplateCategory {
+                name: "信息",
+                channels: &[
+                    TemplateChannel::text("公告", "赛季安排与公会通知"),
+                    TemplateChannel::text("规则", "公会守则与处罚说明"),
+                ],
+            },
+            TemplateCategory {
+                name: "开黑",
+                channels: &[
+                    TemplateChannel::text("组队", "报位置与段位，找队友开黑"),
+                    TemplateChannel::text("战报", "战绩截图与高光集锦"),
+                    TemplateChannel::voice("开黑房"),
+                ],
+            },
+            TemplateCategory {
+                name: "研究",
+                channels: &[TemplateChannel::forum("阵容研究", "版本阵容与出装讨论")],
+            },
+        ],
+        welcome: "先看「公告」里的赛季安排，「组队」频道随时喊人，语音房进来就能聊。",
+        rules: &[
+            ("不开挂、不代练", "发现即移出公会，不接受申诉。"),
+            ("组队先报名", "在「组队」频道写清位置与段位，方便队友判断。"),
+        ],
+    },
+    ServerTemplate {
+        key: "study",
+        name: "学习小组",
+        tagline: "课程通知、作业互评与自习室，适合班级或读书会。",
+        badge: "学",
+        color: 0x57f287,
+        categories: &[
+            TemplateCategory {
+                name: "课程",
+                channels: &[
+                    TemplateChannel::text("通知", "课程安排与截止时间"),
+                    TemplateChannel::text("作业", "提交与互评作业"),
+                ],
+            },
+            TemplateCategory {
+                name: "讨论",
+                channels: &[
+                    TemplateChannel::text("答疑", "卡住的地方贴出来"),
+                    TemplateChannel::text("资料", "课件、笔记与参考链接"),
+                    TemplateChannel::voice("自习室"),
+                ],
+            },
+        ],
+        welcome: "作业截止时间都在「通知」里，卡住了去「答疑」，想安静学会儿就进自习室。",
+        rules: &[
+            ("先搜索再提问", "同一问题重复开帖会被合并。"),
+            ("资料注明来源", "转载课件请附原始链接。"),
+        ],
+    },
+    ServerTemplate {
+        key: "design",
+        name: "设计工作室",
+        tagline: "需求、交付与评审室，适合接单小队或设计小组。",
+        badge: "设",
+        color: 0xfaa61c,
+        categories: &[
+            TemplateCategory {
+                name: "项目",
+                channels: &[
+                    TemplateChannel::text("需求", "客户需求与验收标准"),
+                    TemplateChannel::text("交付", "成稿与版本记录"),
+                ],
+            },
+            TemplateCategory {
+                name: "灵感",
+                channels: &[
+                    TemplateChannel::text("灵感", "随手收集的参考"),
+                    TemplateChannel::text("素材", "字体、图标与授权说明"),
+                    TemplateChannel::voice("评审室"),
+                ],
+            },
+        ],
+        welcome: "需求写进「需求」频道再动手，交付走「交付」并附版本号，评审约在评审室。",
+        rules: &[
+            ("先对齐再开工", "需求没写清验收标准就先问，别自己猜。"),
+            ("素材标明授权", "商用素材必须附授权来源。"),
+        ],
+    },
+    ServerTemplate {
+        key: "oss",
+        name: "开源项目",
+        tagline: "公告、Issue 与 RFC 讨论，适合维护者与贡献者。",
+        badge: "源",
+        color: 0x5865f2,
+        categories: &[
+            TemplateCategory {
+                name: "仓库",
+                channels: &[
+                    TemplateChannel::text("公告", "版本发布与路线图"),
+                    TemplateChannel::text("Issues", "缺陷复现与排查"),
+                ],
+            },
+            TemplateCategory {
+                name: "开发",
+                channels: &[
+                    TemplateChannel::text("Pull Requests", "改动说明与评审意见"),
+                    TemplateChannel::text("讨论", "用法提问与经验分享"),
+                    TemplateChannel::forum("RFC", "较大改动先在这里提案"),
+                ],
+            },
+        ],
+        welcome: "报缺陷去「Issues」（附复现步骤），提改动去「Pull Requests」，大改先写 RFC。",
+        rules: &[
+            ("一个 Issue 一件事", "混在一起的报告会被要求拆开。"),
+            ("附上最小复现", "没有复现步骤的缺陷会先挂起。"),
+        ],
+    },
+];
 
 /// 前端模拟私信消息数据，键为好友名。
 pub fn seed_dm_messages() -> HashMap<String, Vec<Message>> {

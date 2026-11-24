@@ -2012,6 +2012,129 @@ impl ServerWelcome {
     }
 }
 
+/// 模板里的一个频道。
+#[derive(Clone, Copy)]
+pub struct TemplateChannel {
+    pub name: &'static str,
+    pub kind: ChannelKind,
+    pub topic: &'static str,
+}
+
+impl TemplateChannel {
+    pub const fn text(name: &'static str, topic: &'static str) -> Self {
+        Self {
+            name,
+            kind: ChannelKind::Text,
+            topic,
+        }
+    }
+
+    pub const fn voice(name: &'static str) -> Self {
+        Self {
+            name,
+            kind: ChannelKind::Voice,
+            topic: "",
+        }
+    }
+
+    pub const fn forum(name: &'static str, topic: &'static str) -> Self {
+        Self {
+            name,
+            kind: ChannelKind::Forum,
+            topic,
+        }
+    }
+
+    /// 按模板条目生成真实频道。
+    pub fn to_channel(&self) -> Channel {
+        match self.kind {
+            ChannelKind::Text => Channel::text(self.name, self.topic),
+            ChannelKind::Voice => Channel::voice(self.name),
+            ChannelKind::Forum => Channel::forum(self.name, self.topic),
+        }
+    }
+}
+
+/// 模板里的一个分类。
+#[derive(Clone, Copy)]
+pub struct TemplateCategory {
+    pub name: &'static str,
+    pub channels: &'static [TemplateChannel],
+}
+
+/// 服务器模板：静态种子，不进快照（被创建出来的服务器才进快照）。
+///
+/// 字段全是 `&'static str`，所以不需要 serde；唯一用途是「新建服务器」时
+/// 一次性铺好分类、频道、简介与欢迎屏幕。
+#[derive(Clone, Copy)]
+pub struct ServerTemplate {
+    pub key: &'static str,
+    pub name: &'static str,
+    pub tagline: &'static str,
+    pub badge: &'static str,
+    pub color: u32,
+    pub categories: &'static [TemplateCategory],
+    /// 欢迎屏幕的介绍段落。
+    pub welcome: &'static str,
+    /// 欢迎屏幕的社区规则：(标题, 正文)。
+    pub rules: &'static [(&'static str, &'static str)],
+}
+
+impl ServerTemplate {
+    pub fn channel_count(&self) -> usize {
+        self.categories
+            .iter()
+            .map(|category| category.channels.len())
+            .sum()
+    }
+
+    /// 模板里所有文字频道名（按侧栏顺序），用于欢迎页的推荐频道。
+    pub fn text_channels(&self) -> Vec<String> {
+        self.categories
+            .iter()
+            .flat_map(|category| category.channels.iter())
+            .filter(|channel| channel.kind == ChannelKind::Text)
+            .map(|channel| channel.name.to_string())
+            .collect()
+    }
+
+    /// 按模板生成服务器；名称沿用用户输入，徽标与配色来自模板。
+    pub fn to_server(&self, name: &str) -> Server {
+        Server {
+            name: name.to_string(),
+            badge: self.badge.to_string(),
+            color: self.color,
+            notify: NotifyLevel::All,
+            description: self.tagline.to_string(),
+            categories: self
+                .categories
+                .iter()
+                .map(|category| Category {
+                    name: category.name.to_string(),
+                    channels: category.channels.iter().map(|ch| ch.to_channel()).collect(),
+                })
+                .collect(),
+        }
+    }
+
+    /// 按模板生成该服务器的欢迎屏幕：介绍 + 规则 + 前两个文字频道作推荐。
+    pub fn to_welcome(&self, name: &str) -> ServerWelcome {
+        let recommended: Vec<String> = self.text_channels().into_iter().take(2).collect();
+        ServerWelcome::new(
+            name,
+            format!("欢迎来到 {name}"),
+            self.welcome.to_string(),
+        )
+        .rules(
+            self.rules
+                .iter()
+                .map(|(title, body)| WelcomeRule::new(*title, *body))
+                .collect(),
+        )
+        .recommended(&recommended.iter().map(String::as_str).collect::<Vec<_>>())
+    }
+}
+
 /// 服务器加成的等级门槛：累计加成次数达到这些值时升到 1 / 2 / 3 级。
 pub const BOOST_TIERS: [u32; 3] = [2, 7, 14];
 
@@ -2514,5 +2637,54 @@ mod tests {
         assert_eq!(boost.count(), 1);
         // 时间标签走相对时间格式化。
         assert_eq!(boost.boosters[0].time_label(), "30 分钟前");
+    }
+
+    #[test]
+    fn templates_build_server_and_welcome() {
+        let templates = crate::data::server_templates();
+        assert_eq!(templates.len(), 4);
+
+        for template in templates {
+            assert!(!template.name.is_empty());
+            assert!(template.channel_count() >= 3, "{} 模板频道太少", template.name);
+            // 推荐频道只取文字频道，且最多两个。
+            let texts = template.text_channels();
+            assert!(!texts.is_empty());
+            assert!(texts.iter().all(|name| !name.contains("开黑房")));
+            assert!(template.to_welcome("测试服").recommended.len() <= 2);
+        }
+
+        let gaming = &templates[0];
+        let server = gaming.to_server("我的公会");
+        assert_eq!(server.name, "我的公会");
+        assert_eq!(server.badge, gaming.badge);
+        assert_eq!(server.color, gaming.color);
+        assert_eq!(server.description, gaming.tagline);
+        assert_eq!(server.categories.len(), gaming.categories.len());
+        assert_eq!(
+            server.categories[0].channels.len(),
+            gaming.categories[0].channels.len()
+        );
+        // 语音条目生成 Voice 频道，论坛条目生成 Forum 频道。
+        let kinds: Vec<ChannelKind> = server
+            .categories
+            .iter()
+            .flat_map(|category| category.channels.iter())
+            .map(|channel| channel.kind)
+            .collect();
+        assert!(kinds.contains(&ChannelKind::Voice));
+        assert!(kinds.contains(&ChannelKind::Forum));
+
+        let welcome = gaming.to_welcome("我的公会");
+        assert_eq!(welcome.server, "我的公会");
+        assert!(welcome.headline.contains("我的公会"));
+        assert_eq!(welcome.rules.len(), gaming.rules.len());
+        assert!(welcome.require_rules);
+        assert!(
+            welcome
+                .recommended
+                .iter()
+                .all(|name| gaming.text_channels().contains(name))
+        );
     }
 }

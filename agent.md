@@ -45,7 +45,7 @@ src/
     ├── category_dialog.rs    # 分类弹层（新建 / 重命名，复用 create_dialog::dialog）
     ├── server_menu.rs        # 服务器下拉菜单（邀请/静音/标记已读/创建频道/离开，贴侧栏头部下方）
     ├── invite_dialog.rs      # 邀请好友弹层（展示邀请链接，提交即复制到剪贴板）
-    ├── create_dialog.rs      # 新建服务器 / 新建频道居中模态（通用 dialog 骨架，可复用）
+    ├── create_dialog.rs      # 新建服务器（名称 + 模板选择，自定义三层模态）/ 新建频道（通用 dialog 骨架）
     ├── topic_dialog.rs       # 频道主题编辑弹层（复用 create_dialog::dialog）
     ├── dm_call_panel.rs      # 私信语音/视频通话浮窗（呼叫中/已接通、设备控制、挂断，挂根层跨视图保持）
     ├── dm_sidebar.rs         # 私信侧栏（真实搜索框 + 好友入口 + 会话列表 + 发起对话）
@@ -308,7 +308,7 @@ gpui_kit::application()
 ### 新建服务器 / 频道约定
 
 - `Server.name` / `Server.badge` 为 `String`（支持运行时新建），`Server::new(name, color)` 生成带默认「文字频道/闲聊」的服务器，徽标取名称首字符。
-- 服务器栏 `+`（`rail-create-server`）→ `app::open_create_server`；频道分类 `+` → `app::open_create_channel`（仅服务器视图可用）。两者共用 `create_dialog.rs` 的 `dialog()` 骨架，由 `show_create_server` / `show_create_channel` 控制显隐，互斥。
+- 服务器栏 `+`（`rail-create-server`）→ `app::open_create_server`；频道分类 `+` → `app::open_create_channel`（仅服务器视图可用）。由 `show_create_server` / `show_create_channel` 控制显隐，互斥。**新建服务器**用 `create_dialog.rs` 里自定义的三层模态（名称输入 + 模板卡，卡片不能嵌进可点击遮罩，否则点模板会冒泡关窗）；**新建频道**仍走通用 `dialog()` 骨架。
 - 输入草稿用独立 `Entity<InputState>`（server_name_input / channel_name_input），订阅 Enter 提交：`create_server` / `create_channel`。两个方法都在成功后调用 `select_server` / `select_channel` 走统一的 `reset_session`（会关闭弹层、清搜索、滚动到底）。
 - `create_channel` 把频道加入目标分类（`create_channel_category`，默认为第一个分类），同名频道在服务器内全局拦截。新建服务器配色由 `next_server_color()` 按数量轮换。
 - 弹层关闭有三个入口：遮罩点击、右上角 X、取消按钮；三个 handler 共享同一个闭包，用 `Rc` 包装避免 Rust 2024 下的重复移动错误。
@@ -563,6 +563,14 @@ gpui_kit::application()
 - 持久化：`Snapshot.boosts: Option<Vec<ServerBoost>>`（缺字段保留种子）；`restore_state` 丢弃服务器已不存在的记录。种子 `seed_boosts()`：开发者社区 8 人（等级 2、距 3 级差 6 次，含「你」）、设计工坊 1 人（等级 0、差 1 次）。
 - 入口两处：`ui/server_settings/pages.rs::boost()`（设置页 9 个分类之一）+ `ui/channel_sidebar.rs` 服务器名下方的紧凑加成条（等级 + `relative(progress)` 进度条，点击 `open_boost_page`）。`open_boost_page` 必须**先** `open_server_settings`（它会把分类重置为 Overview）**再**把分类改成 Boost。
 - 图标：等级用 `Sparkles`，未达成特权用 `Circle`、已达成用 `Check`（assets 里仍没有 `Lock`）。
+
+### 服务器模板约定
+
+- 数据：`data::ServerTemplate { key, name, tagline, badge, color, categories: &'static [TemplateCategory], welcome, rules: &'static [(&str, &str)] }` + `TemplateCategory { name, channels: &'static [TemplateChannel] }` + `TemplateChannel { name, kind, topic }`。全部 `&'static str` + `Copy`，**不实现 serde、不进快照**——只有创建出来的服务器才持久化。种子表在 `seed.rs` 的 `const TEMPLATES`，`server_templates()` 返回 `&'static [ServerTemplate]`。
+- 方法：`channel_count()/text_channels()`（只取 Text，供欢迎页推荐）/`to_server(name)` / `to_welcome(name)`。`to_welcome` 取前 **2** 个文字频道作推荐，规则来自模板 `rules`。
+- app：字段 `create_template: Option<String>`（存 key，不存索引，种子顺序变了也不会错位）；`select_create_template(key)` 是**切换**语义（再点一次取消）；`open_create_server` 打开时清空模板选择。
+- `create_server` 顺序：读输入 → `create_template.take()` → **名称留空时用模板名兜底**（从零创建仍必须填名）→ 生成 server / 覆盖同名旧欢迎配置并插入 → push → `log_audit(AuditKind::Server, "创建了服务器", "名字（模板：X）")` → `select_server` → 用模板时再 `open_welcome`。注意 `open_welcome` 必须放在 `select_server` 之后，否则会被 `reset_session` 清掉。
+- UI：`ui/create_dialog.rs::render_server` 是自定义模态（560 宽，两列 248 宽模板卡），三层兄弟结构 + `FluentBuilder` 的 `.when(active, 打勾)`；底部提交按钮文案随选择在「创建服务器 / 用模板创建」间切换；提示行随「有/无选中 + 名称是否为空」变化。
 
 ### 主题切换约定
 

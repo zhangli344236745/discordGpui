@@ -401,6 +401,8 @@ pub struct DiscordApp {
     // 新建服务器 / 频道弹层：输入草稿 + 弹层显隐。
     pub(crate) show_create_server: bool,
     pub(crate) show_create_channel: bool,
+    /// 新建服务器时选中的模板 key（None = 从零开始）。
+    pub(crate) create_template: Option<String>,
     pub(crate) server_name_input: Entity<InputState>,
     pub(crate) channel_name_input: Entity<InputState>,
 
@@ -1211,6 +1213,7 @@ impl DiscordApp {
             output_volume: 100,
             show_create_server: false,
             show_create_channel: false,
+            create_template: None,
             server_name_input,
             channel_name_input,
             friend_tab: FriendTab::Online,
@@ -2013,10 +2016,11 @@ impl DiscordApp {
     // 新建服务器 / 频道
     // -----------------------------------------------------------------------
 
-    /// 打开新建服务器弹层，清空输入草稿。
+    /// 打开新建服务器弹层，清空输入草稿与模板选择。
     pub(crate) fn open_create_server(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.server_name_input
             .update(cx, |input, cx| input.set_value("", window, cx));
+        self.create_template = None;
         self.show_create_server = true;
         self.show_create_channel = false;
         self.channel_menu = None;
@@ -2047,6 +2051,16 @@ impl DiscordApp {
         self.show_create_channel = false;
     }
 
+    /// 点选模板卡片：再点一次取消选择，回到「从零创建」。
+    pub(crate) fn select_create_template(&mut self, key: &str, cx: &mut Context<Self>) {
+        self.create_template = if self.create_template.as_deref() == Some(key) {
+            None
+        } else {
+            Some(key.to_string())
+        };
+        cx.notify();
+    }
+
     /// 按当前服务器数量轮换配色，让新建服务器有区分度。
     fn next_server_color(&self) -> u32 {
         // 品牌色要读当前主题，所以不能写成 const 数组。
@@ -2061,17 +2075,57 @@ impl DiscordApp {
         colors[self.servers.len() % colors.len()]
     }
 
-    /// 创建服务器：写入名称、默认频道，并切换过去。
+    /// 创建服务器：按选中模板铺好分类与频道，写入专属欢迎屏幕并切换过去。
     pub(crate) fn create_server(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let name = self.server_name_input.read(cx).value().trim().to_string();
+        let typed = self.server_name_input.read(cx).value().trim().to_string();
+        let template = self
+            .create_template
+            .take()
+            .and_then(|key| {
+                crate::data::server_templates()
+                    .iter()
+                    .find(|template| template.key == key)
+                    .copied()
+            });
+        // 名称留空时用模板名兜底，从零创建时仍然必须填名字。
+        let name = if typed.is_empty() {
+            template.map(|template| template.name.to_string()).unwrap_or_default()
+        } else {
+            typed
+        };
         if name.is_empty() {
             return;
         }
-        let color = self.next_server_color();
-        self.servers.push(Server::new(name, color));
+
+        let server = match template {
+            Some(template) => template.to_server(&name),
+            None => {
+                let color = self.next_server_color();
+                Server::new(name.clone(), color)
+            }
+        };
+        if let Some(template) = template {
+            // 同名服务器的旧欢迎配置会被覆盖，避免残留上一份规则。
+            self.welcome_screens.retain(|welcome| welcome.server != name);
+            self.welcome_screens.push(template.to_welcome(&name));
+        }
+
+        self.servers.push(server);
         let index = self.servers.len() - 1;
         self.show_create_server = false;
+        self.log_audit(
+            AuditKind::Server,
+            "创建了服务器",
+            match template {
+                Some(template) => format!("{name}（模板：{}）", template.name),
+                None => name.clone(),
+            },
+        );
         self.select_server(index, window, cx);
+        // 用模板建的服务器直接走一遍欢迎屏幕，介绍与规则才有机会被看到。
+        if template.is_some() {
+            self.open_welcome(name, cx);
+        }
     }
 
     /// 创建频道：加入目标分类（默认第一个分类），并切换过去。
