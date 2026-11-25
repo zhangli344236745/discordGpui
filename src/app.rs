@@ -7494,6 +7494,66 @@ impl DiscordApp {
         self.show_voice_room = false;
     }
 
+    /// 断线重连后同步语音状态：已有房间则拉取参与者，房间丢失则重新 join。
+    fn resync_voice(&mut self, cx: &mut Context<Self>) {
+        let Some(channel_id) = self.voice_channel_id.clone() else {
+            return;
+        };
+        if !self.is_online() {
+            return;
+        }
+        let Some(net) = self.net.clone() else {
+            return;
+        };
+        if self.voice_room.is_some() {
+            // 已在房间：拉取最新参与者投影
+            cx.spawn(async move |this, cx| {
+                let result = net
+                    .execute_as::<Vec<crate::net::dto::VoiceParticipantDto>>(
+                        api::voice_participants(&channel_id),
+                        true,
+                    )
+                    .await;
+                let _ = this.update(cx, |app, cx| {
+                    if let Ok(rows) = result {
+                        app.voice_participants.clear();
+                        for participant in rows {
+                            app.voice_participants.push(VoiceParticipant {
+                                name: crate::data::persist::leak(participant.name),
+                                color: participant.color,
+                                muted: !participant.mic,
+                            });
+                        }
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        } else {
+            // 离线加入或 join 失败：重连后补一次
+            cx.spawn(async move |this, cx| {
+                let result = net
+                    .execute_as::<crate::net::dto::VoiceJoinDto>(api::voice_join(&channel_id), true)
+                    .await;
+                let _ = this.update(cx, |app, cx| {
+                    if let Ok(join) = result {
+                        app.voice_room = Some(join.room);
+                        app.voice_participants.clear();
+                        for participant in &join.participants {
+                            app.voice_participants.push(VoiceParticipant {
+                                name: crate::data::persist::leak(participant.name.clone()),
+                                color: participant.color,
+                                muted: !participant.mic,
+                            });
+                        }
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
+    }
+
     /// 从在线成员里抽三位作为语音房间的其他参与者。
     fn seed_voice_participants(&self) -> Vec<VoiceParticipant> {
         self.members
@@ -10141,6 +10201,8 @@ impl DiscordApp {
                 }
                 if event == "READY" {
                     self.gateway_connected = true;
+                    // 断线重连后校准语音房间：在线成员可能已变化，必要时重新加入
+                    self.resync_voice(cx);
                     cx.notify();
                     return;
                 }

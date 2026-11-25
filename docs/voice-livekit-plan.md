@@ -10,6 +10,7 @@
 - 客户端点击语音频道 → `POST /channels/{id}/voice/join`：拿 `room` 与参与者投影，面板显示真实在线成员；
 - 断开 → `POST /channels/{id}/voice/leave`；麦克风开关 → `PUT /voice/{room}/me`；
 - 订阅 `VOICE_STATE_UPDATE`：其他端加入/静音/离开时参与者列表实时更新；
+- Gateway 重连（READY）后自动校准：已在房间则拉取参与者，房间丢失则重新 join（4.6 的信令层）；
 - 离线或未配置时保持原 Demo 行为（种子参与者）；
 - 请求构造有单测（`src/net/api.rs`），服务端链路由 `pytest` 与 `smoke.py` 覆盖。
 
