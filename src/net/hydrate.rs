@@ -9,15 +9,15 @@ use std::collections::HashMap;
 
 use crate::data::{
     Attachment, AttachmentKind, Category, Channel, ChannelKind, DmConversation, Friend,
-    FriendRequest, Member, Message, MessageRequest, MyProfile, NotifyLevel, PermissionGrant, PermissionState, Role,
-    Server,
+    FriendRequest, Member, Message, MessageRequest, MyProfile, Notification, NotificationKind,
+    NotificationTarget, NotifyLevel, PermissionGrant, PermissionState, Role, Server,
 };
 
 use super::dto::{
-    BoostDto, ChannelDto, ChannelUnreadDto, DmDto, DmMessageDto, FriendDto, FriendGroupDto,
+    BookmarkDto, BoostDto, ChannelDto, ChannelUnreadDto, DmDto, DmMessageDto, FriendDto, FriendGroupDto,
     FriendRequestDto, ForumPostDto, InviteDto, MemberDto, MessageDto, MessageRequestDto,
-    PermissionMatrixDto, RoleDto, ServerDto, ServerEventDto, ServerTreeDto, UnreadCountsDto,
-    UserDto, WelcomeDto,
+    NotificationDto, PermissionMatrixDto, RoleDto, ServerDto, ServerEventDto, ServerTreeDto,
+    UnreadCountsDto, UserDto, WelcomeDto,
 };
 
 #[derive(Clone, Debug, Default)]
@@ -50,6 +50,8 @@ pub struct BootData {
     pub events: Vec<ServerEventDto>,
     pub boosts: Vec<(String, BoostDto)>,
     pub welcomes: Vec<(String, WelcomeDto)>,
+    pub notifications: Vec<NotificationDto>,
+    pub bookmarks: Vec<BookmarkDto>,
     pub groups: Vec<FriendGroupDto>,
     pub dms: Vec<DmDto>,
     pub counts: UnreadCountsDto,
@@ -79,6 +81,8 @@ pub struct Hydrated {
     pub boosts: Vec<crate::data::ServerBoost>,
     pub welcomes: Vec<crate::data::ServerWelcome>,
     pub welcome_joined: Vec<String>,
+    pub notifications: Vec<Notification>,
+    pub bookmarks: Vec<crate::data::Bookmark>,
     pub dm_conversations: Vec<DmConversation>,
     pub messages: Vec<Message>,
     pub index: RemoteIndex,
@@ -625,6 +629,105 @@ pub fn hydrate(data: BootData) -> Hydrated {
         }
     }
 
+    let mut bookmarks = Vec::new();
+    for bookmark in &data.bookmarks {
+        let is_dm = bookmark.target_kind == "dm";
+        let (server, channel) = if is_dm {
+            (
+                String::new(),
+                index
+                    .dms
+                    .iter()
+                    .find(|(_, id)| id.as_str() == bookmark.scope)
+                    .map(|(name, _)| (*name).to_string())
+                    .unwrap_or_default(),
+            )
+        } else {
+            let channel = data
+                .trees
+                .iter()
+                .flat_map(|tree| tree.channels.iter())
+                .find(|channel| channel.id == bookmark.scope)
+                .cloned();
+            let server_name = channel
+                .as_ref()
+                .and_then(|channel| {
+                    data.servers
+                        .iter()
+                        .find(|server| server.id == channel.server_id)
+                        .map(|server| server.name.clone())
+                })
+                .unwrap_or_default();
+            (
+                server_name,
+                channel.as_ref().map(|channel| channel.name.clone()).unwrap_or_default(),
+            )
+        };
+        let author = bookmark.author.clone().unwrap_or_default();
+        bookmarks.push(crate::data::Bookmark::new(
+            is_dm,
+            server,
+            channel,
+            if author.name.is_empty() { "已注销用户".into() } else { author.name },
+            author.color,
+            bookmark.content.clone(),
+            short_time(&bookmark.saved_at).to_string(),
+            0,
+        ));
+        if let Some(last) = bookmarks.last_mut() {
+            last.message_id = bookmark.target_id.clone();
+            last.target_kind = bookmark.target_kind.clone();
+        }
+    }
+
+    let mut notifications = Vec::new();
+    for notification in &data.notifications {
+        let kind = match notification.kind.as_str() {
+            "mention" => NotificationKind::Mention,
+            "dm" => NotificationKind::Dm,
+            "friend_request" => NotificationKind::FriendRequest,
+            _ => NotificationKind::UnreadChannel,
+        };
+        let target = if notification.target_kind == "dm"
+            && let Some(friend) = index
+                .dms
+                .iter()
+                .find(|(_, id)| id.as_str() == notification.target_id)
+                .map(|(name, _)| (*name).to_string())
+        {
+            NotificationTarget::Dm(friend)
+        } else if notification.target_kind == "channel" {
+            let channel = data
+                .trees
+                .iter()
+                .flat_map(|tree| tree.channels.iter())
+                .find(|channel| channel.id == notification.target_id);
+            if let Some(channel) = channel
+                && let Some(server) = data
+                    .servers
+                    .iter()
+                    .position(|server| server.id == channel.server_id)
+            {
+                NotificationTarget::Channel {
+                    server,
+                    channel: channel.name.clone(),
+                }
+            } else {
+                NotificationTarget::Friends
+            }
+        } else {
+            NotificationTarget::Friends
+        };
+        notifications.push(Notification {
+            kind,
+            title: notification.title.clone(),
+            body: notification.body.clone(),
+            time: short_time(&notification.created_at),
+            color: 0x5865f2,
+            target,
+        });
+    }
+
     let mut forum_posts = Vec::new();
     for post in &data.forum_posts {
         let (server_name, channel_name) = data
@@ -738,6 +841,8 @@ pub fn hydrate(data: BootData) -> Hydrated {
         boosts,
         welcomes,
         welcome_joined,
+        notifications,
+        bookmarks,
         dm_conversations: dms,
         messages,
         index,
@@ -808,6 +913,8 @@ mod tests {
             events: vec![],
             boosts: vec![],
             welcomes: vec![],
+            notifications: vec![],
+            bookmarks: vec![],
             groups: vec![],
             dms: vec![],
             counts: dto(json!({"channels":[{"channel_id":"ch1","server_id":"s1","unread":3}]})),

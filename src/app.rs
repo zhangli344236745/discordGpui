@@ -534,6 +534,7 @@ pub struct DiscordApp {
     pub(crate) pending_server_id: Option<String>,
     pub(crate) pending_channel: Option<String>,
     pub(crate) pending_forum_post: Option<String>,
+    pub(crate) backend_notifications: Vec<Notification>,
     pub(crate) has_more_messages: HashMap<String, bool>,
     pub(crate) loading_older: bool,
     pub(crate) loaded_dms: std::collections::HashSet<String>,
@@ -1404,6 +1405,7 @@ impl DiscordApp {
             pending_server_id: None,
             pending_channel: None,
             pending_forum_post: None,
+            backend_notifications: Vec::new(),
             has_more_messages: HashMap::new(),
             loading_older: false,
             loaded_dms: std::collections::HashSet::new(),
@@ -1828,6 +1830,9 @@ impl DiscordApp {
 
     /// 从未读频道、未读私信、收到的好友请求与 @提及 聚合通知列表。
     pub(crate) fn notifications(&self) -> Vec<Notification> {
+        if !self.backend_notifications.is_empty() {
+            return self.backend_notifications.clone();
+        }
         let mut items: Vec<Notification> = Vec::new();
 
         // @提及：扫描所有会话消息中含 @已知好友 的文本。
@@ -5412,11 +5417,32 @@ impl DiscordApp {
         };
         let body = bookmark_body(&message);
         let (is_dm, server, channel) = self.session_scope();
-        let existing = self
-            .bookmarks
-            .iter()
-            .position(|b| b.in_session(is_dm, &server, &channel) && b.text == body);
+        let existing = if !message.id.is_empty() {
+            self.bookmarks
+                .iter()
+                .position(|b| b.message_id == message.id)
+        } else {
+            self.bookmarks
+                .iter()
+                .position(|b| b.in_session(is_dm, &server, &channel) && b.text == body)
+        };
         if let Some(pos) = existing {
+            let removed_id = self.bookmarks[pos].message_id.clone();
+            if self.is_online()
+                && !removed_id.is_empty()
+                && let Some(net) = self.net.clone()
+            {
+                cx.spawn(async move |this, cx| {
+                    let result = net.execute(api::remove_bookmark(&removed_id), true).await;
+                    let _ = this.update(cx, |app, cx| {
+                        if let Err(error) = result {
+                            app.bookmark_notice = Some(format!("移除书签失败：{}", error.user_message()));
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+            }
             self.bookmarks.remove(pos);
             self.bookmark_notice = Some("已从书签移除".into());
         } else {
@@ -5433,6 +5459,29 @@ impl DiscordApp {
                     0,
                 ),
             );
+            if let Some(first) = self.bookmarks.first_mut() {
+                first.message_id = message.id.clone();
+                first.target_kind = if is_dm { "dm".into() } else { "channel".into() };
+            }
+            if self.is_online()
+                && !message.id.is_empty()
+                && let Some(net) = self.net.clone()
+            {
+                let message_id = message.id.clone();
+                let kind = if is_dm { "dm" } else { "channel" }.to_string();
+                cx.spawn(async move |this, cx| {
+                    let result = net
+                        .execute(api::save_bookmark(&message_id, &kind), true)
+                        .await;
+                    let _ = this.update(cx, |app, cx| {
+                        if let Err(error) = result {
+                            app.bookmark_notice = Some(format!("保存书签失败：{}", error.user_message()));
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+            }
             self.bookmark_notice = Some("已保存到书签".into());
         }
         self.close_message_menu();
@@ -5507,10 +5556,16 @@ impl DiscordApp {
         // reset_session 会关掉面板，跳转后重新打开，方便连续翻书签。
         self.show_bookmarks = true;
         // 切会话后 reset_session 会清掉高亮并滚到底部，所以定位必须放在之后。
-        match self
-            .current_messages()
-            .iter()
-            .position(|m| m.text == target.text)
+        let position = if !target.message_id.is_empty() {
+            self.current_messages()
+                .iter()
+                .position(|m| m.id == target.message_id)
+        } else {
+            self.current_messages()
+                .iter()
+                .position(|m| m.text == target.text)
+        };
+        match position
         {
             Some(index) => {
                 self.reveal_message(index);
@@ -10105,6 +10160,10 @@ impl DiscordApp {
         let mut events = Vec::new();
         let mut boosts = Vec::new();
         let mut welcomes = Vec::new();
+        let notifications: crate::net::dto::NotificationPageDto = net
+            .execute_as(api::notifications(), true)
+            .await?;
+        let bookmarks: Vec<crate::net::dto::BookmarkDto> = net.execute_as(api::bookmarks(), true).await?;
         let mut roles = Vec::new();
         let mut permissions = Vec::new();
         for server in &servers {
@@ -10211,6 +10270,8 @@ impl DiscordApp {
             events,
             boosts,
             welcomes,
+            notifications: notifications.items,
+            bookmarks,
             groups,
             dms,
             counts,
@@ -10327,6 +10388,8 @@ impl DiscordApp {
         self.boosts = data.boosts;
         self.welcome_screens = data.welcomes;
         self.welcome_joined = data.welcome_joined;
+        self.backend_notifications = data.notifications;
+        self.bookmarks = data.bookmarks;
         self.dm_conversations = data.dm_conversations;
         self.active_dm = if keep_view
             && previous_dm
@@ -10354,8 +10417,7 @@ impl DiscordApp {
             self.automod_rules.clear();
             self.forum_posts.clear();
             self.forum_open = None;
-            self.bookmarks.clear();
-            self.welcome_screens.clear();
+                self.welcome_screens.clear();
             self.welcome_joined.clear();
             self.boosts.clear();
         }

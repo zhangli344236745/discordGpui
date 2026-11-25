@@ -175,6 +175,33 @@ pub fn toggle_boost(server_id: &str, active: bool) -> ApiRequest {
         .with_body(json!({ "active": active }))
 }
 
+pub fn notifications() -> ApiRequest {
+    ApiRequest::new(Method::Get, "/api/v1/notifications")
+}
+
+pub fn mark_notifications(ids: &[String]) -> ApiRequest {
+    ApiRequest::new(Method::Post, "/api/v1/notifications/read")
+        .with_body(json!({ "ids": ids }))
+}
+
+pub fn mark_all_notifications() -> ApiRequest {
+    ApiRequest::new(Method::Post, "/api/v1/notifications/read").with_body(json!({ "all": true }))
+}
+
+pub fn bookmarks() -> ApiRequest {
+    ApiRequest::new(Method::Get, "/api/v1/bookmarks")
+}
+
+pub fn save_bookmark(message_id: &str, kind: &str) -> ApiRequest {
+    ApiRequest::new(Method::Put, format!("/api/v1/bookmarks/{message_id}"))
+        .with_body(json!({ "saved": true, "kind": kind }))
+}
+
+pub fn remove_bookmark(message_id: &str) -> ApiRequest {
+    ApiRequest::new(Method::Put, format!("/api/v1/bookmarks/{message_id}"))
+        .with_body(json!({ "saved": false }))
+}
+
 pub fn health() -> ApiRequest {
     ApiRequest::new(Method::Get, "/api/v1/health")
 }

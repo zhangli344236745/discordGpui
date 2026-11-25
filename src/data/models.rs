@@ -1874,6 +1874,12 @@ impl ForumPost {
 /// 字段定位，原消息靠正文 `text` 反查；正文副本同时保证原消息被删后仍可查看。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Bookmark {
+    /// 后端消息 id；离线演示书签为空，跳转回退为正文反查。
+    #[serde(default)]
+    pub message_id: String,
+    /// channel / dm；与 message_id 一起构成后端书签身份。
+    #[serde(default)]
+    pub target_kind: String,
     /// true 表示来自私信，此时 `server` 为空串。
     pub is_dm: bool,
     /// 服务器名；私信为空。
@@ -1903,6 +1909,8 @@ impl Bookmark {
         saved_minutes_ago: u32,
     ) -> Self {
         Self {
+            message_id: String::new(),
+            target_kind: if is_dm { "dm".into() } else { "channel".into() },
             is_dm,
             server: server.into(),
             channel: channel.into(),

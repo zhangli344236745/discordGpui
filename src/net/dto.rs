@@ -395,6 +395,49 @@ pub struct WelcomeRuleDto {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct BookmarkDto {
+    pub target_id: String,
+    #[serde(default)]
+    pub target_kind: String,
+    #[serde(default)]
+    pub scope: String,
+    #[serde(default)]
+    pub content: String,
+    #[serde(default)]
+    pub author: Option<AuthorDto>,
+    #[serde(default)]
+    pub deleted: bool,
+    #[serde(default)]
+    pub saved_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct NotificationDto {
+    pub id: String,
+    pub kind: String,
+    #[serde(default)]
+    pub target_kind: String,
+    #[serde(default)]
+    pub target_id: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub read: bool,
+    #[serde(default)]
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+pub struct NotificationPageDto {
+    #[serde(default)]
+    pub items: Vec<NotificationDto>,
+    #[serde(default)]
+    pub has_more: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct SearchHitDto {
     pub message_id: String,
     #[serde(default)]
