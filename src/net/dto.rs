@@ -428,6 +428,38 @@ pub struct AuditPageDto {
     pub has_more: bool,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct VoiceParticipantDto {
+    pub user_id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub color: u32,
+    #[serde(default = "default_true")]
+    pub mic: bool,
+    #[serde(default)]
+    pub camera: bool,
+    #[serde(default)]
+    pub screen: bool,
+    #[serde(default)]
+    pub joined_at: String,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct VoiceJoinDto {
+    #[serde(default)]
+    pub token: String,
+    #[serde(default)]
+    pub url: String,
+    pub room: String,
+    #[serde(default)]
+    pub participants: Vec<VoiceParticipantDto>,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct DraftDto {
     pub scope: String,

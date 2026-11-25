@@ -74,7 +74,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                 .child(ico(IconName::Mic, Size::Small))
                 .id("sidebar-toggle-mic")
                 .on_click(cx.listener(|this, _, _, cx| {
-                    this.toggle_mic();
+                    this.toggle_mic(cx);
                     cx.notify();
                 })),
         )

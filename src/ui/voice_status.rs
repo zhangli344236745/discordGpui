@@ -70,7 +70,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                 .child(ico(IconName::PhoneOff, Size::XSmall))
                 .id("voice-disconnect")
                 .on_click(cx.listener(|this, _, _, cx| {
-                    this.leave_voice();
+                    this.leave_voice(cx);
                     cx.notify();
                 })),
         )

@@ -5,6 +5,23 @@
 
 本文件把剩余任务（tasks 4.1–4.4、4.6、4.7）拆成可验收的步骤，避免后续实现时重新调研。
 
+## 已完成的「无 SDK」部分
+
+- 客户端点击语音频道 → `POST /channels/{id}/voice/join`：拿 `room` 与参与者投影，面板显示真实在线成员；
+- 断开 → `POST /channels/{id}/voice/leave`；麦克风开关 → `PUT /voice/{room}/me`；
+- 订阅 `VOICE_STATE_UPDATE`：其他端加入/静音/离开时参与者列表实时更新；
+- 离线或未配置时保持原 Demo 行为（种子参与者）；
+- 请求构造有单测（`src/net/api.rs`），服务端链路由 `pytest` 与 `smoke.py` 覆盖。
+
+剩余仅「真实媒体」：采集、编码、传输、播放/渲染，即下面的 4.2–4.4 / 4.6 / 4.7。
+
+## 构建可行性探测（2026-11-25）
+
+- `cargo add livekit` 可解析（0.12.1），依赖链含 `webrtc-sys 0.3.55` / `webrtc-sys-build 0.3.21`；
+- 首次构建需从 `https://github.com/livekit/rust-sdks/releases/download/webrtc-a545de4/webrtc-mac-x64-release.zip`
+  下载预编译 libwebrtc；本机当前对 GitHub Release 资源的请求超时（HTTP 000），**构建会卡在下载阶段**；
+- 因此在代码库中未引入该依赖，避免留下无法构建的 feature。
+
 ## 现状与约束
 
 | 项 | 状态 |

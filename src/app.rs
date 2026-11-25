@@ -692,6 +692,9 @@ pub struct DiscordApp {
     // 语音房间面板：连接语音时展示参与者与本地设备状态。
     pub(crate) show_voice_room: bool,
     pub(crate) voice_participants: Vec<VoiceParticipant>,
+    /// 真实语音房间（服务端下发），None 表示只在本地面板状态。
+    pub(crate) voice_room: Option<String>,
+    pub(crate) voice_channel_id: Option<String>,
 
     // 私信通话：Some 即显示悬浮通话面板，跨会话与设置页保持。
     pub(crate) dm_call: Option<DmCall>,
@@ -1563,6 +1566,8 @@ impl DiscordApp {
             audit_filter: None,
             show_voice_room: false,
             voice_participants: Vec::new(),
+            voice_room: None,
+            voice_channel_id: None,
             dm_call: None,
             discover_servers: seed_discover_servers(),
             discover_search,
@@ -2998,7 +3003,7 @@ impl DiscordApp {
             .map(|(index, channel)| *index == self.active_server && channel == &menu.name)
             .unwrap_or(false);
         if in_voice {
-            self.leave_voice();
+            self.leave_voice(cx);
         }
 
         let server = &mut self.servers[self.active_server];
@@ -3292,7 +3297,7 @@ impl DiscordApp {
             .map(|(index, channel)| *index == self.active_server && removed.contains(channel))
             .unwrap_or(false);
         if in_voice {
-            self.leave_voice();
+            self.leave_voice(cx);
         }
 
         self.servers[self.active_server].categories.remove(ci);
@@ -3543,7 +3548,7 @@ impl DiscordApp {
         self.remove_boost_of_server(&name);
 
         if leaving_voice {
-            self.leave_voice();
+            self.leave_voice(cx);
         } else if let Some((index, channel)) = self.voice_channel.clone() {
             // 被删服务器之前的连接位置不受影响，之后的整体前移一位。
             if index > self.active_server {
@@ -7421,26 +7426,70 @@ impl DiscordApp {
     // 语音频道连接
     // -----------------------------------------------------------------------
 
-    /// 加入/离开语音频道；点击已连接的频道则断开。
-    pub(crate) fn toggle_voice(&mut self, server_index: usize, channel: String) {
+    /// 加入/离开语音频道；在线时同步服务端房间与参与者，离线回退 Demo。
+    pub(crate) fn toggle_voice(&mut self, server_index: usize, channel: String, cx: &mut Context<Self>) {
         let same = self
             .voice_channel
             .as_ref()
             .map(|(s, c)| *s == server_index && c == &channel)
             .unwrap_or(false);
         if same {
-            self.voice_channel = None;
-            self.voice_participants.clear();
-            self.show_voice_room = false;
-        } else {
-            self.dm_call = None;
-            self.voice_channel = Some((server_index, channel));
-            self.voice_participants = self.seed_voice_participants();
+            self.leave_voice(cx);
+            return;
         }
+
+        self.dm_call = None;
+        self.voice_participants = self.seed_voice_participants();
+        let channel_id = self
+            .servers
+            .get(server_index)
+            .map(|server| format!("{}/{}", server.name, channel))
+            .and_then(|key| self.remote.channels.get(&key).cloned());
+        self.voice_channel = Some((server_index, channel));
+        self.voice_channel_id = channel_id.clone();
+        self.voice_room = None;
+
+        // 在线时加入真实语音房间：拿 token/room 并同步参与者投影。
+        if let (true, Some(channel_id), Some(net)) = (self.is_online(), channel_id, self.net.clone()) {
+            cx.spawn(async move |this, cx| {
+                let result = net
+                    .execute_as::<crate::net::dto::VoiceJoinDto>(api::voice_join(&channel_id), true)
+                    .await;
+                let _ = this.update(cx, |app, cx| {
+                    match result {
+                        Ok(join) => {
+                            app.voice_room = Some(join.room.clone());
+                            app.voice_participants.clear();
+                            for participant in &join.participants {
+                                app.voice_participants.push(VoiceParticipant {
+                                    name: crate::data::persist::leak(participant.name.clone()),
+                                    color: participant.color,
+                                    muted: !participant.mic,
+                                });
+                            }
+                        }
+                        Err(error) => app.automod_notice = Some(format!("加入语音失败：{}", error.user_message())),
+                    }
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+        cx.notify();
     }
 
-    pub(crate) fn leave_voice(&mut self) {
+    pub(crate) fn leave_voice(&mut self, cx: &mut Context<Self>) {
+        if self.is_online()
+            && let (Some(channel_id), Some(net)) = (self.voice_channel_id.clone(), self.net.clone())
+        {
+            cx.spawn(async move |_, _| {
+                let _ = net.execute(api::voice_leave(&channel_id), true).await;
+            })
+            .detach();
+        }
         self.voice_channel = None;
+        self.voice_channel_id = None;
+        self.voice_room = None;
         self.voice_participants.clear();
         self.show_voice_room = false;
     }
@@ -7498,7 +7547,7 @@ impl DiscordApp {
             })
             .unwrap_or((palette::accent(), false));
 
-        self.leave_voice();
+        self.leave_voice(cx);
         self.dm_call = Some(DmCall {
             friend: base.clone(),
             color,
@@ -10254,6 +10303,31 @@ impl DiscordApp {
             "BOOKMARK_UPDATE" => {
                 self.refresh_structure(cx);
             }
+            "VOICE_STATE_UPDATE" => {
+                let room = data.get("room").and_then(|value| value.as_str());
+                if room.is_some() && room == self.voice_room.as_deref() {
+                    if let Some(participants) = data.get("participants").and_then(|value| value.as_array()) {
+                        self.voice_participants.clear();
+                        for participant in participants {
+                            let name = participant
+                                .get("name")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("成员");
+                            let color = participant
+                                .get("color")
+                                .and_then(|value| value.as_u64())
+                                .unwrap_or(0x808080) as u32;
+                            let mic = participant.get("mic").and_then(|value| value.as_bool()).unwrap_or(true);
+                            self.voice_participants.push(VoiceParticipant {
+                                name: crate::data::persist::leak(name.to_string()),
+                                color,
+                                muted: !mic,
+                            });
+                        }
+                        cx.notify();
+                    }
+                }
+            }
             "DRAFT_UPDATE" => {
                 let Some(scope) = data.get("scope").and_then(|value| value.as_str()) else {
                     return;
@@ -11501,8 +11575,24 @@ impl DiscordApp {
         self.show_members = !self.show_members;
     }
 
-    pub(crate) fn toggle_mic(&mut self) {
+    pub(crate) fn toggle_mic(&mut self, cx: &mut Context<Self>) {
         self.mic_on = !self.mic_on;
+        self.sync_voice_state(cx);
+    }
+
+    /// 把本端麦克风/摄像头/共享状态写回服务端，供其他端展示。
+    fn sync_voice_state(&mut self, cx: &mut Context<Self>) {
+        let (Some(room), Some(net)) = (self.voice_room.clone(), self.net.clone()) else {
+            return;
+        };
+        if !self.is_online() {
+            return;
+        }
+        let mic = self.mic_on;
+        cx.spawn(async move |_, _| {
+            let _ = net.execute(api::voice_set_state(&room, mic, false, false), true).await;
+        })
+        .detach();
     }
 
     pub(crate) fn toggle_headphones(&mut self) {

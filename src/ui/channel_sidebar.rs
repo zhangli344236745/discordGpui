@@ -267,7 +267,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
                     row.id(channel_id)
                         .on_click(cx.listener(move |this, _, window, cx| {
                             if is_voice {
-                                this.toggle_voice(server_index, click_name.clone());
+                                this.toggle_voice(server_index, click_name.clone(), cx);
                                 cx.notify();
                             } else {
                                 this.select_channel(click_name.clone(), window, cx);

@@ -234,7 +234,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                         .child(if app.mic_on { "静音" } else { "取消静音" })
                         .id("voice-room-mic")
                         .on_click(cx.listener(|this, _, _, cx| {
-                            this.toggle_mic();
+                            this.toggle_mic(cx);
                             cx.notify();
                         })),
                 )
@@ -256,7 +256,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                         .child("断开")
                         .id("voice-room-disconnect")
                         .on_click(cx.listener(|this, _, _, cx| {
-                            this.leave_voice();
+                            this.leave_voice(cx);
                             cx.notify();
                         })),
                 ),

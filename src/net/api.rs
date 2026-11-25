@@ -188,6 +188,35 @@ pub fn mark_all_notifications() -> ApiRequest {
     ApiRequest::new(Method::Post, "/api/v1/notifications/read").with_body(json!({ "all": true }))
 }
 
+pub fn voice_join(channel_id: &str) -> ApiRequest {
+    ApiRequest::new(
+        Method::Post,
+        format!("/api/v1/channels/{channel_id}/voice/join"),
+    )
+}
+
+pub fn voice_leave(channel_id: &str) -> ApiRequest {
+    ApiRequest::new(
+        Method::Post,
+        format!("/api/v1/channels/{channel_id}/voice/leave"),
+    )
+}
+
+pub fn voice_participants(channel_id: &str) -> ApiRequest {
+    ApiRequest::new(
+        Method::Get,
+        format!("/api/v1/channels/{channel_id}/voice/participants"),
+    )
+}
+
+pub fn voice_set_state(room: &str, mic: bool, camera: bool, screen: bool) -> ApiRequest {
+    ApiRequest::new(
+        Method::Put,
+        format!("/api/v1/voice/{}/me", encode_component(room)),
+    )
+    .with_body(json!({ "mic": mic, "camera": camera, "screen": screen }))
+}
+
 pub fn drafts() -> ApiRequest {
     ApiRequest::new(Method::Get, "/api/v1/me/drafts")
 }
@@ -794,5 +823,34 @@ mod tests {
 
         let reaction = remove_reaction("m1", "👍");
         assert_eq!(reaction.path, "/api/v1/messages/m1/reactions/👍");
+    }
+
+    #[test]
+    fn builds_voice_requests() {
+        let join = voice_join("ch1");
+        assert_eq!(join.method, Method::Post);
+        assert_eq!(join.path, "/api/v1/channels/ch1/voice/join");
+
+        let leave = voice_leave("ch1");
+        assert_eq!(leave.path, "/api/v1/channels/ch1/voice/leave");
+
+        let state = voice_set_state("srv:s1:ch1", false, true, false);
+        assert_eq!(state.method, Method::Put);
+        assert_eq!(state.path, "/api/v1/voice/srv%3As1%3Ach1/me");
+        let body = state.body.unwrap();
+        assert_eq!(body["mic"], false);
+        assert_eq!(body["camera"], true);
+        assert_eq!(body["screen"], false);
+    }
+
+    #[test]
+    fn builds_draft_requests() {
+        let list = drafts();
+        assert_eq!(list.path, "/api/v1/me/drafts");
+
+        let save = save_draft("channel:ch1", "半截消息");
+        assert_eq!(save.method, Method::Put);
+        assert_eq!(save.path, "/api/v1/me/drafts/channel%3Ach1");
+        assert_eq!(save.body.unwrap()["content"], "半截消息");
     }
 }
