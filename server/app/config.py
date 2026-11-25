@@ -55,6 +55,10 @@ class Settings(BaseSettings):
 
     # LiveKit
     livekit_url: str = "wss://localhost:7880"
+    # RoomService 的 HTTP 地址；为空则从 livekit_url 推导
+    livekit_http_url: str = ""
+    # 服务器侧静音/踢人是否真实调用 RoomService；未启用只改本地投影（Demo）
+    livekit_roomservice_enabled: bool = False
     livekit_api_key: str = "devkey"
     livekit_api_secret: str = "devsecret-devsecret-devsecret-1234"
     livekit_token_ttl_hours: int = 2

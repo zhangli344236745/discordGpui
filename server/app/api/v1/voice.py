@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.livekit import rooms as livekit_rooms
 from app.config import settings
 from app.db import get_db, utcnow
 from app.deps import ChannelContext, channel_context, current_user
@@ -117,14 +118,24 @@ async def moderate_participant(
         raise not_found("参与者")
 
     action = body.get("action", "mute")
-    if action == "remove":
-        await db.delete(row)
-    elif action in {"mute", "unmute"}:
-        row.mic = action == "unmute"
-    elif action in {"camera_on", "camera_off"}:
-        row.camera = action == "camera_on"
-    else:
-        row.mic = not row.mic
+    roomservice_ok = False
+    if livekit_rooms.enabled():
+        # 真实部署：先调 RoomService，成功后状态由 webhook 回写
+        if action == "remove":
+            roomservice_ok = await livekit_rooms.remove_participant(room, identity)
+        elif action in {"mute", "unmute"}:
+            roomservice_ok = await livekit_rooms.mute_published_track(room, identity, action == "mute")
+
+    if not roomservice_ok:
+        # 未启用或 RoomService 不可达：回退 Demo 投影
+        if action == "remove":
+            await db.delete(row)
+        elif action in {"mute", "unmute"}:
+            row.mic = action == "unmute"
+        elif action in {"camera_on", "camera_off"}:
+            row.camera = action == "camera_on"
+        else:
+            row.mic = not row.mic
     await db.commit()
 
     # 真实部署在此调用 LiveKit RoomService.MutePublishedTrack / RemoveParticipant，
