@@ -1118,6 +1118,8 @@ impl AutoModAction {
 /// 全部字段自有，serde 直接派生，无需 `*Owned` 镜像。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AutoModRule {
+    #[serde(default)]
+    pub id: String,
     pub name: String,
     pub description: String,
     pub keywords: Vec<String>,
@@ -1139,6 +1141,7 @@ impl AutoModRule {
         enabled: bool,
     ) -> Self {
         Self {
+            id: String::new(),
             name: name.into(),
             description: description.into(),
             keywords: keywords.iter().map(|key| (*key).to_string()).collect(),

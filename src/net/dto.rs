@@ -395,6 +395,40 @@ pub struct WelcomeRuleDto {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct AutoModRuleDto {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub action: String,
+    #[serde(default)]
+    pub keywords: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct AuditDto {
+    pub id: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub actor: AuthorDto,
+    #[serde(default)]
+    pub detail: String,
+    #[serde(default)]
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+pub struct AuditPageDto {
+    #[serde(default)]
+    pub items: Vec<AuditDto>,
+    #[serde(default)]
+    pub has_more: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct BookmarkDto {
     pub target_id: String,
     #[serde(default)]

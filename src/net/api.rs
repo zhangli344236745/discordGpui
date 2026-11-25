@@ -202,6 +202,54 @@ pub fn remove_bookmark(message_id: &str) -> ApiRequest {
         .with_body(json!({ "saved": false }))
 }
 
+pub fn automod_rules(server_id: &str) -> ApiRequest {
+    ApiRequest::new(Method::Get, format!("/api/v1/servers/{server_id}/automod/rules"))
+}
+
+pub fn create_automod_rule(server_id: &str, name: &str, action: &str, keywords: &[String]) -> ApiRequest {
+    ApiRequest::new(Method::Post, format!("/api/v1/servers/{server_id}/automod/rules")).with_body(json!({
+        "name": name,
+        "action": action,
+        "keywords": keywords,
+    }))
+}
+
+pub fn patch_automod_rule(
+    rule_id: &str,
+    name: Option<&str>,
+    action: Option<&str>,
+    enabled: Option<bool>,
+    keywords: Option<&[String]>,
+) -> ApiRequest {
+    let mut payload = serde_json::Map::new();
+    if let Some(value) = name {
+        payload.insert("name".into(), Value::String(value.into()));
+    }
+    if let Some(value) = action {
+        payload.insert("action".into(), Value::String(value.into()));
+    }
+    if let Some(value) = enabled {
+        payload.insert("enabled".into(), Value::from(value));
+    }
+    if let Some(value) = keywords {
+        payload.insert("keywords".into(), Value::from(value));
+    }
+    ApiRequest::new(Method::Patch, format!("/api/v1/automod/rules/{rule_id}"))
+        .with_body(Value::Object(payload))
+}
+
+pub fn delete_automod_rule(rule_id: &str) -> ApiRequest {
+    ApiRequest::new(Method::Delete, format!("/api/v1/automod/rules/{rule_id}"))
+}
+
+pub fn server_audit(server_id: &str) -> ApiRequest {
+    ApiRequest::new(Method::Get, format!("/api/v1/servers/{server_id}/audit"))
+}
+
+pub fn clear_audit(server_id: &str) -> ApiRequest {
+    ApiRequest::new(Method::Delete, format!("/api/v1/servers/{server_id}/audit"))
+}
+
 pub fn health() -> ApiRequest {
     ApiRequest::new(Method::Get, "/api/v1/health")
 }

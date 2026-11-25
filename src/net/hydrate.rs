@@ -14,7 +14,7 @@ use crate::data::{
 };
 
 use super::dto::{
-    BookmarkDto, BoostDto, ChannelDto, ChannelUnreadDto, DmDto, DmMessageDto, FriendDto, FriendGroupDto,
+    AuditDto, AutoModRuleDto, BookmarkDto, BoostDto, ChannelDto, ChannelUnreadDto, DmDto, DmMessageDto, FriendDto, FriendGroupDto,
     FriendRequestDto, ForumPostDto, InviteDto, MemberDto, MessageDto, MessageRequestDto,
     NotificationDto, PermissionMatrixDto, RoleDto, ServerDto, ServerEventDto, ServerTreeDto,
     UnreadCountsDto, UserDto, WelcomeDto,
@@ -52,6 +52,8 @@ pub struct BootData {
     pub welcomes: Vec<(String, WelcomeDto)>,
     pub notifications: Vec<NotificationDto>,
     pub bookmarks: Vec<BookmarkDto>,
+    pub automod_rules: Vec<(String, Vec<AutoModRuleDto>)>,
+    pub audit: Vec<(String, Vec<AuditDto>)>,
     pub groups: Vec<FriendGroupDto>,
     pub dms: Vec<DmDto>,
     pub counts: UnreadCountsDto,
@@ -83,6 +85,8 @@ pub struct Hydrated {
     pub welcome_joined: Vec<String>,
     pub notifications: Vec<Notification>,
     pub bookmarks: Vec<crate::data::Bookmark>,
+    pub automod_by_server: HashMap<String, Vec<crate::data::AutoModRule>>,
+    pub audit_by_server: HashMap<String, Vec<crate::data::AuditEntry>>,
     pub dm_conversations: Vec<DmConversation>,
     pub messages: Vec<Message>,
     pub index: RemoteIndex,
@@ -629,6 +633,57 @@ pub fn hydrate(data: BootData) -> Hydrated {
         }
     }
 
+    let mut automod_by_server = HashMap::new();
+    for (server_name, rules) in &data.automod_rules {
+        let mut converted: Vec<crate::data::AutoModRule> = rules
+            .iter()
+            .map(|rule| {
+                let mut item = crate::data::AutoModRule::new(
+                    rule.name.clone(),
+                    String::new(),
+                    &[],
+                    if rule.action == "warn" {
+                        crate::data::AutoModAction::Warn
+                    } else {
+                        crate::data::AutoModAction::Block
+                    },
+                    rule.enabled,
+                );
+                item.id = rule.id.clone();
+                item.keywords = rule.keywords.clone();
+                item
+            })
+            .collect();
+        converted.sort_by(|a, b| a.name.cmp(&b.name));
+        automod_by_server.insert(server_name.clone(), converted);
+    }
+
+    let mut audit_by_server = HashMap::new();
+    for (server_name, entries) in &data.audit {
+        let mut converted: Vec<crate::data::AuditEntry> = Vec::new();
+        for (index, entry) in entries.iter().enumerate() {
+            let kind = match entry.kind.as_str() {
+                "server" => crate::data::AuditKind::Server,
+                "channel" => crate::data::AuditKind::Channel,
+                "role" => crate::data::AuditKind::Role,
+                "member" => crate::data::AuditKind::Member,
+                "invite" => crate::data::AuditKind::Invite,
+                "message" => crate::data::AuditKind::Channel,
+                "boost" => crate::data::AuditKind::Server,
+                _ => crate::data::AuditKind::Server,
+            };
+            converted.push(crate::data::AuditEntry::new(
+                index as u32,
+                kind,
+                entry.actor.name.clone(),
+                "操作",
+                entry.detail.clone(),
+            ));
+        }
+        converted.reverse();
+        audit_by_server.insert(server_name.clone(), converted);
+    }
+
     let mut bookmarks = Vec::new();
     for bookmark in &data.bookmarks {
         let is_dm = bookmark.target_kind == "dm";
@@ -843,6 +898,8 @@ pub fn hydrate(data: BootData) -> Hydrated {
         welcome_joined,
         notifications,
         bookmarks,
+        automod_by_server,
+        audit_by_server,
         dm_conversations: dms,
         messages,
         index,
@@ -915,6 +972,8 @@ mod tests {
             welcomes: vec![],
             notifications: vec![],
             bookmarks: vec![],
+            automod_rules: vec![],
+            audit: vec![],
             groups: vec![],
             dms: vec![],
             counts: dto(json!({"channels":[{"channel_id":"ch1","server_id":"s1","unread":3}]})),

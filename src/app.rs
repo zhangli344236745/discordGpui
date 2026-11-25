@@ -535,6 +535,8 @@ pub struct DiscordApp {
     pub(crate) pending_channel: Option<String>,
     pub(crate) pending_forum_post: Option<String>,
     pub(crate) backend_notifications: Vec<Notification>,
+    pub(crate) automod_by_server: HashMap<String, Vec<AutoModRule>>,
+    pub(crate) audit_by_server: HashMap<String, Vec<AuditEntry>>,
     pub(crate) has_more_messages: HashMap<String, bool>,
     pub(crate) loading_older: bool,
     pub(crate) loaded_dms: std::collections::HashSet<String>,
@@ -1406,6 +1408,8 @@ impl DiscordApp {
             pending_channel: None,
             pending_forum_post: None,
             backend_notifications: Vec::new(),
+            automod_by_server: HashMap::new(),
+            audit_by_server: HashMap::new(),
             has_more_messages: HashMap::new(),
             loading_older: false,
             loaded_dms: std::collections::HashSet::new(),
@@ -2100,6 +2104,12 @@ impl DiscordApp {
         }
         if let Some(permissions) = self.permissions_by_server.get(&server_name) {
             self.role_permissions = permissions.clone();
+        }
+        if let Some(rules) = self.automod_by_server.get(&server_name) {
+            self.automod_rules = rules.clone();
+        }
+        if let Some(entries) = self.audit_by_server.get(&server_name) {
+            self.audit = entries.clone();
         }
         self.active_channel = self.first_text_channel().unwrap_or_default();
         self.sync_invite_channel();
@@ -5572,6 +5582,11 @@ impl DiscordApp {
                 self.bookmark_notice = Some(format!("已定位到 {}", target.location_label()));
             }
             None => {
+                if !target.message_id.is_empty() && self.has_more_messages() {
+                    self.bookmark_notice = Some("正在加载更早的消息，稍后再点一次书签".into());
+                    self.load_older_messages(cx);
+                    return;
+                }
                 // 贴纸 / GIF / 附件消息没有正文，本来就无法按文本反查。
                 let placeholder = target.text.starts_with('[') && target.text.ends_with(']');
                 self.bookmark_notice = Some(if placeholder {
@@ -8569,6 +8584,34 @@ impl DiscordApp {
             cx.notify();
             return;
         }
+        if self.is_online()
+            && let (Some(server_id), Some(net)) = (
+                self.remote.servers.get(&self.active_server_name()).cloned(),
+                self.net.clone(),
+            )
+        {
+            let rule_name = name.clone();
+            cx.spawn(async move |this, cx| {
+                let empty: Vec<String> = Vec::new();
+                let result = net
+                    .execute(
+                        api::create_automod_rule(&server_id, &rule_name, "block", &empty),
+                        true,
+                    )
+                    .await;
+                let _ = this.update(cx, |app, cx| match result {
+                    Ok(_) => app.refresh_structure(cx),
+                    Err(error) => {
+                        app.automod_notice = Some(format!("创建规则失败：{}", error.user_message()));
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+            self.automod_name_edit
+                .update(cx, |input, cx| input.set_value("", window, cx));
+            return;
+        }
         let rule = AutoModRule::new(
             name.clone(),
             "新规则，添加关键词后生效。",
@@ -8594,6 +8637,32 @@ impl DiscordApp {
         let Some(current) = self.selected_automod.clone() else {
             return;
         };
+        if self.is_online()
+            && let (Some(rule_id), Some(net)) = (
+                self.automod_rules
+                    .iter()
+                    .find(|rule| rule.name == current)
+                    .map(|rule| rule.id.clone())
+                    .filter(|id| !id.is_empty()),
+                self.net.clone(),
+            )
+        {
+            cx.spawn(async move |this, cx| {
+                let result = net.execute(api::delete_automod_rule(&rule_id), true).await;
+                let _ = this.update(cx, |app, cx| match result {
+                    Ok(_) => {
+                        app.selected_automod = None;
+                        app.refresh_structure(cx);
+                    }
+                    Err(error) => {
+                        app.automod_notice = Some(format!("删除规则失败：{}", error.user_message()));
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+            return;
+        }
         self.automod_rules.retain(|rule| rule.name != current);
         self.log_audit(AuditKind::Server, "删除了自动审核规则", current.clone());
         self.selected_automod = None;
@@ -8606,14 +8675,33 @@ impl DiscordApp {
         let Some(current) = self.automod_rule_focus() else {
             return;
         };
+        let mut remote_toggle = None;
+        let net_handle = self.is_online().then(|| self.net.clone()).flatten();
         if let Some(rule) = self.automod_rules.iter_mut().find(|rule| rule.name == current) {
             rule.enabled = !rule.enabled;
             let text = if rule.enabled { "启用" } else { "停用" };
+            if let Some(net) = net_handle.clone().filter(|_| !rule.id.is_empty()) {
+                remote_toggle = Some((net, rule.id.clone(), rule.enabled));
+            }
             self.log_audit(
                 AuditKind::Server,
                 "更新了自动审核规则",
                 format!("{current} · {text}"),
             );
+        }
+        if let Some((net, rule_id, enabled)) = remote_toggle {
+            cx.spawn(async move |this, cx| {
+                let result = net
+                    .execute(api::patch_automod_rule(&rule_id, None, None, Some(enabled), None), true)
+                    .await;
+                let _ = this.update(cx, |app, cx| {
+                    if let Err(error) = result {
+                        app.automod_notice = Some(format!("更新规则失败：{}", error.user_message()));
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
         }
         cx.notify();
     }
@@ -8627,15 +8715,38 @@ impl DiscordApp {
         let Some(current) = self.automod_rule_focus() else {
             return;
         };
+        let mut remote_action = None;
+        let net_handle = self.is_online().then(|| self.net.clone()).flatten();
         if let Some(rule) = self.automod_rules.iter_mut().find(|rule| rule.name == current)
             && rule.action != action
         {
             rule.action = action;
+            if let Some(net) = net_handle.clone().filter(|_| !rule.id.is_empty()) {
+                remote_action = Some((net, rule.id.clone(), action));
+            }
             self.log_audit(
                 AuditKind::Server,
                 "更新了自动审核规则",
                 format!("{current} · 动作改为{}", action.label()),
             );
+        }
+        if let Some((net, rule_id, action)) = remote_action {
+            let action_key = match action {
+                AutoModAction::Block => "block",
+                AutoModAction::Warn => "warn",
+            };
+            cx.spawn(async move |this, cx| {
+                let result = net
+                    .execute(api::patch_automod_rule(&rule_id, None, Some(action_key), None, None), true)
+                    .await;
+                let _ = this.update(cx, |app, cx| {
+                    if let Err(error) = result {
+                        app.automod_notice = Some(format!("更新动作失败：{}", error.user_message()));
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
         }
         cx.notify();
     }
@@ -8658,11 +8769,16 @@ impl DiscordApp {
         let Some(current) = self.automod_rule_focus() else {
             return;
         };
+        let mut remote_keywords = None;
+        let net_handle = self.is_online().then(|| self.net.clone()).flatten();
         if let Some(rule) = self.automod_rules.iter_mut().find(|rule| rule.name == current) {
             if rule.keywords.iter().any(|key| key == &keyword) {
                 self.automod_notice = Some("关键词已存在".into());
             } else {
                 rule.keywords.push(keyword.clone());
+                if let Some(net) = net_handle.clone().filter(|_| !rule.id.is_empty()) {
+                    remote_keywords = Some((net, rule.id.clone(), rule.keywords.clone()));
+                }
                 self.log_audit(
                     AuditKind::Server,
                     "添加了审核关键词",
@@ -8670,6 +8786,20 @@ impl DiscordApp {
                 );
                 self.automod_notice = Some("关键词已添加".into());
             }
+        }
+        if let Some((net, rule_id, keywords)) = remote_keywords {
+            cx.spawn(async move |this, cx| {
+                let result = net
+                    .execute(api::patch_automod_rule(&rule_id, None, None, None, Some(&keywords)), true)
+                    .await;
+                let _ = this.update(cx, |app, cx| {
+                    if let Err(error) = result {
+                        app.automod_notice = Some(format!("添加关键词失败：{}", error.user_message()));
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
         }
         self.automod_keyword_edit
             .update(cx, |input, cx| input.set_value("", window, cx));
@@ -8685,15 +8815,34 @@ impl DiscordApp {
         let Some(current) = self.automod_rule_focus() else {
             return;
         };
+        let mut remote_remove = None;
+        let net_handle = self.is_online().then(|| self.net.clone()).flatten();
         if let Some(rule) = self.automod_rules.iter_mut().find(|rule| rule.name == current)
             && let Some(index) = rule.keywords.iter().position(|key| key == &keyword)
         {
             rule.keywords.remove(index);
+            if let Some(net) = net_handle.clone().filter(|_| !rule.id.is_empty()) {
+                remote_remove = Some((net, rule.id.clone(), rule.keywords.clone()));
+            }
             self.log_audit(
                 AuditKind::Server,
                 "移除了审核关键词",
                 format!("{current} · {keyword}"),
             );
+        }
+        if let Some((net, rule_id, keywords)) = remote_remove {
+            cx.spawn(async move |this, cx| {
+                let result = net
+                    .execute(api::patch_automod_rule(&rule_id, None, None, None, Some(&keywords)), true)
+                    .await;
+                let _ = this.update(cx, |app, cx| {
+                    if let Err(error) = result {
+                        app.automod_notice = Some(format!("移除关键词失败：{}", error.user_message()));
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
         }
         cx.notify();
     }
@@ -9201,6 +9350,29 @@ impl DiscordApp {
 
     /// 清空日志（不可撤销）。
     pub(crate) fn clear_audit(&mut self, cx: &mut Context<Self>) {
+        if self.is_online()
+            && let (Some(server_id), Some(net)) = (
+                self.remote.servers.get(&self.active_server_name()).cloned(),
+                self.net.clone(),
+            )
+        {
+            cx.spawn(async move |this, cx| {
+                let result = net.execute(api::clear_audit(&server_id), true).await;
+                let _ = this.update(cx, |app, cx| match result {
+                    Ok(_) => {
+                        app.audit.clear();
+                        app.audit_filter = None;
+                        cx.notify();
+                    }
+                    Err(error) => {
+                        app.automod_notice = Some(format!("清空日志失败：{}", error.user_message()));
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+            return;
+        }
         self.audit.clear();
         self.audit_filter = None;
         cx.notify();
@@ -10164,6 +10336,8 @@ impl DiscordApp {
             .execute_as(api::notifications(), true)
             .await?;
         let bookmarks: Vec<crate::net::dto::BookmarkDto> = net.execute_as(api::bookmarks(), true).await?;
+        let mut automod_rules = Vec::new();
+        let mut audit = Vec::new();
         let mut roles = Vec::new();
         let mut permissions = Vec::new();
         for server in &servers {
@@ -10193,6 +10367,18 @@ impl DiscordApp {
                 .await
             {
                 welcomes.push((server.name.clone(), welcome));
+            }
+            if let Ok(rows) = net
+                .execute_as::<Vec<crate::net::dto::AutoModRuleDto>>(api::automod_rules(&server.id), true)
+                .await
+            {
+                automod_rules.push((server.name.clone(), rows));
+            }
+            if let Ok(rows) = net
+                .execute_as::<crate::net::dto::AuditPageDto>(api::server_audit(&server.id), true)
+                .await
+            {
+                audit.push((server.name.clone(), rows.items));
             }
             let tree = trees.last().cloned();
             if let Some(tree) = tree {
@@ -10272,6 +10458,8 @@ impl DiscordApp {
             welcomes,
             notifications: notifications.items,
             bookmarks,
+            automod_rules,
+            audit,
             groups,
             dms,
             counts,
@@ -10390,6 +10578,18 @@ impl DiscordApp {
         self.welcome_joined = data.welcome_joined;
         self.backend_notifications = data.notifications;
         self.bookmarks = data.bookmarks;
+        self.automod_by_server = data.automod_by_server;
+        self.audit_by_server = data.audit_by_server;
+        self.automod_rules = self
+            .automod_by_server
+            .get(&self.active_server_name())
+            .cloned()
+            .unwrap_or_default();
+        self.audit = self
+            .audit_by_server
+            .get(&self.active_server_name())
+            .cloned()
+            .unwrap_or_default();
         self.dm_conversations = data.dm_conversations;
         self.active_dm = if keep_view
             && previous_dm
