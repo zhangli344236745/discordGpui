@@ -112,6 +112,161 @@ pub fn server_permissions(server_id: &str) -> ApiRequest {
     ApiRequest::new(Method::Get, format!("/api/v1/servers/{server_id}/permissions"))
 }
 
+pub fn patch_server(
+    server_id: &str,
+    name: Option<&str>,
+    description: Option<&str>,
+    icon_color: Option<u32>,
+) -> ApiRequest {
+    let mut body = serde_json::Map::new();
+    if let Some(value) = name {
+        body.insert("name".into(), Value::String(value.into()));
+    }
+    if let Some(value) = description {
+        body.insert("description".into(), Value::String(value.into()));
+    }
+    if let Some(value) = icon_color {
+        body.insert("icon_color".into(), Value::from(value));
+    }
+    ApiRequest::new(Method::Patch, format!("/api/v1/servers/{server_id}"))
+        .with_body(Value::Object(body))
+}
+
+pub fn delete_server(server_id: &str) -> ApiRequest {
+    ApiRequest::new(Method::Delete, format!("/api/v1/servers/{server_id}"))
+}
+
+pub fn leave_server(server_id: &str) -> ApiRequest {
+    ApiRequest::new(Method::Post, format!("/api/v1/servers/{server_id}/leave"))
+}
+
+pub fn create_category(server_id: &str, name: &str) -> ApiRequest {
+    ApiRequest::new(Method::Post, format!("/api/v1/servers/{server_id}/categories"))
+        .with_body(json!({ "name": name }))
+}
+
+pub fn patch_category(category_id: &str, name: &str) -> ApiRequest {
+    ApiRequest::new(Method::Patch, format!("/api/v1/categories/{category_id}"))
+        .with_body(json!({ "name": name }))
+}
+
+pub fn delete_category(category_id: &str) -> ApiRequest {
+    ApiRequest::new(Method::Delete, format!("/api/v1/categories/{category_id}"))
+}
+
+pub fn create_channel(
+    server_id: &str,
+    name: &str,
+    kind: &str,
+    category_id: Option<&str>,
+    topic: &str,
+) -> ApiRequest {
+    ApiRequest::new(Method::Post, format!("/api/v1/servers/{server_id}/channels")).with_body(json!({
+        "name": name,
+        "kind": kind,
+        "category_id": category_id,
+        "topic": topic,
+    }))
+}
+
+pub fn patch_channel(
+    channel_id: &str,
+    name: Option<&str>,
+    topic: Option<&str>,
+    category_id: Option<&str>,
+) -> ApiRequest {
+    let mut body = serde_json::Map::new();
+    if let Some(value) = name {
+        body.insert("name".into(), Value::String(value.into()));
+    }
+    if let Some(value) = topic {
+        body.insert("topic".into(), Value::String(value.into()));
+    }
+    if let Some(value) = category_id {
+        body.insert("category_id".into(), Value::String(value.into()));
+    }
+    ApiRequest::new(Method::Patch, format!("/api/v1/channels/{channel_id}"))
+        .with_body(Value::Object(body))
+}
+
+pub fn set_channel_notify(channel_id: &str, level: &str) -> ApiRequest {
+    ApiRequest::new(Method::Patch, format!("/api/v1/channels/{channel_id}/notify"))
+        .with_body(json!({ "notify_level": level }))
+}
+
+pub fn set_server_notify(server_id: &str, level: &str) -> ApiRequest {
+    ApiRequest::new(Method::Patch, format!("/api/v1/servers/{server_id}/notify"))
+        .with_body(json!({ "notify_level": level }))
+}
+
+pub fn delete_channel(channel_id: &str) -> ApiRequest {
+    ApiRequest::new(Method::Delete, format!("/api/v1/channels/{channel_id}"))
+}
+
+pub fn create_role(server_id: &str, name: &str, color: u32) -> ApiRequest {
+    ApiRequest::new(Method::Post, format!("/api/v1/servers/{server_id}/roles"))
+        .with_body(json!({ "name": name, "color": color }))
+}
+
+pub fn patch_role(role_id: &str, name: Option<&str>, color: Option<u32>) -> ApiRequest {
+    let mut body = serde_json::Map::new();
+    if let Some(value) = name {
+        body.insert("name".into(), Value::String(value.into()));
+    }
+    if let Some(value) = color {
+        body.insert("color".into(), Value::from(value));
+    }
+    ApiRequest::new(Method::Patch, format!("/api/v1/roles/{role_id}"))
+        .with_body(Value::Object(body))
+}
+
+pub fn delete_role(role_id: &str) -> ApiRequest {
+    ApiRequest::new(Method::Delete, format!("/api/v1/roles/{role_id}"))
+}
+
+pub fn assign_role(server_id: &str, user_id: &str, role_id: &str, assigned: bool) -> ApiRequest {
+    ApiRequest::new(
+        Method::Put,
+        format!("/api/v1/servers/{server_id}/members/{user_id}/roles/{role_id}"),
+    )
+    .with_body(json!({ "assigned": assigned }))
+}
+
+pub fn patch_member(server_id: &str, user_id: &str, nickname: &str) -> ApiRequest {
+    ApiRequest::new(
+        Method::Patch,
+        format!("/api/v1/servers/{server_id}/members/{user_id}"),
+    )
+    .with_body(json!({ "nickname": nickname }))
+}
+
+pub fn kick_member(server_id: &str, user_id: &str) -> ApiRequest {
+    ApiRequest::new(
+        Method::Delete,
+        format!("/api/v1/servers/{server_id}/members/{user_id}"),
+    )
+}
+
+pub fn ban_member(server_id: &str, user_id: &str, reason: &str, delete_days: u32) -> ApiRequest {
+    ApiRequest::new(Method::Post, format!("/api/v1/servers/{server_id}/bans")).with_body(json!({
+        "user_id": user_id,
+        "reason": reason,
+        "delete_days": delete_days,
+    }))
+}
+
+pub fn unban_member(server_id: &str, user_id: &str) -> ApiRequest {
+    ApiRequest::new(
+        Method::Delete,
+        format!("/api/v1/servers/{server_id}/bans/{user_id}"),
+    )
+}
+
+pub fn write_permissions(server_id: &str, items: Value) -> ApiRequest {
+    ApiRequest::new(Method::Put, format!("/api/v1/servers/{server_id}/permissions"))
+        .with_body(json!({ "items": items }))
+}
+
 pub fn create_server(name: &str, template_key: Option<&str>, is_public: bool) -> ApiRequest {
     ApiRequest::new(Method::Post, "/api/v1/servers").with_body(json!({
         "name": name,

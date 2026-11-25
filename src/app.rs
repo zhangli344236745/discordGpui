@@ -110,6 +110,15 @@ impl MessageRequestFilter {
 }
 
 /// 请求状态是否落入某个筛选（供计数与列表共用）。
+fn notify_key(level: NotifyLevel) -> &'static str {
+    match level {
+        NotifyLevel::Inherit => "inherit",
+        NotifyLevel::All => "all",
+        NotifyLevel::Mentions => "mentions",
+        NotifyLevel::Nothing => "none",
+    }
+}
+
 fn apply_reaction(message: &mut Message, emoji: &str, add: bool, by_me: bool) {
     if add {
         if let Some(reaction) = message.reactions.iter_mut().find(|item| item.emoji == emoji) {
@@ -451,6 +460,8 @@ pub struct DiscordApp {
     pub(crate) typing_name: Option<String>,
     pub(crate) last_typing_sent: Option<std::time::Instant>,
     pub(crate) structure_refreshing: bool,
+    pub(crate) pending_server_id: Option<String>,
+    pub(crate) pending_channel: Option<String>,
     pub(crate) has_more_messages: HashMap<String, bool>,
     pub(crate) loading_older: bool,
     pub(crate) loaded_dms: std::collections::HashSet<String>,
@@ -1318,6 +1329,8 @@ impl DiscordApp {
             typing_name: None,
             last_typing_sent: None,
             structure_refreshing: false,
+            pending_server_id: None,
+            pending_channel: None,
             has_more_messages: HashMap::new(),
             loading_older: false,
             loaded_dms: std::collections::HashSet::new(),
@@ -2292,6 +2305,35 @@ impl DiscordApp {
             return;
         }
 
+        if self.is_online()
+            && let Some(net) = self.net.clone()
+        {
+            let template_key = template.map(|template| template.key.to_string());
+            self.server_name_input
+                .update(cx, |input, cx| input.set_value("", window, cx));
+            self.show_create_server = false;
+            cx.spawn(async move |this, cx| {
+                let result = net
+                    .execute(api::create_server(&name, template_key.as_deref(), false), true)
+                    .await;
+                let _ = this.update(cx, |app, cx| match result {
+                    Ok(value) => {
+                        app.pending_server_id = value
+                            .get("id")
+                            .and_then(|id| id.as_str())
+                            .map(str::to_string);
+                        app.refresh_structure(cx);
+                    }
+                    Err(error) => {
+                        app.automod_notice = Some(format!("创建服务器失败：{}", error.user_message()));
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+            return;
+        }
+
         let server = match template {
             Some(template) => template.to_server(&name),
             None => {
@@ -2332,6 +2374,47 @@ impl DiscordApp {
             .and_then(|category| self.category_position(&category));
         if name.is_empty() || self.view_mode != ViewMode::Server {
             return;
+        }
+        if self.is_online() {
+            let server_name = self.active_server_name();
+            let server_id = self.remote.servers.get(&server_name).cloned();
+            let category_id = if let Some(category) = self.create_channel_category.clone() {
+                self.remote
+                    .categories
+                    .get(&format!("{server_name}/{category}"))
+                    .cloned()
+            } else {
+                None
+            };
+            if let (Some(server_id), Some(net)) = (server_id, self.net.clone()) {
+                self.channel_name_input
+                    .update(cx, |input, cx| input.set_value("", window, cx));
+                self.show_create_channel = false;
+                self.pending_channel = Some(name.clone());
+                cx.spawn(async move |this, cx| {
+                    let result = net
+                        .execute(
+                            api::create_channel(
+                                &server_id,
+                                &name,
+                                "text",
+                                category_id.as_deref(),
+                                &format!("欢迎来到 #{name}"),
+                            ),
+                            true,
+                        )
+                        .await;
+                    let _ = this.update(cx, |app, cx| match result {
+                        Ok(_) => app.refresh_structure(cx),
+                        Err(error) => {
+                            app.automod_notice = Some(format!("创建频道失败：{}", error.user_message()));
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+                return;
+            }
         }
         let server = &mut self.servers[self.active_server];
         if server.categories.is_empty() {
@@ -2524,6 +2607,28 @@ impl DiscordApp {
         if let Some((ci, chi)) = self.channel_position(&name) {
             self.servers[self.active_server].categories[ci].channels[chi].notify = level;
         }
+        if self.is_online()
+            && let (Some(channel_id), Some(net)) = (
+                self.remote
+                    .channels
+                    .get(&format!("{}/{}", self.active_server_name(), name))
+                    .cloned(),
+                self.net.clone(),
+            )
+        {
+            cx.spawn(async move |this, cx| {
+                let result = net
+                    .execute(api::set_channel_notify(&channel_id, notify_key(level)), true)
+                    .await;
+                let _ = this.update(cx, |app, cx| {
+                    if let Err(error) = result {
+                        app.automod_notice = Some(format!("通知设置失败：{}", error.user_message()));
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
         cx.notify();
     }
 
@@ -2577,6 +2682,29 @@ impl DiscordApp {
             return;
         }
         let name = self.edit_topic_target.clone();
+        if self.is_online()
+            && let (Some(channel_id), Some(net)) = (
+                self.remote
+                    .channels
+                    .get(&format!("{}/{}", self.active_server_name(), name))
+                    .cloned(),
+                self.net.clone(),
+            )
+        {
+            let topic_value = topic.clone();
+            cx.spawn(async move |this, cx| {
+                let result = net
+                    .execute(api::patch_channel(&channel_id, None, Some(&topic_value), None), true)
+                    .await;
+                let _ = this.update(cx, |app, cx| {
+                    if let Err(error) = result {
+                        app.automod_notice = Some(format!("保存主题失败：{}", error.user_message()));
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
         if let Some((ci, chi)) = self.channel_position(&name) {
             self.servers[self.active_server].categories[ci].channels[chi].topic = topic;
         }
@@ -2602,6 +2730,11 @@ impl DiscordApp {
             return;
         };
 
+        let channel_id = self
+            .remote
+            .channels
+            .get(&format!("{}/{}", self.active_server_name(), menu.name))
+            .cloned();
         let (kind, text_count) = {
             let server = &self.servers[self.active_server];
             let kind = server.categories[ci].channels[chi].kind;
@@ -2617,6 +2750,21 @@ impl DiscordApp {
         if kind == ChannelKind::Text && text_count <= 1 {
             cx.notify();
             return;
+        }
+        if self.is_online()
+            && let (Some(channel_id), Some(net)) = (channel_id, self.net.clone())
+        {
+            cx.spawn(async move |this, cx| {
+                let result = net.execute(api::delete_channel(&channel_id), true).await;
+                let _ = this.update(cx, |app, cx| match result {
+                    Ok(_) => app.refresh_structure(cx),
+                    Err(error) => {
+                        app.automod_notice = Some(format!("删除频道失败：{}", error.user_message()));
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
         }
 
         // 删掉的正是当前连接的语音频道时先断开。
@@ -2783,6 +2931,27 @@ impl DiscordApp {
             cx.notify();
             return;
         }
+        if self.is_online()
+            && let (Some(server_id), Some(net)) =
+                (self.remote.servers.get(&self.active_server_name()).cloned(), self.net.clone())
+        {
+            let category_name = name.clone();
+            cx.spawn(async move |this, cx| {
+                let result = net.execute(api::create_category(&server_id, &category_name), true).await;
+                let _ = this.update(cx, |app, cx| match result {
+                    Ok(_) => app.refresh_structure(cx),
+                    Err(error) => {
+                        app.automod_notice = Some(format!("创建分类失败：{}", error.user_message()));
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+            self.category_input
+                .update(cx, |input, cx| input.set_value("", window, cx));
+            self.show_create_category = false;
+            return;
+        }
         self.servers[self.active_server]
             .categories
             .push(Category::new(name, Vec::new()));
@@ -2831,6 +3000,29 @@ impl DiscordApp {
             return;
         };
         let server_name = self.servers[self.active_server].name.clone();
+        if self.is_online()
+            && let (Some(category_id), Some(net)) = (
+                self.remote
+                    .categories
+                    .get(&format!("{server_name}/{source}"))
+                    .cloned(),
+                self.net.clone(),
+            )
+        {
+            let new_name = value.clone();
+            cx.spawn(async move |this, cx| {
+                let result = net.execute(api::patch_category(&category_id, &new_name), true).await;
+                let _ = this.update(cx, |app, cx| match result {
+                    Ok(_) => app.refresh_structure(cx),
+                    Err(error) => {
+                        app.automod_notice = Some(format!("重命名分类失败：{}", error.user_message()));
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+            return;
+        }
         self.servers[self.active_server].categories[ci].name = value.clone();
 
         // 折叠状态以「服务器/分类」为 key，改名后同步迁移，保持原有展开状态。
@@ -2960,6 +3152,23 @@ impl DiscordApp {
     /// 设置服务器默认通知级别；选「关闭通知」即等同于静音整个服务器。
     pub(crate) fn set_server_notify(&mut self, level: NotifyLevel, cx: &mut Context<Self>) {
         self.servers[self.active_server].notify = level;
+        if self.is_online()
+            && let (Some(server_id), Some(net)) =
+                (self.remote.servers.get(&self.active_server_name()).cloned(), self.net.clone())
+        {
+            cx.spawn(async move |this, cx| {
+                let result = net
+                    .execute(api::set_server_notify(&server_id, notify_key(level)), true)
+                    .await;
+                let _ = this.update(cx, |app, cx| {
+                    if let Err(error) = result {
+                        app.automod_notice = Some(format!("服务器通知设置失败：{}", error.user_message()));
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
         cx.notify();
     }
 
@@ -3036,6 +3245,23 @@ impl DiscordApp {
         }
 
         let name = self.servers[self.active_server].name.clone();
+        if self.is_online()
+            && let (Some(server_id), Some(net)) =
+                (self.remote.servers.get(&name).cloned(), self.net.clone())
+        {
+            cx.spawn(async move |this, cx| {
+                let result = net.execute(api::leave_server(&server_id), true).await;
+                let _ = this.update(cx, |app, cx| match result {
+                    Ok(_) => app.refresh_structure(cx),
+                    Err(error) => {
+                        app.automod_notice = Some(format!("离开服务器失败：{}", error.user_message()));
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+            return;
+        }
         let leaving_voice = self
             .voice_channel
             .as_ref()
@@ -7137,6 +7363,30 @@ impl DiscordApp {
         let new_desc = self.server_desc_edit.read(cx).value().trim().to_string();
         let current = self.servers[index].name.clone();
 
+        if self.is_online()
+            && let (Some(server_id), Some(net)) = (
+                self.remote.servers.get(&current).cloned(),
+                self.net.clone(),
+            )
+        {
+            let name_arg = (!new_name.is_empty() && new_name != current).then_some(new_name.clone());
+            let desc_arg = (!new_desc.is_empty()).then_some(new_desc.clone());
+            cx.spawn(async move |this, cx| {
+                let result = net
+                    .execute(api::patch_server(&server_id, name_arg.as_deref(), desc_arg.as_deref(), None), true)
+                    .await;
+                let _ = this.update(cx, |app, cx| match result {
+                    Ok(_) => app.refresh_structure(cx),
+                    Err(error) => {
+                        app.automod_notice = Some(format!("保存服务器失败：{}", error.user_message()));
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+            return;
+        }
+
         if !new_name.is_empty() && new_name != current {
             let old_prefix = format!("{current}/");
             let new_prefix = format!("{new_name}/");
@@ -7266,6 +7516,26 @@ impl DiscordApp {
             name = format!("新角色 {serial}");
         }
         let color = ROLE_COLORS[self.roles.len() % ROLE_COLORS.len()];
+        if self.is_online()
+            && let (Some(server_id), Some(net)) =
+                (self.remote.servers.get(&self.active_server_name()).cloned(), self.net.clone())
+        {
+            let role_name = name.clone();
+            cx.spawn(async move |this, cx| {
+                let result = net.execute(api::create_role(&server_id, &role_name, color), true).await;
+                let _ = this.update(cx, |app, cx| match result {
+                    Ok(_) => app.refresh_structure(cx),
+                    Err(error) => {
+                        app.role_notice = Some("创建角色失败");
+                        app.automod_notice = Some(error.user_message());
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+            self.select_role(name, window, cx);
+            return;
+        }
         self.roles.push(Role::new(name.clone(), color));
         self.log_audit(AuditKind::Role, "创建了角色", name.clone());
         self.select_role(name, window, cx);
@@ -7295,6 +7565,33 @@ impl DiscordApp {
             return;
         }
 
+        let server_name = self.active_server_name();
+        if self.is_online()
+            && let (Some(role_id), Some(net)) = (
+                self.remote
+                    .roles
+                    .get(&format!("{server_name}/{current}"))
+                    .cloned(),
+                self.net.clone(),
+            )
+        {
+            let renamed = new_name.clone();
+            cx.spawn(async move |this, cx| {
+                let result = net
+                    .execute(api::patch_role(&role_id, Some(&renamed), None), true)
+                    .await;
+                let _ = this.update(cx, |app, cx| match result {
+                    Ok(_) => app.refresh_structure(cx),
+                    Err(error) => {
+                        app.role_notice = Some("角色改名失败");
+                        app.automod_notice = Some(error.user_message());
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+            return;
+        }
         // 角色名是成员的归属键：改名要同步成员与成员栏的折叠 key。
         let leaked = persist::leak(new_name.clone());
         for role in self.roles.iter_mut() {
@@ -7344,6 +7641,29 @@ impl DiscordApp {
             changed = true;
         }
         if changed {
+            let server_name = self.active_server_name();
+            if self.is_online()
+                && let (Some(role_id), Some(net)) = (
+                    self.remote
+                        .roles
+                        .get(&format!("{server_name}/{current}"))
+                        .cloned(),
+                    self.net.clone(),
+                )
+            {
+                cx.spawn(async move |this, cx| {
+                    let result = net
+                        .execute(api::patch_role(&role_id, None, Some(color)), true)
+                        .await;
+                    let _ = this.update(cx, |app, cx| {
+                        if let Err(error) = result {
+                            app.automod_notice = Some(error.user_message());
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+            }
             self.log_audit(
                 AuditKind::Role,
                 "更新了角色颜色",
@@ -7359,6 +7679,32 @@ impl DiscordApp {
         let Some(current) = self.selected_role.clone() else {
             return;
         };
+        if self.is_online()
+            && let (Some(role_id), Some(net)) = (
+                self.remote
+                    .roles
+                    .get(&format!("{}/{}", self.active_server_name(), current))
+                    .cloned(),
+                self.net.clone(),
+            )
+        {
+            cx.spawn(async move |this, cx| {
+                let result = net.execute(api::delete_role(&role_id), true).await;
+                let _ = this.update(cx, |app, cx| match result {
+                    Ok(_) => {
+                        app.selected_role = None;
+                        app.refresh_structure(cx);
+                    }
+                    Err(error) => {
+                        app.role_notice = Some("删除角色失败");
+                        app.automod_notice = Some(error.user_message());
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+            return;
+        }
         self.roles.retain(|role| role.name != current);
         for member in self.members.iter_mut() {
             if member.role == Some(current.as_str()) {
@@ -7387,6 +7733,35 @@ impl DiscordApp {
         };
         let had_role = self.members[index].role == Some(current.as_str());
         self.members[index].role = if had_role { None } else { Some(leaked) };
+        if self.is_online()
+            && let (Some(server_id), Some(role_id), Some(user_id), Some(net)) = (
+                self.remote.servers.get(&self.active_server_name()).cloned(),
+                self.remote
+                    .roles
+                    .get(&format!("{}/{}", self.active_server_name(), current))
+                    .cloned(),
+                self.remote
+                    .members
+                    .get(&format!("{}/{}", self.active_server_name(), member_name))
+                    .cloned(),
+                self.net.clone(),
+            )
+        {
+            let assigned = !had_role;
+            cx.spawn(async move |this, cx| {
+                let result = net
+                    .execute(api::assign_role(&server_id, &user_id, &role_id, assigned), true)
+                    .await;
+                let _ = this.update(cx, |app, cx| match result {
+                    Ok(_) => app.refresh_structure(cx),
+                    Err(error) => {
+                        app.automod_notice = Some(format!("角色更新失败：{}", error.user_message()));
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
         if had_role {
             self.log_audit(
                 AuditKind::Role,
@@ -7439,6 +7814,44 @@ impl DiscordApp {
                 .push(PermissionGrant::new(role.clone(), key, after));
         }
 
+        if self.is_online() {
+            let server_name = self.active_server_name();
+            let server_id = self.remote.servers.get(&server_name).cloned();
+            let role_id = self
+                .remote
+                .roles
+                .get(&format!("{server_name}/{role}"))
+                .cloned();
+            if let (Some(server_id), Some(role_id), Some(net)) = (server_id, role_id, self.net.clone()) {
+                let items: Vec<serde_json::Value> = crate::data::PERMISSIONS
+                    .iter()
+                    .map(|definition| {
+                        let state = match self.permission_state(&role, definition.key) {
+                            PermissionState::Unset => "inherit",
+                            PermissionState::Allow => "allow",
+                            PermissionState::Deny => "deny",
+                        };
+                        serde_json::json!({
+                            "role_id": role_id,
+                            "permission": definition.key,
+                            "state": state,
+                        })
+                    })
+                    .collect();
+                cx.spawn(async move |this, cx| {
+                    let result = net
+                        .execute(api::write_permissions(&server_id, serde_json::Value::Array(items)), true)
+                        .await;
+                    let _ = this.update(cx, |app, cx| {
+                        if let Err(error) = result {
+                            app.automod_notice = Some(format!("保存权限失败：{}", error.user_message()));
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+            }
+        }
         self.permission_notice = Some(match after {
             PermissionState::Unset => "已恢复为继承默认",
             PermissionState::Allow => "已设为允许",
@@ -7863,6 +8276,32 @@ impl DiscordApp {
             cx.notify();
             return;
         };
+        if self.is_online()
+            && let (Some(server_id), Some(user_id), Some(net)) = (
+                self.remote.servers.get(&self.active_server_name()).cloned(),
+                self.remote
+                    .members
+                    .get(&format!("{}/{}", self.active_server_name(), target))
+                    .cloned(),
+                self.net.clone(),
+            )
+        {
+            let nickname = value.clone();
+            cx.spawn(async move |this, cx| {
+                let result = net
+                    .execute(api::patch_member(&server_id, &user_id, &nickname), true)
+                    .await;
+                let _ = this.update(cx, |app, cx| match result {
+                    Ok(_) => app.refresh_structure(cx),
+                    Err(error) => {
+                        app.automod_notice = Some(format!("昵称修改失败：{}", error.user_message()));
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+            return;
+        }
         let before = self.members[index].display().to_string();
         if value.is_empty() || value == target {
             self.members[index].nick = None;
@@ -7891,6 +8330,29 @@ impl DiscordApp {
         let Some(index) = self.members.iter().position(|member| member.name == name) else {
             return;
         };
+        if self.is_online()
+            && let (Some(server_id), Some(user_id), Some(net)) = (
+                self.remote.servers.get(&self.active_server_name()).cloned(),
+                self.remote
+                    .members
+                    .get(&format!("{}/{}", self.active_server_name(), name))
+                    .cloned(),
+                self.net.clone(),
+            )
+        {
+            cx.spawn(async move |this, cx| {
+                let result = net.execute(api::kick_member(&server_id, &user_id), true).await;
+                let _ = this.update(cx, |app, cx| match result {
+                    Ok(_) => app.refresh_structure(cx),
+                    Err(error) => {
+                        app.automod_notice = Some(format!("移出成员失败：{}", error.user_message()));
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+            return;
+        }
         let display = self.members[index].display().to_string();
         self.members.remove(index);
         // 被移除的人如果正被资料卡或右键菜单指着，一并关掉。
@@ -7909,6 +8371,31 @@ impl DiscordApp {
         let Some(index) = self.members.iter().position(|member| member.name == name) else {
             return;
         };
+        if self.is_online()
+            && let (Some(server_id), Some(user_id), Some(net)) = (
+                self.remote.servers.get(&self.active_server_name()).cloned(),
+                self.remote
+                    .members
+                    .get(&format!("{}/{}", self.active_server_name(), name))
+                    .cloned(),
+                self.net.clone(),
+            )
+        {
+            cx.spawn(async move |this, cx| {
+                let result = net
+                    .execute(api::ban_member(&server_id, &user_id, "", 0), true)
+                    .await;
+                let _ = this.update(cx, |app, cx| match result {
+                    Ok(_) => app.refresh_structure(cx),
+                    Err(error) => {
+                        app.automod_notice = Some(format!("封禁失败：{}", error.user_message()));
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+            return;
+        }
         let display = self.members[index].display().to_string();
         let by = self.me.display_name.clone();
         self.members.remove(index);
@@ -7936,6 +8423,30 @@ impl DiscordApp {
         if let Some(position) = self.bans.iter().position(|entry| entry.name == name) {
             let removed = self.bans.remove(position);
             self.log_audit(AuditKind::Member, "撤销了对成员的封禁", removed.name);
+        }
+        if self.is_online()
+            && let (Some(server_id), Some(net)) =
+                (self.remote.servers.get(&self.active_server_name()).cloned(), self.net.clone())
+        {
+            let user_id = self.remote.blocks.get(name).cloned().or_else(|| {
+                self.bans
+                    .iter()
+                    .find(|entry| entry.name == name)
+                    .and_then(|_| self.remote.blocks.get(name).cloned())
+            });
+            if let Some(user_id) = user_id {
+                cx.spawn(async move |this, cx| {
+                    let result = net.execute(api::unban_member(&server_id, &user_id), true).await;
+                    let _ = this.update(cx, |app, cx| match result {
+                        Ok(_) => app.refresh_structure(cx),
+                        Err(error) => {
+                            app.automod_notice = Some(format!("撤销封禁失败：{}", error.user_message()));
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+            }
         }
         cx.notify();
     }
@@ -8998,6 +9509,11 @@ impl DiscordApp {
         restart_gateway: bool,
         cx: &mut Context<Self>,
     ) {
+        let previous_server = self.servers.get(self.active_server).map(|server| server.name.clone());
+        let previous_channel = self.active_channel.clone();
+        let previous_dm = self.active_dm.clone();
+        let previous_messages = std::mem::take(&mut self.messages);
+
         self.me = data.me;
         self.remote = data.index;
         self.servers = data.servers;
@@ -9013,9 +9529,42 @@ impl DiscordApp {
             self.permissions_by_server.insert(name, Vec::new());
             self.servers = vec![server];
         }
-        self.active_server = data.active_server.min(self.servers.len() - 1);
+
+        if let Some(server_id) = self.pending_server_id.take()
+            && let Some(index) = self
+                .servers
+                .iter()
+                .position(|server| self.remote.servers.get(&server.name) == Some(&server_id))
+        {
+            self.active_server = index;
+        } else {
+        self.active_server = if keep_view {
+            previous_server
+                .as_deref()
+                .and_then(|name| self.servers.iter().position(|server| server.name == name))
+                .unwrap_or(data.active_server.min(self.servers.len() - 1))
+        } else {
+            data.active_server.min(self.servers.len() - 1)
+        };
+        }
+        if let Some(channel) = self.pending_channel.take()
+            && self.servers[self.active_server]
+                .categories
+                .iter()
+                .flat_map(|category| category.channels.iter())
+                .any(|candidate| candidate.name == channel)
+        {
+            self.active_channel = channel;
+        }
         let server_name = self.servers[self.active_server].name.clone();
-        self.active_channel = if data.active_channel.is_empty() {
+        let channel_exists = self.servers[self.active_server]
+            .categories
+            .iter()
+            .flat_map(|category| category.channels.iter())
+            .any(|channel| channel.name == previous_channel);
+        self.active_channel = if keep_view && channel_exists {
+            previous_channel
+        } else if data.active_channel.is_empty() {
             self.first_text_channel().unwrap_or_default()
         } else {
             data.active_channel
@@ -9042,28 +9591,38 @@ impl DiscordApp {
         self.blocked_users = data.blocked_users;
         self.message_requests = data.message_requests;
         self.dm_conversations = data.dm_conversations;
-        self.active_dm = self.dm_conversations.first().map(|dm| dm.friend.to_string());
+        self.active_dm = if keep_view
+            && previous_dm
+                .as_deref()
+                .is_some_and(|name| self.dm_conversations.iter().any(|dm| dm.friend == name))
+        {
+            previous_dm
+        } else {
+            self.dm_conversations.first().map(|dm| dm.friend.to_string())
+        };
 
-        // 在线模式不展示种子内容；后续阶段逐域填充。
-        self.messages.clear();
-        let key = self.active_key();
-        self.loaded_channels.clear();
-        self.loaded_channels.insert(key.clone());
-        self.messages.insert(key, data.messages);
-        self.dm_messages.clear();
-        self.threads.clear();
-        self.events.clear();
-        self.invites.clear();
-        self.audit.clear();
-        self.bans.clear();
-        self.automod_rules.clear();
-        self.forum_posts.clear();
-        self.forum_open = None;
-        self.bookmarks.clear();
-        self.welcome_screens.clear();
-        self.welcome_joined.clear();
-        self.boosts.clear();
-        self.blocked_users.clear();
+        if keep_view {
+            self.messages = previous_messages;
+        } else {
+            self.messages.clear();
+            let key = self.active_key();
+            self.loaded_channels.clear();
+            self.loaded_channels.insert(key.clone());
+            self.messages.insert(key, data.messages);
+            self.dm_messages.clear();
+            self.threads.clear();
+            self.events.clear();
+            self.invites.clear();
+            self.audit.clear();
+            self.bans.clear();
+            self.automod_rules.clear();
+            self.forum_posts.clear();
+            self.forum_open = None;
+            self.bookmarks.clear();
+            self.welcome_screens.clear();
+            self.welcome_joined.clear();
+            self.boosts.clear();
+        }
 
         if !keep_view {
             self.view_mode = ViewMode::Server;

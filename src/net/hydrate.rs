@@ -24,6 +24,7 @@ pub struct RemoteIndex {
     pub me_id: String,
     pub servers: HashMap<String, String>,
     pub channels: HashMap<String, String>,
+    pub categories: HashMap<String, String>,
     pub members: HashMap<String, String>,
     pub roles: HashMap<String, String>,
     pub friends: HashMap<String, String>,
@@ -304,6 +305,9 @@ pub fn hydrate(data: BootData) -> Hydrated {
                 );
             }
             for category in &tree.categories {
+                index
+                    .categories
+                    .insert(format!("{}/{}", server_dto.name, category.name), category.id.clone());
                 let channels = grouped
                     .remove(&Some(category.id.as_str()))
                     .unwrap_or_default()
