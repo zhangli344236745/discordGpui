@@ -14,7 +14,7 @@ from sqlalchemy import and_, delete, or_, select
 
 from app.config import settings
 from app.db import SessionLocal
-from app.models import Attachment, GatewayEvent, Invite
+from app.models import Attachment, Channel, GatewayEvent, Invite, LegalHold, Message, RetentionRule
 from app.services.storage import storage
 
 log = logging.getLogger("server.retention")
@@ -38,6 +38,8 @@ async def purge_once(now: datetime | None = None) -> dict[str, int]:
                 )
             )
         )
+        expired = await _apply_retention_rules(db, now)
+
         orphans = list(
             (
                 await db.scalars(
@@ -60,7 +62,58 @@ async def purge_once(now: datetime | None = None) -> dict[str, int]:
         "gateway_events": events.rowcount or 0,
         "invites": invites.rowcount or 0,
         "attachments": len(orphans),
+        "retention_messages": expired,
     }
+
+
+async def _apply_retention_rules(db, now: datetime) -> int:
+    """按服务器保留策略软删过期消息；法务持有优先，跳过被持有的目标。"""
+    rules = list((await db.scalars(select(RetentionRule).where(RetentionRule.message_days > 0))).all())
+    if not rules:
+        return 0
+
+    total = 0
+    for rule in rules:
+        cutoff = now - timedelta(days=rule.message_days)
+        holds = list(
+            (
+                await db.execute(
+                    select(LegalHold.target_kind, LegalHold.target_id).where(
+                        LegalHold.server_id == rule.server_id
+                    )
+                )
+            ).all()
+        )
+        held_messages = {target for kind, target in holds if kind == "message"}
+        held_channels = {target for kind, target in holds if kind == "channel"}
+        held_users = {target for kind, target in holds if kind == "user"}
+
+        rows = list(
+            (
+                await db.scalars(
+                    select(Message)
+                    .join(Channel, Message.channel_id == Channel.id)
+                    .where(
+                        Channel.server_id == rule.server_id,
+                        Message.deleted_at.is_(None),
+                        Message.created_at < cutoff,
+                    )
+                    .limit(5000)
+                )
+            ).all()
+        )
+        for message in rows:
+            if (
+                message.id in held_messages
+                or message.channel_id in held_channels
+                or message.author_id in held_users
+            ):
+                continue
+            message.deleted_at = now
+            total += 1
+    if total:
+        await db.commit()
+    return total
 
 
 async def run_forever() -> None:

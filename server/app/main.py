@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from app import ops
 from app.api.v1 import api_router
 from app.config import settings
 from app.db import init_db
@@ -18,7 +19,7 @@ from app.services import retention
 from app.services.mailer import init_mailer
 from app.services.storage import init_storage
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+ops.install_json_logs()
 log = logging.getLogger("server")
 
 
@@ -48,6 +49,7 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    app.add_middleware(ops.RequestIdMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
@@ -75,6 +77,7 @@ def create_app() -> FastAPI:
 
     app.include_router(api_router, prefix=settings.api_prefix)
     app.include_router(gateway_router)
+    app.add_api_route("/metrics", ops.metrics_endpoint, include_in_schema=False)
     app.mount("/media", StaticFiles(directory=str(settings.upload_dir), check_dir=False), name="media")
     return app
 

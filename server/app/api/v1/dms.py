@@ -11,6 +11,7 @@ from app.deps import current_user
 from app.errors import ApiError, ErrorCode, conflict, forbidden, not_found
 from app.ids import new_id
 from app.models import DmChannel, DmMessage, MessageRequest, User
+from app.ops import MESSAGES_TOTAL
 from app.realtime import outbox
 from app.realtime.events import Event
 from app.schemas.dm import DmCreate, DmMessageCreate, DmPatch, DmReadIn
@@ -153,6 +154,7 @@ async def send_dm_message(
     if body.client_nonce:
         existing = await db.scalar(select(DmMessage).where(DmMessage.client_nonce == body.client_nonce))
         if existing is not None:
+            MESSAGES_TOTAL.labels("dm").inc()
             return await dm_service.message_out(db, existing)
     if not body.content.strip():
         raise ApiError(400, ErrorCode.VALIDATION_ERROR, "消息不能为空", "content")

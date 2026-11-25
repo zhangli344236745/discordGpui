@@ -20,6 +20,7 @@ class AuthorOut(BaseModel):
     id: str
     name: str
     color: int
+    bot: bool = False
 
 
 class UserPatch(BaseModel):

@@ -19,6 +19,11 @@ from app.ids import new_id
 from app.models import GatewayEvent
 from app.realtime.bus import bus
 
+try:
+    from app.ops import EVENTS_PUBLISHED as _EVENTS_METRIC
+except Exception:  # pragma: no cover - 缺依赖时不影响广播
+    _EVENTS_METRIC = None
+
 log = logging.getLogger("server.outbox")
 
 PENDING_KEY = "pending_gateway_events"
@@ -43,6 +48,8 @@ def queue(db, scope_kind: str, scope_id: str, name: str, data: dict[str, Any]) -
         )
     )
     db.info.setdefault(PENDING_KEY, []).append((event_id, scope_kind, scope_id, name, data))
+    if _EVENTS_METRIC is not None:
+        _EVENTS_METRIC.labels(name).inc()
     return event_id
 
 

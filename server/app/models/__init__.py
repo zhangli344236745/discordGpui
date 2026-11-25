@@ -22,6 +22,7 @@ from app.models.guild import (
     Server,
     ServerMember,
 )
+from app.models.integration import BotToken, SlashCommand, Webhook
 from app.models.interaction import (
     Bookmark,
     Poll,
@@ -40,7 +41,16 @@ from app.models.message import (
     ReadState,
 )
 from app.models.misc import CallSession, Draft, MessageRequest, Notification
-from app.models.moderation import AuditEntry, AutoModKeyword, AutoModRule, Invite
+from app.models.moderation import (
+    AuditEntry,
+    AutoModKeyword,
+    AutoModRule,
+    Invite,
+    LegalHold,
+    Report,
+    ReportAction,
+    RetentionRule,
+)
 from app.models.realtime import GatewayEvent
 from app.models.security import SecurityAudit
 from app.models.social import Block, FriendGroup, FriendRequest, Friendship
@@ -48,6 +58,7 @@ from app.models.user import AuthToken, Session, User, UserSettings
 
 __all__ = [
     "Attachment",
+    "BotToken",
     "AuditEntry",
     "AuthToken",
     "AutoModKeyword",
@@ -74,6 +85,7 @@ __all__ = [
     "Friendship",
     "GatewayEvent",
     "Invite",
+    "LegalHold",
     "MemberRole",
     "Message",
     "MessageEdit",
@@ -84,12 +96,16 @@ __all__ = [
     "PollOption",
     "PollVote",
     "Reaction",
+    "Report",
+    "ReportAction",
+    "RetentionRule",
     "ReadState",
     "Role",
     "Server",
     "SecurityAudit",
     "ServerEvent",
     "ServerMember",
+    "SlashCommand",
     "Session",
     "Thread",
     "ThreadReply",
@@ -99,5 +115,6 @@ __all__ = [
     "WelcomeAccept",
     "WelcomeRecommended",
     "WelcomeRule",
+    "Webhook",
     "WelcomeScreen",
 ]

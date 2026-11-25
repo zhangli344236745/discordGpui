@@ -1,0 +1,48 @@
+# CI：后端（ruff + pytest + 迁移）与客户端（cargo check + test + e2e 冒烟）。
+# 客户端 GPUI 需要 macOS 图形栈，单独跑在 macos runner。
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+      - name: Install dependencies
+        run: uv sync --frozen
+      - name: Lint
+        run: uv run ruff check .
+      - name: Tests
+        run: uv run pytest -q
+      - name: Migrations roundtrip (sqlite)
+        run: uv run alembic upgrade head && uv run alembic downgrade 41e386ed7335 && uv run alembic upgrade head
+
+  client:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check
+        run: cargo check --quiet
+      - name: Unit tests
+        run: cargo test --quiet
+
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compose config validation
+        run: docker compose config --quiet
+      - name: Object-storage override validation
+        run: docker compose --profile object-storage -f docker-compose.yml -f docker-compose.object-storage.yml config --quiet

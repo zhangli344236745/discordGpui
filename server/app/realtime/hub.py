@@ -13,6 +13,11 @@ from fastapi import WebSocket
 from app.ids import new_id
 from app.realtime.events import envelope
 
+try:  # ops 依赖 prometheus_client；测试环境缺依赖时不影响 Hub
+    from app.ops import WS_CONNECTIONS as _WS_GAUGE
+except Exception:  # pragma: no cover
+    _WS_GAUGE = None
+
 
 @dataclass
 class Connection:
@@ -35,9 +40,13 @@ class Hub:
 
     def add(self, conn: Connection) -> None:
         self._conns[conn.key] = conn
+        if _WS_GAUGE is not None:
+            _WS_GAUGE.set(len(self._conns))
 
     def remove(self, conn: Connection) -> None:
         self._conns.pop(conn.key, None)
+        if _WS_GAUGE is not None:
+            _WS_GAUGE.set(len(self._conns))
 
     @property
     def size(self) -> int:

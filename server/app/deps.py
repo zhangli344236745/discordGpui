@@ -1,14 +1,15 @@
+import hashlib
 from dataclasses import dataclass
 
 import jwt
-from fastapi import Depends
+from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
 from app.errors import ErrorCode, forbidden, not_found, unauthorized
-from app.models import Channel, Server, ServerMember, User
+from app.models import BotToken, Channel, Server, ServerMember, User
 from app.security import decode_token
 from app.services.permissions import effective_permissions
 
@@ -32,6 +33,30 @@ async def current_user(
     if user is None:
         raise unauthorized("账号不存在")
     return user
+
+
+async def principal(
+    request: Request,
+    cred: HTTPAuthorizationCredentials | None = Depends(bearer),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    """用户 JWT 或 Bot 令牌二选一：Authorization: Bot <token> 走 Bot 通道。"""
+    header = request.headers.get("authorization", "")
+    if header.lower().startswith("bot "):
+        raw = header[4:].strip()
+        row = await db.scalar(
+            select(BotToken).where(
+                BotToken.token_hash == hashlib.sha256(raw.encode()).hexdigest(),
+                BotToken.revoked.is_(False),
+            )
+        )
+        if row is None:
+            raise unauthorized("Bot 令牌无效")
+        user = await db.get(User, row.bot_user_id)
+        if user is None:
+            raise unauthorized("账号不存在")
+        return user
+    return await current_user(cred, db)
 
 
 @dataclass
@@ -109,6 +134,7 @@ async def channel_context(
 
 __all__ = [
     "ChannelContext",
+    "principal",
     "ServerContext",
     "channel_context",
     "current_user",

@@ -23,6 +23,10 @@ class User(Base, IdMixin, CreatedAtMixin):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
     )
+    # 账号删除时间；删除后资料匿名化，审计保留
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Bot 账号：复用 users 表，消息与成员列表无需特判
+    is_bot: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # TOTP 2FA：secret 仅在 setup 后写入，enabled 表示登录强制校验
     totp_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
     totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

@@ -40,21 +40,21 @@
 
 ## 5. P4 机器人与集成
 
-- [ ] 5.1 数据模型：bots、bot_tokens、webhooks、slash_commands；迁移可执行
-- [ ] 5.2 Bot 账号创建/邀请/角色与 BOT 标识；验证 Bot 发消息显示 BOT 标记
-- [ ] 5.3 Bot token 签发、撤销、限流；验证撤销后 401、超限 429
-- [ ] 5.4 Webhook 创建/签名/推送/撤销；验证外部 POST 产生消息
-- [ ] 5.5 斜杠命令注册、权限与执行；验证 `/help` 与无权限拒绝
-- [ ] 5.6 Bot/Webhook pytest 与示例脚本通过
+- [x] 5.1 数据模型：bots、bot_tokens、webhooks、slash_commands；迁移可执行
+- [x] 5.2 Bot 账号创建/邀请/角色与 BOT 标识；验证 Bot 发消息显示 BOT 标记
+- [x] 5.3 Bot token 签发、撤销、限流；验证撤销后 401、超限 429
+- [x] 5.4 Webhook 创建/签名/推送/撤销；验证外部 POST 产生消息
+- [x] 5.5 斜杠命令注册、权限与执行；验证 `/help` 与无权限拒绝
+- [x] 5.6 Bot/Webhook pytest 与示例脚本通过
 
 ## 6. P5 合规与举报
 
-- [ ] 6.1 数据模型：reports、report_actions、retention_rules、legal_holds；迁移可执行
-- [ ] 6.2 消息/用户/服务器举报与去重合并；验证处理者收到通知
-- [ ] 6.3 举报处理状态机与通知；验证删除内容后举报关闭
-- [ ] 6.4 内容保留策略与法务保留；验证到期清理且 legal hold 跳过
-- [ ] 6.5 用户数据导出与账号删除；验证导出完整、删除后不可识别
-- [ ] 6.6 合规 pytest 通过
+- [x] 6.1 数据模型：reports、report_actions、retention_rules、legal_holds；迁移可执行
+- [x] 6.2 消息/用户/服务器举报与去重合并；验证处理者收到通知
+- [x] 6.3 举报处理状态机与通知；验证删除内容后举报关闭
+- [x] 6.4 内容保留策略与法务保留；验证到期清理且 legal hold 跳过
+- [x] 6.5 用户数据导出与账号删除；验证导出完整、删除后不可识别
+- [x] 6.6 合规 pytest 通过
 
 ## 7. P6 客户端可靠性
 
@@ -67,10 +67,10 @@
 
 ## 8. P7 运维可观测
 
-- [ ] 8.1 Prometheus 指标端点与核心指标；验证可抓取
-- [ ] 8.2 JSON 日志与 request_id 贯穿；验证敏感字段脱敏
+- [x] 8.1 Prometheus 指标端点与核心指标；验证可抓取
+- [x] 8.2 JSON 日志与 request_id 贯穿；验证敏感字段脱敏
 - [ ] 8.3 分布式追踪接入；验证请求链路可串起
-- [ ] 8.4 GitHub Actions CI：lint/test/build/image/deploy dry-run
-- [ ] 8.5 压测脚本与容量报告；输出 P95 与稳定吞吐
-- [ ] 8.6 备份定时调度与恢复演练自动化
-- [ ] 8.7 文档更新：生产部署、容量、告警、回滚
+- [x] 8.4 GitHub Actions CI：lint/test/build/image/deploy dry-run
+- [x] 8.5 压测脚本与容量报告；输出 P95 与稳定吞吐
+- [x] 8.6 备份定时调度与恢复演练自动化
+- [x] 8.7 文档更新：生产部署、容量、告警、回滚

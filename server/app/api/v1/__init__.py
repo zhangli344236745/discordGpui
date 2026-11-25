@@ -3,8 +3,10 @@ from fastapi import APIRouter
 from app.api.v1 import (
     auth,
     boosts,
+    bots,
     calls,
     channels,
+    compliance,
     content,
     dms,
     events,
@@ -28,6 +30,7 @@ from app.api.v1 import (
 api_router = APIRouter()
 api_router.include_router(system.router)
 api_router.include_router(auth.router)
+api_router.include_router(bots.router)
 api_router.include_router(users.router)
 api_router.include_router(servers.router)
 api_router.include_router(servers.discover_router)
@@ -49,5 +52,6 @@ api_router.include_router(search.router)
 api_router.include_router(me.router)
 api_router.include_router(notifications.router)
 api_router.include_router(moderation.router)
+api_router.include_router(compliance.router)
 
 __all__ = ["api_router"]

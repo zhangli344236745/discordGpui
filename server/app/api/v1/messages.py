@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db import get_db, utcnow
-from app.deps import current_user
+from app.deps import current_user, principal
 from app.errors import ApiError, ErrorCode, conflict, forbidden, not_found
 from app.ids import new_id
 from app.models import (
@@ -25,6 +25,7 @@ from app.models import (
     ServerMember,
     User,
 )
+from app.ops import MESSAGES_TOTAL
 from app.realtime.bus import bus
 from app.realtime.events import Event
 from app.schemas.message import MessageCreate, MessageOut, MessagePatch, ReactionIn
@@ -162,6 +163,7 @@ async def serialize(db: AsyncSession, msgs: list[Message], viewer_id: str) -> li
                     "id": m.author_id,
                     "name": author.display_name if author else "已注销用户",
                     "color": author.avatar_color if author else 0x808080,
+                    "bot": bool(author.is_bot) if author else False,
                 },
                 content=m.content,
                 type=m.msg_type,
@@ -215,7 +217,7 @@ async def send_message(
     channel_id: str,
     body: MessageCreate,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(current_user),
+    user: User = Depends(principal),
 ) -> MessageOut:
     channel = await db.get(Channel, channel_id)
     if channel is None:
@@ -314,6 +316,7 @@ async def send_message(
             raise
         return (await serialize(db, [existing], viewer_id))[0]
 
+    MESSAGES_TOTAL.labels("channel").inc()
     out = (await serialize(db, [message], user.id))[0]
     if scan.warnings:
         out.warnings = [{"rule": w.rule_name, "keyword": w.keyword, "rule_id": w.rule_id} for w in scan.warnings]

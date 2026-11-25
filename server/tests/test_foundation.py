@@ -177,7 +177,12 @@ async def test_retention_purges_expired_rows(client: AsyncClient, world: dict) -
         await db.commit()
 
     counts = await retention.purge_once(now)
-    assert counts == {"gateway_events": 1, "invites": 1, "attachments": 1}
+    assert counts == {
+        "gateway_events": 1,
+        "invites": 1,
+        "attachments": 1,
+        "retention_messages": 0,
+    }
 
     async with SessionLocal() as db:
         assert (await db.scalar(select(GatewayEvent).where(GatewayEvent.event == "NEW"))) is not None
