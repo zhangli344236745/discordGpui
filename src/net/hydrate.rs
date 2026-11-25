@@ -14,9 +14,10 @@ use crate::data::{
 };
 
 use super::dto::{
-    ChannelDto, ChannelUnreadDto, DmDto, DmMessageDto, FriendDto, FriendGroupDto, FriendRequestDto,
-    ForumPostDto, InviteDto, MemberDto, MessageDto, MessageRequestDto,
-    PermissionMatrixDto, RoleDto, ServerDto, ServerTreeDto, UnreadCountsDto, UserDto,
+    BoostDto, ChannelDto, ChannelUnreadDto, DmDto, DmMessageDto, FriendDto, FriendGroupDto,
+    FriendRequestDto, ForumPostDto, InviteDto, MemberDto, MessageDto, MessageRequestDto,
+    PermissionMatrixDto, RoleDto, ServerDto, ServerEventDto, ServerTreeDto, UnreadCountsDto,
+    UserDto, WelcomeDto,
 };
 
 #[derive(Clone, Debug, Default)]
@@ -46,6 +47,9 @@ pub struct BootData {
     pub message_requests: Vec<MessageRequestDto>,
     pub invites: Vec<InviteDto>,
     pub forum_posts: Vec<ForumPostDto>,
+    pub events: Vec<ServerEventDto>,
+    pub boosts: Vec<(String, BoostDto)>,
+    pub welcomes: Vec<(String, WelcomeDto)>,
     pub groups: Vec<FriendGroupDto>,
     pub dms: Vec<DmDto>,
     pub counts: UnreadCountsDto,
@@ -71,6 +75,10 @@ pub struct Hydrated {
     pub message_requests: Vec<MessageRequest>,
     pub invites: Vec<crate::data::Invite>,
     pub forum_posts: Vec<crate::data::ForumPost>,
+    pub events: Vec<crate::data::ServerEvent>,
+    pub boosts: Vec<crate::data::ServerBoost>,
+    pub welcomes: Vec<crate::data::ServerWelcome>,
+    pub welcome_joined: Vec<String>,
     pub dm_conversations: Vec<DmConversation>,
     pub messages: Vec<Message>,
     pub index: RemoteIndex,
@@ -138,6 +146,58 @@ pub(crate) fn message_from(dto: &MessageDto) -> Message {
     );
     message.id = dto.id.clone();
     message.pinned = dto.pinned;
+    if let Some(poll) = dto.poll.as_ref()
+        && let (Some(question), Some(options)) = (
+            poll.get("question").and_then(|value| value.as_str()),
+            poll.get("options").and_then(|value| value.as_array()),
+        )
+    {
+        let mut converted = crate::data::Poll::new(
+            question,
+            &[],
+            poll.get("multi").and_then(|value| value.as_bool()).unwrap_or(false),
+        );
+        converted.id = poll
+            .get("id")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .to_string();
+        converted.closed = poll
+            .get("closed")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        converted.options = options
+            .iter()
+            .map(|option| {
+                let label = option
+                    .get("label")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default();
+                let votes = option
+                    .get("votes")
+                    .and_then(|value| value.as_u64())
+                    .unwrap_or_default() as usize;
+                let mine = option
+                    .get("me")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false);
+                crate::data::PollOption {
+                    id: option
+                        .get("id")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    label: label.to_string(),
+                    voters: if mine {
+                        vec!["你".to_string(); votes.max(1)]
+                    } else {
+                        vec![String::new(); votes]
+                    },
+                }
+            })
+            .collect();
+        message.poll = Some(converted);
+    }
     if let Some(attachment) = dto.attachments.first() {
         let kind = if attachment.mime.starts_with("image/") {
             AttachmentKind::Image
@@ -474,6 +534,97 @@ pub fn hydrate(data: BootData) -> Hydrated {
         });
     }
 
+    let mut events = Vec::new();
+    for event in &data.events {
+        let server_name = data
+            .servers
+            .iter()
+            .find(|server| server.id == event.server_id)
+            .map(|server| server.name.clone())
+            .unwrap_or_default();
+        let channel_name = event
+            .channel_id
+            .as_deref()
+            .and_then(|channel_id| {
+                data.trees
+                    .iter()
+                    .flat_map(|tree| tree.channels.iter())
+                    .find(|channel| channel.id == channel_id)
+                    .map(|channel| channel.name.clone())
+            })
+            .unwrap_or_default();
+        let category = match event.category.as_str() {
+            "game" => crate::data::EventCategory::Game,
+            "voice" => crate::data::EventCategory::Voice,
+            "community" => crate::data::EventCategory::Community,
+            _ => crate::data::EventCategory::Other,
+        };
+        let mut converted = crate::data::ServerEvent::new(
+            event.id.clone(),
+            server_name,
+            event.title.clone(),
+            channel_name,
+            leak(event.creator.name.clone()),
+            if event.status == "live" { -1 } else { 60 },
+            event.duration_minutes,
+            category,
+        );
+        converted.description = event.description.clone();
+        converted.attendees = if event.going {
+            vec!["你".to_string()]
+        } else {
+            Vec::new()
+        };
+        events.push(converted);
+    }
+
+    let mut boosts = Vec::new();
+    for (server_name, boost) in &data.boosts {
+        let mut converted = crate::data::ServerBoost::new(server_name.clone());
+        for booster in &boost.boosters {
+            converted.boosters.push(crate::data::Booster::new(
+                leak(booster.name.clone()),
+                booster.color,
+                0,
+            ));
+        }
+        boosts.push(converted);
+    }
+
+    let mut welcomes = Vec::new();
+    let mut welcome_joined = Vec::new();
+    for (server_name, welcome) in &data.welcomes {
+        if let Some(config) = welcome.welcome.as_ref() {
+            let mut converted = crate::data::ServerWelcome::new(server_name.clone(), config.headline.clone(), config.description.clone());
+            converted.headline = config.headline.clone();
+            converted.description = config.description.clone();
+            converted.require_rules = config.require_rules;
+            converted.rules = config
+                .rules
+                .iter()
+                .map(|rule| crate::data::WelcomeRule {
+                    title: rule.title.clone(),
+                    body: rule.body.clone(),
+                })
+                .collect();
+            converted.recommended = config
+                .recommended
+                .iter()
+                .filter_map(|channel_id| {
+                    data.trees
+                        .iter()
+                        .flat_map(|tree| tree.channels.iter())
+                        .find(|channel| channel.id == *channel_id)
+                        .map(|channel| channel.name.clone())
+                })
+                .collect();
+            welcomes.push(converted);
+        }
+        if welcome.accepted {
+            welcome_joined.push(server_name.clone());
+        }
+    }
+
     let mut forum_posts = Vec::new();
     for post in &data.forum_posts {
         let (server_name, channel_name) = data
@@ -583,6 +734,10 @@ pub fn hydrate(data: BootData) -> Hydrated {
         message_requests,
         invites,
         forum_posts,
+        events,
+        boosts,
+        welcomes,
+        welcome_joined,
         dm_conversations: dms,
         messages,
         index,
@@ -650,6 +805,9 @@ mod tests {
             message_requests: vec![],
             invites: vec![],
             forum_posts: vec![],
+            events: vec![],
+            boosts: vec![],
+            welcomes: vec![],
             groups: vec![],
             dms: vec![],
             counts: dto(json!({"channels":[{"channel_id":"ch1","server_id":"s1","unread":3}]})),

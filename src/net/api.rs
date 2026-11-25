@@ -93,6 +93,88 @@ pub fn patch_forum_post(post_id: &str, pinned: Option<bool>, locked: Option<bool
         .with_body(Value::Object(payload))
 }
 
+pub fn create_poll(channel_id: &str, question: &str, options: &[String], multi: bool) -> ApiRequest {
+    ApiRequest::new(Method::Post, format!("/api/v1/channels/{channel_id}/polls")).with_body(json!({
+        "question": question,
+        "options": options,
+        "multi": multi,
+    }))
+}
+
+pub fn vote_poll(poll_id: &str, option_id: &str) -> ApiRequest {
+    ApiRequest::new(Method::Post, format!("/api/v1/polls/{poll_id}/votes"))
+        .with_body(json!({ "option_id": option_id }))
+}
+
+pub fn clear_poll_vote(poll_id: &str) -> ApiRequest {
+    ApiRequest::new(Method::Delete, format!("/api/v1/polls/{poll_id}/votes"))
+}
+
+pub fn close_poll(poll_id: &str) -> ApiRequest {
+    ApiRequest::new(Method::Post, format!("/api/v1/polls/{poll_id}/close"))
+}
+
+pub fn create_thread(message_id: &str, title: &str) -> ApiRequest {
+    ApiRequest::new(Method::Post, format!("/api/v1/messages/{message_id}/threads"))
+        .with_body(json!({ "title": title }))
+}
+
+pub fn create_thread_reply(thread_id: &str, content: &str) -> ApiRequest {
+    ApiRequest::new(Method::Post, format!("/api/v1/threads/{thread_id}/replies"))
+        .with_body(json!({ "content": content }))
+}
+
+pub fn server_events(server_id: &str) -> ApiRequest {
+    ApiRequest::new(Method::Get, format!("/api/v1/servers/{server_id}/events"))
+}
+
+pub fn create_event(
+    server_id: &str,
+    title: &str,
+    description: &str,
+    category: &str,
+    channel_id: Option<&str>,
+    starts_at: &str,
+    duration_minutes: u32,
+) -> ApiRequest {
+    ApiRequest::new(Method::Post, format!("/api/v1/servers/{server_id}/events")).with_body(json!({
+        "title": title,
+        "description": description,
+        "category": category,
+        "channel_id": channel_id,
+        "starts_at": starts_at,
+        "duration_minutes": duration_minutes,
+    }))
+}
+
+pub fn delete_event(event_id: &str) -> ApiRequest {
+    ApiRequest::new(Method::Delete, format!("/api/v1/events/{event_id}"))
+}
+
+pub fn rsvp_event(event_id: &str, going: bool) -> ApiRequest {
+    ApiRequest::new(Method::Put, format!("/api/v1/events/{event_id}/rsvp"))
+        .with_body(json!({ "going": going }))
+}
+
+pub fn server_welcome(server_id: &str) -> ApiRequest {
+    ApiRequest::new(Method::Get, format!("/api/v1/servers/{server_id}/welcome"))
+}
+
+pub fn accept_welcome(server_id: &str, rule_agreed: bool, channels: &[String]) -> ApiRequest {
+    ApiRequest::new(Method::Post, format!("/api/v1/servers/{server_id}/welcome/accept")).with_body(
+        json!({ "rule_agreed": rule_agreed, "channels": channels }),
+    )
+}
+
+pub fn server_boosts(server_id: &str) -> ApiRequest {
+    ApiRequest::new(Method::Get, format!("/api/v1/servers/{server_id}/boosts"))
+}
+
+pub fn toggle_boost(server_id: &str, active: bool) -> ApiRequest {
+    ApiRequest::new(Method::Put, format!("/api/v1/servers/{server_id}/boosts/me"))
+        .with_body(json!({ "active": active }))
+}
+
 pub fn health() -> ApiRequest {
     ApiRequest::new(Method::Get, "/api/v1/health")
 }

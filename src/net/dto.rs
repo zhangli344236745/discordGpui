@@ -34,7 +34,7 @@ pub struct HealthDto {
     pub gateway_connections: u32,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 pub struct AuthorDto {
     pub id: String,
     pub name: String,
@@ -324,6 +324,74 @@ pub struct ForumPostPageDto {
     pub items: Vec<ForumPostDto>,
     #[serde(default)]
     pub has_more: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct ServerEventDto {
+    pub id: String,
+    #[serde(default)]
+    pub server_id: String,
+    pub title: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub category: String,
+    #[serde(default)]
+    pub channel_id: Option<String>,
+    #[serde(default)]
+    pub starts_at: String,
+    #[serde(default)]
+    pub duration_minutes: u32,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub going_count: u32,
+    #[serde(default)]
+    pub going: bool,
+    #[serde(default)]
+    pub creator: AuthorDto,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct BoostDto {
+    #[serde(default)]
+    pub count: u32,
+    #[serde(default)]
+    pub level: u32,
+    #[serde(default)]
+    pub boosted: bool,
+    #[serde(default)]
+    pub boosters: Vec<AuthorDto>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct WelcomeDto {
+    #[serde(default)]
+    pub welcome: Option<WelcomeConfigDto>,
+    #[serde(default)]
+    pub accepted: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct WelcomeConfigDto {
+    #[serde(default)]
+    pub headline: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub require_rules: bool,
+    #[serde(default)]
+    pub rules: Vec<WelcomeRuleDto>,
+    #[serde(default)]
+    pub recommended: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct WelcomeRuleDto {
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub body: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]

@@ -264,6 +264,8 @@ impl ThreadReply {
 /// 挂在某条主消息上的话题：root_index 是它在当前会话消息列表里的下标。
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ChatThread {
+    #[serde(default)]
+    pub id: String,
     pub root_index: usize,
     pub title: String,
     pub replies: Vec<ThreadReply>,
@@ -276,6 +278,7 @@ impl ChatThread {
         replies: Vec<ThreadReply>,
     ) -> Self {
         Self {
+            id: String::new(),
             root_index,
             title: title.into(),
             replies,
@@ -1158,6 +1161,8 @@ impl AutoModRule {
 /// 用名单而非纯计数，既能显示票数也能判断"我是否已投 / 投了哪项"。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PollOption {
+    #[serde(default)]
+    pub id: String,
     pub label: String,
     #[serde(default)]
     pub voters: Vec<String>,
@@ -1166,6 +1171,7 @@ pub struct PollOption {
 impl PollOption {
     pub fn new(label: impl Into<String>) -> Self {
         Self {
+            id: String::new(),
             label: label.into(),
             voters: Vec::new(),
         }
@@ -1176,6 +1182,8 @@ impl PollOption {
 /// 全部字段自有，serde 直接派生，无需 `*Owned` 镜像。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Poll {
+    #[serde(default)]
+    pub id: String,
     pub question: String,
     pub options: Vec<PollOption>,
     #[serde(default)]
@@ -1187,6 +1195,7 @@ pub struct Poll {
 impl Poll {
     pub fn new(question: impl Into<String>, labels: &[&str], multiple: bool) -> Self {
         Self {
+            id: String::new(),
             question: question.into(),
             options: labels.iter().map(|label| PollOption::new(*label)).collect(),
             multiple,

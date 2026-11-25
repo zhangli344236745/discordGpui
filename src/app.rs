@@ -110,12 +110,83 @@ impl MessageRequestFilter {
 }
 
 /// 请求状态是否落入某个筛选（供计数与列表共用）。
+fn iso_utc_after_minutes(minutes: i64) -> String {
+    let total = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or_default()
+        + minutes * 60;
+    let days = total.div_euclid(86_400);
+    let seconds = total.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        seconds / 3600,
+        (seconds % 3600) / 60,
+        seconds % 60
+    )
+}
+
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+fn event_category_key(category: EventCategory) -> &'static str {
+    match category {
+        EventCategory::Game => "game",
+        EventCategory::Voice => "voice",
+        EventCategory::Community => "community",
+        EventCategory::Other => "other",
+    }
+}
+
 fn notify_key(level: NotifyLevel) -> &'static str {
     match level {
         NotifyLevel::Inherit => "inherit",
         NotifyLevel::All => "all",
         NotifyLevel::Mentions => "mentions",
         NotifyLevel::Nothing => "none",
+    }
+}
+
+fn update_poll(message: &mut Message, data: &serde_json::Value) {
+    let Some(poll) = message.poll.as_mut() else {
+        return;
+    };
+    if let Some(closed) = data.get("closed").and_then(|value| value.as_bool()) {
+        poll.closed = closed;
+    }
+    if let Some(options) = data.get("options").and_then(|value| value.as_array()) {
+        for option in options {
+            let Some(option_id) = option.get("id").and_then(|value| value.as_str()) else {
+                continue;
+            };
+            let Some(local) = poll.options.iter_mut().find(|item| item.id == option_id) else {
+                continue;
+            };
+            let votes = option
+                .get("votes")
+                .and_then(|value| value.as_u64())
+                .unwrap_or_default() as usize;
+            let mine = option
+                .get("me")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+            local.voters = if mine {
+                vec!["你".to_string(); votes.max(1)]
+            } else {
+                vec![String::new(); votes]
+            };
+        }
     }
 }
 
@@ -4236,6 +4307,48 @@ impl DiscordApp {
         if let Some(messages) = self.current_messages_mut() {
             messages.push(message);
         }
+        if self.is_online()
+            && let (Some(channel_id), Some(net)) = (
+                self.remote.channels.get(&self.active_key()).cloned(),
+                self.net.clone(),
+            )
+        {
+            let labels_owned = self.poll_options_draft.clone();
+            let multi = self.poll_multiple;
+            let question_for_poll = question.clone();
+            cx.spawn(async move |this, cx| {
+                let result = net
+                    .execute(
+                        api::create_poll(&channel_id, &question_for_poll, &labels_owned, multi),
+                        true,
+                    )
+                    .await;
+                let _ = this.update(cx, |app, cx| {
+                    match result {
+                        Ok(value) => {
+                            if let Ok(dto) = serde_json::from_value::<MessageDto>(value)
+                                && let Some(list) = app.messages.get_mut(&sent_session)
+                                && let Some(index) = list
+                                    .iter()
+                                    .rposition(|message| message.id.is_empty() && message.poll.is_some())
+                            {
+                                let mut converted = hydrate::message_from(&dto);
+                                if dto.author.id == app.remote.me_id {
+                                    converted.author = "你";
+                                }
+                                list[index] = converted;
+                            }
+                            cx.notify();
+                        }
+                        Err(error) => {
+                            app.automod_notice = Some(format!("发起投票失败：{}", error.user_message()));
+                            cx.notify();
+                        }
+                    }
+                });
+            })
+            .detach();
+        }
         self.log_audit(AuditKind::Server, "发起了投票", question);
         self.close_poll_composer(window, cx);
         self.clear_search(window, cx);
@@ -4254,6 +4367,27 @@ impl DiscordApp {
         let me = "你";
         let mut changed = false;
         let mut question = String::new();
+        let mut remote_vote = None;
+        if self.is_online()
+            && let Some(net) = self.net.clone()
+            && let Some(Some(poll)) = self
+                .current_messages()
+                .get(index)
+                .map(|message| message.poll.as_ref())
+        {
+            if let Some(option) = poll.options.get(option_index) {
+                let already = option.voters.iter().any(|name| name == me);
+                if !poll.closed {
+                    remote_vote = Some((
+                        net,
+                        poll.id.clone(),
+                        option.id.clone(),
+                        already,
+                        poll.multiple,
+                    ));
+                }
+            }
+        }
         if let Some(Some(poll)) = self
             .current_messages_mut()
             .and_then(|messages| messages.get_mut(index))
@@ -4278,6 +4412,23 @@ impl DiscordApp {
                 changed = true;
             }
         }
+        if let Some((net, poll_id, option_id, already, multiple)) = remote_vote {
+            let call = if already && !multiple {
+                api::vote_poll(&poll_id, &option_id)
+            } else {
+                api::vote_poll(&poll_id, &option_id)
+            };
+            cx.spawn(async move |this, cx| {
+                let result = net.execute(call, true).await;
+                let _ = this.update(cx, |app, cx| {
+                    if let Err(error) = result {
+                        app.automod_notice = Some(format!("投票失败：{}", error.user_message()));
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
         if changed {
             self.log_audit(
                 AuditKind::Server,
@@ -4292,6 +4443,19 @@ impl DiscordApp {
     pub(crate) fn close_poll(&mut self, index: usize, cx: &mut Context<Self>) {
         let mut question = String::new();
         let mut changed = false;
+        let mut remote_close = None;
+        if self.is_online()
+            && let (Some(net), Some(poll_id)) = (
+                self.net.clone(),
+                self.current_messages()
+                    .get(index)
+                    .and_then(|message| message.poll.as_ref())
+                    .map(|poll| poll.id.clone())
+                    .filter(|id| !id.is_empty()),
+            )
+        {
+            remote_close = Some((net, poll_id));
+        }
         if let Some(message) = self.current_messages_mut().and_then(|m| m.get_mut(index))
             && let Some(poll) = message.poll.as_mut()
             && !poll.closed
@@ -4300,6 +4464,18 @@ impl DiscordApp {
             question = poll.question.clone();
             poll.closed = true;
             changed = true;
+        }
+        if let Some((net, poll_id)) = remote_close {
+            cx.spawn(async move |this, cx| {
+                let result = net.execute(api::close_poll(&poll_id), true).await;
+                let _ = this.update(cx, |app, cx| {
+                    if let Err(error) = result {
+                        app.automod_notice = Some(format!("结束投票失败：{}", error.user_message()));
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
         }
         if changed {
             self.log_audit(AuditKind::Server, "结束了投票", question);
@@ -4440,6 +4616,56 @@ impl DiscordApp {
         }
         let description = self.event_desc_edit.read(cx).value().trim().to_string();
         let server = self.active_server_name();
+        if self.is_online()
+            && let (Some(server_id), Some(net)) = (
+                self.remote.servers.get(&server).cloned(),
+                self.net.clone(),
+            )
+        {
+            let category = event_category_key(self.event_category);
+            let channel_id = self
+                .remote
+                .channels
+                .get(&format!("{server}/{}", self.event_channel))
+                .cloned();
+            let starts_at = iso_utc_after_minutes(self.event_starts_in as i64);
+            let duration = self.event_duration;
+            let description_for_event = description.clone();
+            let title_for_event = title.clone();
+            cx.spawn(async move |this, cx| {
+                let result = net
+                    .execute(
+                        api::create_event(
+                            &server_id,
+                            &title_for_event,
+                            &description_for_event,
+                            category,
+                            channel_id.as_deref(),
+                            &starts_at,
+                            duration,
+                        ),
+                        true,
+                    )
+                    .await;
+                let _ = this.update(cx, |app, cx| match result {
+                    Ok(_) => {
+                        app.event_notice = Some(format!("活动「{title_for_event}」已创建"));
+                        app.refresh_structure(cx);
+                    }
+                    Err(error) => {
+                        app.event_notice = Some(format!("创建活动失败：{}", error.user_message()));
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+            self.show_event_create = false;
+            self.event_title_edit
+                .update(cx, |input, cx| input.set_value("", window, cx));
+            self.event_desc_edit
+                .update(cx, |input, cx| input.set_value("", window, cx));
+            return;
+        }
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_millis())
@@ -4472,6 +4698,27 @@ impl DiscordApp {
 
     /// 删除指定 id 的活动（不限归属，按 id 精确匹配）。
     pub(crate) fn delete_event(&mut self, id: String, cx: &mut Context<Self>) {
+        if self.is_online()
+            && !id.starts_with("evt-")
+            && let Some(net) = self.net.clone()
+        {
+            let event_id = id.clone();
+            cx.spawn(async move |this, cx| {
+                let result = net.execute(api::delete_event(&event_id), true).await;
+                let _ = this.update(cx, |app, cx| match result {
+                    Ok(_) => {
+                        app.event_notice = Some("活动已删除".into());
+                        app.refresh_structure(cx);
+                    }
+                    Err(error) => {
+                        app.event_notice = Some(format!("删除活动失败：{}", error.user_message()));
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+            return;
+        }
         let before = self.events.len();
         self.events.retain(|event| event.id != id);
         if self.events.len() == before {
@@ -4487,6 +4734,30 @@ impl DiscordApp {
 
     /// 报名 / 取消报名指定活动（仅本人操作本地名单）。
     pub(crate) fn toggle_attendance(&mut self, id: String, cx: &mut Context<Self>) {
+        if self.is_online()
+            && !id.starts_with("evt-")
+            && let Some(net) = self.net.clone()
+        {
+            let going = self
+                .events
+                .iter()
+                .find(|event| event.id == id)
+                .map(|event| !event.is_attending("你"))
+                .unwrap_or(true);
+            let event_id = id.clone();
+            cx.spawn(async move |this, cx| {
+                let result = net.execute(api::rsvp_event(&event_id, going), true).await;
+                let _ = this.update(cx, |app, cx| match result {
+                    Ok(_) => app.refresh_structure(cx),
+                    Err(error) => {
+                        app.event_notice = Some(format!("报名失败：{}", error.user_message()));
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+            return;
+        }
         let mut title = String::new();
         let mut joined = false;
         if let Some(event) = self.events.iter_mut().find(|event| event.id == id) {
@@ -5418,6 +5689,44 @@ impl DiscordApp {
         let Some(server) = self.welcome_target.clone() else {
             return;
         };
+        if self.is_online()
+            && let (Some(server_id), Some(net)) = (
+                self.remote.servers.get(&server).cloned(),
+                self.net.clone(),
+            )
+        {
+            let channels: Vec<String> = self
+                .welcome_selected
+                .iter()
+                .filter_map(|name| self.remote.channels.get(&format!("{server}/{name}")).cloned())
+                .collect();
+            let server_for_welcome = server.clone();
+            cx.spawn(async move |this, cx| {
+                let result = net
+                    .execute(
+                        api::accept_welcome(&server_id, true, &channels),
+                        true,
+                    )
+                    .await;
+                let _ = this.update(cx, |app, cx| match result {
+                    Ok(_) => {
+                        if !app.welcome_joined.iter().any(|name| name == &server_for_welcome) {
+                            app.welcome_joined.push(server_for_welcome.clone());
+                        }
+                        app.welcome_target = None;
+                        app.welcome_rule_agreed = false;
+                        app.welcome_selected.clear();
+                        cx.notify();
+                    }
+                    Err(error) => {
+                        app.automod_notice = Some(format!("同意规则失败：{}", error.user_message()));
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+            return;
+        }
         if !self.welcome_joined.iter().any(|name| name == &server) {
             self.welcome_joined.push(server.clone());
         }
@@ -5497,6 +5806,36 @@ impl DiscordApp {
             return;
         }
         let boosted = self.active_boost().boosted_by("你");
+        if self.is_online()
+            && let (Some(server_id), Some(net)) = (
+                self.remote.servers.get(&server).cloned(),
+                self.net.clone(),
+            )
+        {
+            let active = !boosted;
+            let server_for_boost = server.clone();
+            cx.spawn(async move |this, cx| {
+                let result = net
+                    .execute(api::toggle_boost(&server_id, active), true)
+                    .await;
+                let _ = this.update(cx, |app, cx| match result {
+                    Ok(_) => {
+                        app.boost_notice = Some(if active {
+                            format!("已加成「{server_for_boost}」")
+                        } else {
+                            format!("已撤销对「{server_for_boost}」的加成")
+                        });
+                        app.refresh_structure(cx);
+                    }
+                    Err(error) => {
+                        app.boost_notice = Some(format!("加成失败：{}", error.user_message()));
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+            return;
+        }
 
         if boosted {
             if let Some(boost) = self.boosts.iter_mut().find(|boost| boost.server == server) {
@@ -5702,9 +6041,39 @@ impl DiscordApp {
                 }
             })
             .unwrap_or_else(|| "新话题".to_string());
+        let message_id = self
+            .current_messages()
+            .get(index)
+            .map(|message| message.id.clone())
+            .filter(|id| !id.is_empty());
         let list = self.threads.entry(key).or_default();
         if !list.iter().any(|thread| thread.root_index == index) {
-            list.push(ChatThread::new(index, title, Vec::new()));
+            list.push(ChatThread::new(index, title.clone(), Vec::new()));
+        }
+
+        if self.is_online()
+            && let (Some(message_id), Some(net)) = (message_id, self.net.clone())
+        {
+            let thread_title = title.clone();
+            cx.spawn(async move |this, cx| {
+                let result = net
+                    .execute(api::create_thread(&message_id, &thread_title), true)
+                    .await;
+                let _ = this.update(cx, |app, _cx| {
+                    if let Ok(value) = result {
+                        if let Some(thread_id) = value.get("id").and_then(|id| id.as_str())
+                            && let Some(thread) = app
+                                .threads
+                                .values_mut()
+                                .flat_map(|list| list.iter_mut())
+                                .find(|thread| thread.id.is_empty() && thread.title == thread_title)
+                        {
+                            thread.id = thread_id.to_string();
+                        }
+                    }
+                });
+            })
+            .detach();
         }
 
         self.show_thread = true;
@@ -5811,6 +6180,12 @@ impl DiscordApp {
             return;
         };
         let key = self.session_key();
+        let remote_thread = self
+            .threads
+            .get(&key)
+            .and_then(|list| list.iter().find(|thread| thread.root_index == root))
+            .map(|thread| thread.id.clone())
+            .filter(|id| !id.is_empty());
         let Some(thread) = self
             .threads
             .get_mut(&key)
@@ -5820,7 +6195,24 @@ impl DiscordApp {
         };
         thread
             .replies
-            .push(ThreadReply::new("你", "刚刚", text, palette::accent()));
+            .push(ThreadReply::new("你", "刚刚", text.clone(), palette::accent()));
+        if let (Some(thread_id), Some(net)) = (remote_thread, self.net.clone())
+            && self.is_online()
+        {
+            let reply_text = text.clone();
+            cx.spawn(async move |this, cx| {
+                let result = net
+                    .execute(api::create_thread_reply(&thread_id, &reply_text), true)
+                    .await;
+                let _ = this.update(cx, |app, cx| {
+                    if let Err(error) = result {
+                        app.automod_notice = Some(format!("话题回复失败：{}", error.user_message()));
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
         self.thread_input
             .update(cx, |input, cx| input.set_value("", window, cx));
         cx.notify();
@@ -9341,6 +9733,35 @@ impl DiscordApp {
                     self.dm_call = None;
                 }
             }
+            "POLL_UPDATE" => {
+                let Some(poll_id) = data.get("id").and_then(|value| value.as_str()) else {
+                    return;
+                };
+                for messages in self.messages.values_mut() {
+                    if let Some(message) = messages
+                        .iter_mut()
+                        .find(|message| message.poll.as_ref().is_some_and(|poll| poll.id == poll_id))
+                        && let Some(poll) = data.get("poll")
+                    {
+                        update_poll(message, poll);
+                    }
+                }
+            }
+            "THREAD_CREATE" | "THREAD_UPDATE" => {
+                if let (Some(thread_id), Some(count)) = (
+                    data.get("id").and_then(|value| value.as_str()),
+                    data.get("reply_count").and_then(|value| value.as_u64()),
+                ) {
+                    for list in self.threads.values_mut() {
+                        if let Some(thread) = list
+                            .iter_mut()
+                            .find(|thread| thread.id == thread_id)
+                        {
+                            thread.replies.resize(count as usize, ThreadReply::new("你", "刚刚", String::new(), 0x808080));
+                        }
+                    }
+                }
+            }
             "CHANNEL_CREATE" | "CHANNEL_UPDATE" | "CHANNEL_DELETE"
             | "CATEGORY_CREATE" | "CATEGORY_UPDATE" | "CATEGORY_DELETE"
             | "SERVER_UPDATE" | "MEMBER_JOIN" | "MEMBER_LEAVE" | "MEMBER_UPDATE"
@@ -9681,6 +10102,9 @@ impl DiscordApp {
         let mut members = Vec::new();
         let mut invites = Vec::new();
         let mut forum_posts = Vec::new();
+        let mut events = Vec::new();
+        let mut boosts = Vec::new();
+        let mut welcomes = Vec::new();
         let mut roles = Vec::new();
         let mut permissions = Vec::new();
         for server in &servers {
@@ -9692,6 +10116,24 @@ impl DiscordApp {
                 .await
             {
                 invites.extend(rows);
+            }
+            if let Ok(rows) = net
+                .execute_as::<Vec<crate::net::dto::ServerEventDto>>(api::server_events(&server.id), true)
+                .await
+            {
+                events.extend(rows);
+            }
+            if let Ok(boost) = net
+                .execute_as::<crate::net::dto::BoostDto>(api::server_boosts(&server.id), true)
+                .await
+            {
+                boosts.push((server.name.clone(), boost));
+            }
+            if let Ok(welcome) = net
+                .execute_as::<crate::net::dto::WelcomeDto>(api::server_welcome(&server.id), true)
+                .await
+            {
+                welcomes.push((server.name.clone(), welcome));
             }
             let tree = trees.last().cloned();
             if let Some(tree) = tree {
@@ -9766,6 +10208,9 @@ impl DiscordApp {
             message_requests: requests.items,
             invites,
             forum_posts,
+            events,
+            boosts,
+            welcomes,
             groups,
             dms,
             counts,
@@ -9878,6 +10323,10 @@ impl DiscordApp {
         self.invites = data.invites;
         self.forum_posts = data.forum_posts;
         self.forum_open = None;
+        self.events = data.events;
+        self.boosts = data.boosts;
+        self.welcome_screens = data.welcomes;
+        self.welcome_joined = data.welcome_joined;
         self.dm_conversations = data.dm_conversations;
         self.active_dm = if keep_view
             && previous_dm
