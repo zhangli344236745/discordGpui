@@ -1,10 +1,17 @@
 """P3 服务器侧治理：LiveKit RoomService 调用与回退。"""
 
+import base64
+import hashlib
+import json
+from datetime import UTC, datetime, timedelta
+
 import httpx
+import jwt
 import pytest
 
+from app.config import settings
 from app.livekit import rooms as livekit_rooms
-from tests.conftest import auth_headers, create_server, first_channel
+from tests.conftest import auth_headers, create_server, first_channel, me
 
 
 def _mock_transport(status: int = 200) -> httpx.MockTransport:
@@ -50,3 +57,34 @@ async def test_moderate_participant_falls_back_without_roomservice(client: httpx
 
     participants = await client.get(f"/api/v1/channels/{channel['id']}/voice/participants", headers=headers)
     assert participants.json()[0]["mic"] is False
+
+
+async def test_webhook_tolerates_clock_skew(client: httpx.AsyncClient) -> None:
+    """容器与宿主机时钟偏差时 iat 可能在未来，webhook 仍应验签通过。"""
+    headers = await auth_headers(client)
+    user = await me(client, headers)
+    body = json.dumps(
+        {
+            "event": "participant_joined",
+            "room": {"name": "srv:s1:c1"},
+            "participant": {"identity": user["id"]},
+        }
+    ).encode()
+    digest = base64.b64encode(hashlib.sha256(body).digest()).decode()
+    now = datetime.now(UTC)
+    token = jwt.encode(
+        {
+            "iss": settings.livekit_api_key,
+            "iat": now + timedelta(seconds=20),
+            "exp": now + timedelta(minutes=5),
+            "sha256": digest,
+        },
+        settings.livekit_api_secret,
+        algorithm="HS256",
+    )
+    resp = await client.post(
+        "/api/v1/livekit/webhook",
+        content=body,
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+    )
+    assert resp.status_code == 200, resp.text

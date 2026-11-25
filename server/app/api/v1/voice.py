@@ -180,12 +180,23 @@ async def livekit_webhook(request: Request, db: AsyncSession = Depends(get_db)) 
         raise unauthorized("缺少 webhook 签名")
 
     try:
-        claims = jwt.decode(token, settings.livekit_api_secret, algorithms=["HS256"])
-    except jwt.InvalidTokenError:
+        # 容器/宿主机时钟可能有几秒偏差：不校验 iat，并给 nbf/exp 留 30s 余量
+        claims = jwt.decode(
+            token,
+            settings.livekit_api_secret,
+            algorithms=["HS256"],
+            options={"verify_iat": False},
+            leeway=30,
+        )
+    except jwt.InvalidTokenError as error:
+        log.warning("livekit webhook jwt invalid: %s", error)
         raise unauthorized("webhook 签名无效") from None
 
     digest = base64.b64encode(hashlib.sha256(raw).digest()).decode()
     if claims.get("sha256") != digest:
+        log.warning(
+            "livekit webhook digest mismatch len_raw=%d", len(raw)
+        )
         raise unauthorized("webhook 内容校验失败")
 
     event = json.loads(raw or b"{}")

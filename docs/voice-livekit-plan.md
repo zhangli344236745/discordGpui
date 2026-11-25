@@ -12,8 +12,15 @@
   `LocalAudioTrack` 发布麦克风；UI 通过 `async_channel` 收 Connected/Reconnecting/Participant* 事件；
 - 加入频道后自动连接；麦克风开关同时驱动本地引擎静音与 `PUT /voice/{room}/me`；
 - 断线由 SDK 自动重连，UI 显示重连/恢复，READY 后信令层再校准参与者；
-- 验证：`scripts/voice-e2e.sh`（本地 LiveKit 容器）输出
-  `room + microphone`、`webhook participant_joined`、`webhook track_published`、`participant projection mic=true`。
+- 私信通话：接听/呼叫返回的 token 直接起同一引擎，双端加入 `dm:{call_id}` 房间并发布麦克风；
+- 验证：
+  - `scripts/voice-e2e.sh`：`room + microphone`、`webhook participant_joined`、`webhook track_published`、`participant projection mic=true`；
+  - `scripts/dm-call-e2e.sh`：双端房间/麦克风、`participant_joined x2`、`track_published x2`、房间名 `dm:` 前缀。
+
+### 运维注意
+
+LiveKit 容器与宿主机的时钟可能有几秒偏差（实测 colima 下 JWT `iat` 落在未来），
+webhook 验签已放宽：不校验 `iat`，`nbf/exp` 留 30s leeway。部署时仍建议开启 NTP。
 
 ### 构建（本机已跑通）
 

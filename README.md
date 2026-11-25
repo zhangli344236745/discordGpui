@@ -260,7 +260,7 @@ main → app → data
 | 数据层 | **60 张表**（SQLAlchemy 2.0 + alembic 迁移链 c7d1→d8e9→e9f1→f2a3），SQLite 开 WAL / busy_timeout；含 `gateway_events` 事件日志与 FTS5/pg_trgm 双后端搜索索引 |
 | 部署形态 | 单机 SQLite/本地磁盘（默认）↔ Postgres/Redis/MinIO 按环境变量切换；`docker compose up` 一键起全栈（见 `docs/operations.md`），多实例广播经 Redis Pub/Sub，备份/恢复脚本带演练 |
 | 服务端真正执行的规则 | 13 项权限矩阵、自动审核（block 返 422 且不落库 / warn 带 warnings）、至少保留一个文字频道、owner 不能直接离开、附件伪装拒绝、举报删除绕不过法务持有 |
-| 语音 | 频道语音端到端可用：服务端 token/房间/webhook/RoomService + 客户端 LiveKit 真实房间与麦克风（`voice-livekit` feature，`scripts/voice-e2e.sh` 验证）；摄像头/屏幕共享与私信媒体见 [`docs/voice-livekit-plan.md`](docs/voice-livekit-plan.md) |
+| 语音 | 频道语音与私信通话端到端可用：服务端 token/房间/webhook/RoomService + 客户端 LiveKit 真实房间与麦克风（`voice-livekit` feature；`scripts/voice-e2e.sh`、`scripts/dm-call-e2e.sh` 验证）；摄像头/屏幕共享与设备选择见 [`docs/voice-livekit-plan.md`](docs/voice-livekit-plan.md) |
 | 验证 | `ruff check` 0 error、`pytest` 96 passed、迁移全链可回滚；冒烟：`scripts/smoke.py` 26 步、双实例广播、Postgres、Compose、备份恢复、压测基线；客户端 `cargo test` 44 passed、`client-e2e.sh` 13 项（含断线重连与多端在线） |
 
 ```bash

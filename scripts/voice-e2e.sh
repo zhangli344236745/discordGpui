@@ -24,6 +24,10 @@ trap cleanup EXIT
 
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
 
+# 语音用例必须用带 feature 的二进制；默认 cargo build 会把引擎编译掉
+if [ "${VOICE_SKIP_BUILD:-0}" != "1" ]; then
+  "$ROOT/scripts/build-voice.sh" --quiet
+fi
 [ -x "$ROOT/target/debug/discord-gpui" ] || { echo "缺少客户端二进制，先运行 scripts/build-voice.sh" >&2; exit 1; }
 docker image inspect livekit/livekit-server:latest >/dev/null 2>&1 || {
   echo "缺少 livekit/livekit-server 镜像：docker pull livekit/livekit-server:latest" >&2

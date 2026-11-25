@@ -7511,6 +7511,22 @@ impl DiscordApp {
         self.show_voice_room = false;
     }
 
+    /// e2e/调试入口：
+    /// - `DISCORD_DM_CALL_AUTO=call`：启动后自动向第一个私信会话发起语音呼叫；
+    /// - `DISCORD_DM_CALL_AUTO=answer`：收到 CALL_RING 自动接听。
+    fn maybe_auto_dm_call(&mut self, cx: &mut Context<Self>) {
+        if std::env::var("DISCORD_DM_CALL_AUTO").ok().as_deref() != Some("call") {
+            return;
+        }
+        if self.dm_call.is_some() || !self.is_online() {
+            return;
+        }
+        let Some(friend) = self.dm_conversations.first().map(|c| c.friend.to_string()) else {
+            return;
+        };
+        self.start_dm_call(friend, CallMode::Voice, cx);
+    }
+
     /// e2e/调试入口：启动后按环境变量自动加入指定语音频道。
     fn maybe_autojoin_voice(&mut self, cx: &mut Context<Self>) {
         if self.voice_autojoin_done {
@@ -7746,6 +7762,11 @@ impl DiscordApp {
                             && call.friend == friend_for_call
                         {
                             call.call_id = Some(call_id.to_string());
+                            let url = value.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                            let token = value.get("token").and_then(|v| v.as_str()).unwrap_or("");
+                            if !url.is_empty() && !token.is_empty() {
+                                app.start_voice_engine(url, token, cx);
+                            }
                         }
                     }
                     Err(error) => {
@@ -7774,9 +7795,14 @@ impl DiscordApp {
             cx.spawn(async move |this, cx| {
                 let result = net.execute(api::accept_dm_call(&dm_id), true).await;
                 let _ = this.update(cx, |app, cx| match result {
-                    Ok(_) => {
+                    Ok(value) => {
                         if let Some(call) = app.dm_call.as_mut() {
                             call.connected = true;
+                        }
+                        let url = value.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                        let token = value.get("token").and_then(|v| v.as_str()).unwrap_or("");
+                        if !url.is_empty() && !token.is_empty() {
+                            app.start_voice_engine(url, token, cx);
                         }
                         cx.notify();
                     }
@@ -7798,6 +7824,9 @@ impl DiscordApp {
     /// 挂断私信通话（面板由 `dm_call.is_some()` 决定是否渲染）。
     pub(crate) fn end_dm_call(&mut self, cx: &mut Context<Self>) {
         let friend = self.dm_call.as_ref().map(|call| call.friend.clone());
+        if let Some(handle) = self.voice_handle.take() {
+            let _ = handle.commands.send_blocking(crate::voice::VoiceCommand::Disconnect);
+        }
         self.dm_call = None;
         if self.is_online()
             && let (Some(friend), Some(net)) = (friend, self.net.clone())
@@ -7815,6 +7844,12 @@ impl DiscordApp {
     pub(crate) fn toggle_dm_call_mic(&mut self, cx: &mut Context<Self>) {
         if let Some(call) = self.dm_call.as_mut() {
             call.mic_on = !call.mic_on;
+            let mic_on = call.mic_on;
+            if let Some(handle) = &self.voice_handle {
+                let _ = handle
+                    .commands
+                    .send_blocking(crate::voice::VoiceCommand::SetMic(mic_on));
+            }
         }
         cx.notify();
     }
@@ -10406,6 +10441,8 @@ impl DiscordApp {
                         .get("avatar_color")
                         .and_then(|value| value.as_u64())
                         .unwrap_or(0x5865f2) as u32;
+                    let auto_accept =
+                        std::env::var("DISCORD_DM_CALL_AUTO").ok().as_deref() == Some("answer");
                     self.dm_call = Some(DmCall {
                         friend,
                         color,
@@ -10421,6 +10458,9 @@ impl DiscordApp {
                         screen_sharing: false,
                         call_id: Some(call_id.to_string()),
                     });
+                    if auto_accept {
+                        self.connect_dm_call(cx);
+                    }
                 }
             }
             "CALL_ACCEPT" => {
@@ -11261,6 +11301,7 @@ impl DiscordApp {
         self.sync_invite_channel();
         self.sync_drafts_from_server(cx);
         self.maybe_autojoin_voice(cx);
+        self.maybe_auto_dm_call(cx);
         if restart_gateway {
             self.start_gateway(cx);
         }
