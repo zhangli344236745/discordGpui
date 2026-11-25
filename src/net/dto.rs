@@ -429,6 +429,17 @@ pub struct AuditPageDto {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct DraftDto {
+    pub scope: String,
+    #[serde(default)]
+    pub content: String,
+    #[serde(default)]
+    pub attachments: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub updated_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct BookmarkDto {
     pub target_id: String,
     #[serde(default)]

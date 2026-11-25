@@ -21,8 +21,10 @@ from app.realtime.bus import bus
 
 try:
     from app.ops import EVENTS_PUBLISHED as _EVENTS_METRIC
+    from app.ops import current_traceparent
 except Exception:  # pragma: no cover - 缺依赖时不影响广播
     _EVENTS_METRIC = None
+    current_traceparent = lambda: ""  # noqa: E731
 
 log = logging.getLogger("server.outbox")
 
@@ -50,6 +52,14 @@ def queue(db, scope_kind: str, scope_id: str, name: str, data: dict[str, Any]) -
     db.info.setdefault(PENDING_KEY, []).append((event_id, scope_kind, scope_id, name, data))
     if _EVENTS_METRIC is not None:
         _EVENTS_METRIC.labels(name).inc()
+    log.info(
+        "queue event=%s scope=%s:%s id=%s trace=%s",
+        name,
+        scope_kind,
+        scope_id,
+        event_id,
+        current_traceparent(),
+    )
     return event_id
 
 

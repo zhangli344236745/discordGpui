@@ -7,11 +7,11 @@ from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.livekit import rooms as livekit_rooms
 from app.config import settings
 from app.db import get_db, utcnow
 from app.deps import ChannelContext, channel_context, current_user
 from app.errors import forbidden, not_found, unauthorized
+from app.livekit import rooms as livekit_rooms
 from app.livekit.token import build_token, server_room
 from app.models import User, VoiceParticipant
 from app.realtime.bus import bus

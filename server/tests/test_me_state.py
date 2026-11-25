@@ -1,5 +1,8 @@
 from httpx import AsyncClient
+from sqlalchemy import select
 
+from app.db import SessionLocal
+from app.models import GatewayEvent
 from tests.conftest import add_member
 
 
@@ -76,6 +79,18 @@ async def test_drafts_upsert_clear_and_isolation(client: AsyncClient, world: dic
 
     drafts = (await client.get("/api/v1/me/drafts", headers=alice)).json()
     assert {draft["scope"] for draft in drafts} == {channel_scope, dm_scope}
+
+    # 跨设备：草稿变更进 Gateway 事件（user scope），其它设备据此同步
+    async with SessionLocal() as db:
+        rows = (
+            await db.scalars(
+                select(GatewayEvent).where(
+                    GatewayEvent.scope_kind == "user",
+                    GatewayEvent.event == "DRAFT_UPDATE",
+                )
+            )
+        ).all()
+    assert {row.payload.get("scope") for row in rows} == {channel_scope, dm_scope}
     assert (await client.get("/api/v1/me/drafts", headers=bob)).json() == []
 
     cleared = await client.put(f"/api/v1/me/drafts/{channel_scope}", headers=alice, json={"content": "   "})

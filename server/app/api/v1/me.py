@@ -10,6 +10,8 @@ from app.db import get_db
 from app.deps import current_user
 from app.errors import bad_request, not_found
 from app.models import Channel, ChannelUserState, DmChannel, Draft, ReadState, User
+from app.realtime import outbox
+from app.realtime.events import Event
 from app.schemas.me import ChannelStatePatch, DraftIn
 from app.services.permissions import effective_permissions
 
@@ -131,6 +133,7 @@ async def save_draft(
     if not body.content.strip() and not body.attachments:
         if draft is not None:
             await db.delete(draft)
+            outbox.queue(db, "user", user.id, Event.DRAFT_UPDATE, {"scope": scope_id, "cleared": True})
             await db.commit()
         return {"scope": scope_id, "cleared": True}
 
@@ -141,5 +144,12 @@ async def save_draft(
         draft.content = body.content
         draft.attachments = body.attachments
         draft.updated_at = datetime.now(UTC)
+    outbox.queue(
+        db,
+        "user",
+        user.id,
+        Event.DRAFT_UPDATE,
+        {"scope": scope_id, "cleared": False, "content": draft.content},
+    )
     await db.commit()
     return {"scope": scope_id, "cleared": False, "content": draft.content}

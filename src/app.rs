@@ -1651,8 +1651,94 @@ impl DiscordApp {
             self.drafts.remove(&key);
         } else {
             self.drafts
-                .insert(key, MessageDraft { text, attachment });
+                .insert(key.clone(), MessageDraft { text: text.clone(), attachment });
         }
+        // 同步到服务端，供其他设备读取（附件是本地路径，不跨设备）
+        if self.is_online()
+            && let Some(scope) = self.scope_for_session(&key)
+            && let Some(net) = self.net.clone()
+        {
+            cx.spawn(async move |this, cx| {
+                let _ = net.execute(api::save_draft(&scope, &text), true).await;
+                let _ = this.update(cx, |_, cx| cx.notify());
+            })
+            .detach();
+        }
+    }
+
+    /// 会话键（服务器/频道、dm:好友）→ 服务端草稿 scope（channel:<id> / dm:<id>）。
+    fn scope_for_session(&self, key: &str) -> Option<String> {
+        if let Some(id) = self.remote.channels.get(key) {
+            return Some(format!("channel:{id}"));
+        }
+        if let Some(friend) = key.strip_prefix("dm:")
+            && let Some(id) = self.remote.dms.get(friend)
+        {
+            return Some(format!("dm:{id}"));
+        }
+        None
+    }
+
+    /// 服务端 scope → 本地会话键。
+    fn session_key_for_scope(&self, scope: &str) -> Option<String> {
+        if let Some(id) = scope.strip_prefix("channel:") {
+            return self
+                .remote
+                .channels
+                .iter()
+                .find(|(_, value)| value.as_str() == id)
+                .map(|(key, _)| key.clone());
+        }
+        if let Some(id) = scope.strip_prefix("dm:") {
+            return self
+                .remote
+                .dms
+                .iter()
+                .find(|(_, value)| value.as_str() == id)
+                .map(|(key, _)| key.clone());
+        }
+        None
+    }
+
+    /// 首屏同步后拉取跨设备草稿；本地正在输入的会话不覆盖。
+    fn sync_drafts_from_server(&mut self, cx: &mut Context<Self>) {
+        if !self.is_online() {
+            return;
+        }
+        let Some(net) = self.net.clone() else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let result = net
+                .execute_as::<Vec<crate::net::dto::DraftDto>>(api::drafts(), true)
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                let Ok(rows) = result else {
+                    return;
+                };
+                for row in rows {
+                    let Some(key) = app.session_key_for_scope(&row.scope) else {
+                        continue;
+                    };
+                    if key == app.current_session {
+                        continue;
+                    }
+                    if row.content.trim().is_empty() {
+                        app.drafts.remove(&key);
+                    } else {
+                        app.drafts.insert(
+                            key,
+                            MessageDraft {
+                                text: row.content,
+                                attachment: None,
+                            },
+                        );
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// 切换会话后调用：更新归属键并恢复该会话草稿。
@@ -10168,6 +10254,38 @@ impl DiscordApp {
             "BOOKMARK_UPDATE" => {
                 self.refresh_structure(cx);
             }
+            "DRAFT_UPDATE" => {
+                let Some(scope) = data.get("scope").and_then(|value| value.as_str()) else {
+                    return;
+                };
+                let Some(key) = self.session_key_for_scope(scope) else {
+                    return;
+                };
+                if key == self.current_session {
+                    return;
+                }
+                if data.get("cleared").and_then(|value| value.as_bool()) == Some(true) {
+                    self.drafts.remove(&key);
+                } else {
+                    let text = data
+                        .get("content")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    if text.trim().is_empty() {
+                        self.drafts.remove(&key);
+                    } else {
+                        self.drafts.insert(
+                            key,
+                            MessageDraft {
+                                text,
+                                attachment: None,
+                            },
+                        );
+                    }
+                }
+                cx.notify();
+            }
             "POLL_UPDATE" => {
                 let Some(poll_id) = data.get("id").and_then(|value| value.as_str()) else {
                     return;
@@ -10903,6 +11021,7 @@ impl DiscordApp {
         self.login_error = None;
         self.current_session = self.session_key();
         self.sync_invite_channel();
+        self.sync_drafts_from_server(cx);
         if restart_gateway {
             self.start_gateway(cx);
         }

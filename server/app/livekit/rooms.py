@@ -14,6 +14,7 @@ import httpx
 import jwt
 
 from app.config import settings
+from app.ops import current_traceparent
 
 log = logging.getLogger("server.livekit.rooms")
 
@@ -46,6 +47,9 @@ async def _call(room: str, method: str, payload: dict[str, Any], transport: http
     """调用 Twirp 接口；返回是否成功。失败只记日志，不抛异常。"""
     url = f"{_http_base()}/twirp/livekit.RoomService/{method}"
     headers = {"Authorization": f"Bearer {_admin_token(room)}"}
+    trace = current_traceparent()
+    if trace:
+        headers["traceparent"] = trace
     try:
         client = (
             httpx.AsyncClient(timeout=_TIMEOUT, transport=transport)

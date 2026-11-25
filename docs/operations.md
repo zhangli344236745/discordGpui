@@ -69,7 +69,9 @@ scripts/backup-smoke.sh            # 建库→备份→清空→恢复→校验 
 - `GET /metrics`：Prometheus 格式。核心序列：`dgpui_http_requests_total`（含状态码）、
   `dgpui_http_request_seconds`（P95 直方图）、`dgpui_gateway_connections`、
   `dgpui_messages_total`、`dgpui_events_published_total`、`dgpui_http_inflight`。
-- 日志：一行 JSON（`ts/level/logger/msg/request_id`）；请求 ID 从 `X-Request-ID` 透传或自动生成，并写回响应头。
+- 日志：一行 JSON（`ts/level/logger/msg/request_id/trace_id/span_id`）；请求 ID 从 `X-Request-ID` 透传或自动生成，并写回响应头。
+- 追踪：解析/生成 W3C `traceparent`，响应回写；事件登记日志与 LiveKit RoomService 调用都会带上 traceparent，
+  可把网关请求 → outbox 事件 → 外部调用串成一条链路。接 OTLP 采集器时在该 header 基础上补充导出即可。
 - 告警规则示例：
 
 ```yaml

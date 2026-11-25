@@ -188,6 +188,18 @@ pub fn mark_all_notifications() -> ApiRequest {
     ApiRequest::new(Method::Post, "/api/v1/notifications/read").with_body(json!({ "all": true }))
 }
 
+pub fn drafts() -> ApiRequest {
+    ApiRequest::new(Method::Get, "/api/v1/me/drafts")
+}
+
+pub fn save_draft(scope: &str, content: &str) -> ApiRequest {
+    ApiRequest::new(
+        Method::Put,
+        format!("/api/v1/me/drafts/{}", encode_component(scope)),
+    )
+    .with_body(json!({ "content": content, "attachments": [] }))
+}
+
 pub fn bookmarks() -> ApiRequest {
     ApiRequest::new(Method::Get, "/api/v1/bookmarks")
 }

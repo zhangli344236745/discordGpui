@@ -33,3 +33,25 @@ async def test_request_id_echoed_and_generated(client: AsyncClient) -> None:
     generated = await client.get("/api/v1/health")
     assert generated.headers.get("x-request-id")
     assert generated.headers["x-request-id"] != "rid-test-42"
+
+
+async def test_traceparent_is_echoed_and_inherited(client: AsyncClient) -> None:
+    incoming = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+    resp = await client.get("/api/v1/health", headers={"traceparent": incoming})
+    assert resp.status_code == 200
+    header = resp.headers.get("traceparent", "")
+    parts = header.split("-")
+    assert parts[0] == "00" and parts[1] == "4bf92f3577b34da6a3ce929d0e0e4736"
+    assert len(parts[2]) == 16
+
+    generated = (await client.get("/api/v1/health")).headers.get("traceparent", "")
+    assert generated.startswith("00-") and len(generated.split("-")[1]) == 32
+
+
+def test_parse_traceparent_rejects_malformed() -> None:
+    from app.ops import parse_traceparent
+
+    assert parse_traceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+    assert parse_traceparent("") is None
+    assert parse_traceparent("01-abc-123-01") is None
+    assert parse_traceparent("00-" + "0" * 32 + "-" + "0" * 16 + "-01") is None
