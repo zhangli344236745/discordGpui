@@ -260,6 +260,7 @@ main → app → data
 | 数据层 | **60 张表**（SQLAlchemy 2.0 + alembic 迁移链 c7d1→d8e9→e9f1→f2a3），SQLite 开 WAL / busy_timeout；含 `gateway_events` 事件日志与 FTS5/pg_trgm 双后端搜索索引 |
 | 部署形态 | 单机 SQLite/本地磁盘（默认）↔ Postgres/Redis/MinIO 按环境变量切换；`docker compose up` 一键起全栈（见 `docs/operations.md`），多实例广播经 Redis Pub/Sub，备份/恢复脚本带演练 |
 | 服务端真正执行的规则 | 13 项权限矩阵、自动审核（block 返 422 且不落库 / warn 带 warnings）、至少保留一个文字频道、owner 不能直接离开、附件伪装拒绝、举报删除绕不过法务持有 |
+| 语音 | 频道语音服务端（token/房间/事件/RoomService 治理）已就绪；客户端真实音视频见 [`docs/voice-livekit-plan.md`](docs/voice-livekit-plan.md)（P3 独立落地） |
 | 验证 | `ruff check` 0 error、`pytest` 96 passed、迁移全链可回滚；冒烟：`scripts/smoke.py` 26 步、双实例广播、Postgres、Compose、备份恢复、压测基线；客户端 `cargo test` 44 passed、`client-e2e.sh` 13 项（含断线重连与多端在线） |
 
 ```bash
