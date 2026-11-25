@@ -429,6 +429,10 @@ pub fn create_invite(channel_id: &str, expiry: &str, max_uses: Option<u32>) -> A
     )
 }
 
+pub fn accept_invite(code: &str) -> ApiRequest {
+    ApiRequest::new(Method::Post, format!("/api/v1/invites/{code}/accept"))
+}
+
 pub fn revoke_invite(code: &str) -> ApiRequest {
     ApiRequest::new(Method::Delete, format!("/api/v1/invites/{code}"))
 }

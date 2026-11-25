@@ -3318,7 +3318,48 @@ impl DiscordApp {
     pub(crate) fn copy_invite(&mut self, cx: &mut Context<Self>) {
         let link = self.invite_input.read(cx).value().to_string();
         if !link.is_empty() {
-            cx.write_to_clipboard(ClipboardItem::new_string(link));
+            cx.write_to_clipboard(ClipboardItem::new_string(link.clone()));
+        }
+        // 在线模式下，粘贴别人的邀请码再点主按钮 = 接受邀请加入该服务器。
+        if self.is_online()
+            && let Some(code) = link
+                .trim()
+                .rsplit('/')
+                .next()
+                .map(str::to_string)
+                .filter(|code| !code.is_empty() && code != "discord.gg")
+        {
+            let own_codes: Vec<String> = self
+                .invites
+                .iter()
+                .filter(|invite| invite.server == self.active_server_name())
+                .map(|invite| invite.code.clone())
+                .collect();
+            if !own_codes.iter().any(|own| own == &code)
+                && let Some(net) = self.net.clone()
+            {
+                cx.spawn(async move |this, cx| {
+                    let result = net.execute(api::accept_invite(&code), true).await;
+                    let _ = this.update(cx, |app, cx| match result {
+                        Ok(value) => {
+                            if let Some(server) = value.get("server").and_then(|item| item.get("id")) {
+                                app.pending_server_id =
+                                    server.as_str().map(str::to_string);
+                            }
+                            app.automod_notice = Some("已通过邀请加入服务器".into());
+                            app.refresh_structure(cx);
+                        }
+                        Err(error) => {
+                            app.automod_notice = Some(format!("接受邀请失败：{}", error.user_message()));
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+                self.show_invite = false;
+                cx.notify();
+                return;
+            }
         }
         self.show_invite = false;
         cx.notify();
