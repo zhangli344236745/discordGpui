@@ -1029,7 +1029,7 @@ impl DiscordApp {
         cx.subscribe_in(&search_center_input, window, |this, _, event: &InputEvent, _, cx| {
             if matches!(event, InputEvent::Change) {
                 this.search_center_query = this.search_center_input.read(cx).value().to_string();
-                this.run_search();
+                this.run_search(cx);
                 cx.notify();
             }
         })
@@ -6978,7 +6978,7 @@ impl DiscordApp {
         self.member_menu = None;
         self.show_server_menu = false;
         self.show_voice_room = false;
-        self.run_search();
+        self.run_search(cx);
         cx.notify();
     }
 
@@ -7085,7 +7085,7 @@ impl DiscordApp {
         self.search_center_query = next.clone();
         self.search_center_input
             .update(cx, |input, cx| input.set_value(&next, window, cx));
-        self.run_search();
+        self.run_search(cx);
         cx.notify();
     }
 
@@ -7095,16 +7095,90 @@ impl DiscordApp {
             return;
         }
         self.search_scope = scope;
-        self.run_search();
+        self.run_search(cx);
         cx.notify();
     }
 
     /// 按当前关键词、高级过滤条件与范围重算结果；无任何约束时结果直接清空。
-    fn run_search(&mut self) {
+    fn run_search(&mut self, cx: &mut Context<Self>) {
         let filters = SearchFilters::parse(&self.search_center_query);
         self.search_filters = filters.clone();
         self.search_results.clear();
         if filters.is_empty() {
+            return;
+        }
+
+        if self.is_online()
+            && let Some(net) = self.net.clone()
+        {
+            let (scope, server_id) = match self.search_scope {
+                SearchScope::CurrentServer => (
+                    "server",
+                    self.remote.servers.get(&self.active_server_name()).cloned(),
+                ),
+                SearchScope::AllServers => ("all", None),
+                SearchScope::Dm => ("dm", None),
+                SearchScope::Everything => ("everywhere", None),
+            };
+            let query = self.search_center_query.clone();
+            cx.spawn(async move |this, cx| {
+                let result = net
+                    .execute_as::<crate::net::dto::SearchPageDto>(
+                        api::search(&query, scope, server_id.as_deref(), 50),
+                        true,
+                    )
+                    .await;
+                let _ = this.update(cx, |app, cx| {
+                    match result {
+                        Ok(page) => {
+                            app.search_results = page
+                                .items
+                                .into_iter()
+                                .map(|hit| {
+                                    let server = if hit.dm_id.is_some() {
+                                        "私信".to_string()
+                                    } else {
+                                        app.remote
+                                            .servers
+                                            .iter()
+                                            .find(|(_, id)| id.as_str() == hit.server_id)
+                                            .map(|(name, _)| name.clone())
+                                            .unwrap_or_default()
+                                    };
+                                    let channel = if server == "私信" {
+                                        hit.dm_id
+                                            .as_deref()
+                                            .and_then(|dm_id| {
+                                                app.remote
+                                                    .dms
+                                                    .iter()
+                                                    .find(|(_, id)| id.as_str() == dm_id)
+                                                    .map(|(name, _)| name.clone())
+                                            })
+                                            .unwrap_or_default()
+                                    } else {
+                                        hit.channel_name.clone()
+                                    };
+                                    SearchHit {
+                                        server,
+                                        channel,
+                                        is_dm: hit.dm_id.is_some(),
+                                        author: Box::leak(hit.author.name.clone().into_boxed_str()),
+                                        time: hydrate::short_time(&hit.created_at),
+                                        text: hit.content,
+                                        color: rgb(hit.author.color),
+                                    }
+                                })
+                                .collect();
+                        }
+                        Err(error) => {
+                            app.automod_notice = Some(format!("搜索失败：{}", error.user_message()));
+                        }
+                    }
+                    cx.notify();
+                });
+            })
+            .detach();
             return;
         }
 
@@ -8135,6 +8209,47 @@ impl DiscordApp {
         }
 
         let server = self.servers[self.active_server].name.clone();
+        if self.is_online()
+            && let (Some(channel_id), Some(net)) = (
+                self.remote
+                    .channels
+                    .get(&format!("{server}/{channel}"))
+                    .cloned(),
+                self.net.clone(),
+            )
+        {
+            let expiry = match self.invite_expiry {
+                InviteExpiry::ThirtyMinutes | InviteExpiry::OneHour => "1h",
+                InviteExpiry::SixHours | InviteExpiry::TwelveHours | InviteExpiry::OneDay => "1d",
+                InviteExpiry::SevenDays => "7d",
+                InviteExpiry::Never => "never",
+            };
+            let max_uses = (self.invite_max_uses > 0).then_some(self.invite_max_uses);
+            let max_uses = max_uses;
+            cx.spawn(async move |this, cx| {
+                let result = net
+                    .execute(api::create_invite(&channel_id, expiry, max_uses), true)
+                    .await;
+                let _ = this.update(cx, |app, cx| match result {
+                    Ok(value) => {
+                        if let Some(code) = value.get("code").and_then(|code| code.as_str()) {
+                            app.invite_copied_code = Some(code.to_string());
+                            cx.write_to_clipboard(ClipboardItem::new_string(format!(
+                                "discord.gg/{code}"
+                            )));
+                        }
+                        app.refresh_structure(cx);
+                    }
+                    Err(error) => {
+                        app.invite_copied_code = None;
+                        app.automod_notice = Some(format!("创建邀请失败：{}", error.user_message()));
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+            return;
+        }
         let base = self.invite_code();
         let mut serial = self.invites.iter().filter(|invite| invite.server == server).count() + 1;
         let mut code = format!("{base}-{serial}");
@@ -8178,6 +8293,23 @@ impl DiscordApp {
 
     /// 撤销（删除）一条邀请。
     pub(crate) fn revoke_invite(&mut self, code: &str, cx: &mut Context<Self>) {
+        if self.is_online()
+            && let Some(net) = self.net.clone()
+        {
+            let invite_code = code.to_string();
+            cx.spawn(async move |this, cx| {
+                let result = net.execute(api::revoke_invite(&invite_code), true).await;
+                let _ = this.update(cx, |app, cx| match result {
+                    Ok(_) => app.refresh_structure(cx),
+                    Err(error) => {
+                        app.automod_notice = Some(format!("撤销邀请失败：{}", error.user_message()));
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+            return;
+        }
         self.invites.retain(|invite| invite.code != code);
         if self.invite_copied_code.as_deref() == Some(code) {
             self.invite_copied_code = None;
@@ -9423,12 +9555,19 @@ impl DiscordApp {
 
         let mut trees = Vec::new();
         let mut members = Vec::new();
+        let mut invites = Vec::new();
         let mut roles = Vec::new();
         let mut permissions = Vec::new();
         for server in &servers {
             trees.push(net.execute_as::<ServerTreeDto>(api::server_tree(&server.id), true).await?);
             members.push(net.execute_as::<Vec<MemberDto>>(api::server_members(&server.id), true).await?);
             roles.push(net.execute_as::<Vec<RoleDto>>(api::server_roles(&server.id), true).await?);
+            if let Ok(rows) = net
+                .execute_as::<Vec<crate::net::dto::InviteDto>>(api::server_invites(&server.id), true)
+                .await
+            {
+                invites.extend(rows);
+            }
             permissions.push(
                 match net
                     .execute_as::<PermissionMatrixDto>(api::server_permissions(&server.id), true)
@@ -9489,6 +9628,7 @@ impl DiscordApp {
             friend_requests: request_page.items.into_iter().chain(request_page.outgoing).collect(),
             blocks,
             message_requests: requests.items,
+            invites,
             groups,
             dms,
             counts,
@@ -9590,6 +9730,7 @@ impl DiscordApp {
         self.friend_requests = data.friend_requests;
         self.blocked_users = data.blocked_users;
         self.message_requests = data.message_requests;
+        self.invites = data.invites;
         self.dm_conversations = data.dm_conversations;
         self.active_dm = if keep_view
             && previous_dm
@@ -9612,7 +9753,6 @@ impl DiscordApp {
             self.dm_messages.clear();
             self.threads.clear();
             self.events.clear();
-            self.invites.clear();
             self.audit.clear();
             self.bans.clear();
             self.automod_rules.clear();

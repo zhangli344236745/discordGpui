@@ -34,6 +34,32 @@ impl ApiRequest {
 // 系统与认证
 // ---------------------------------------------------------------------------
 
+fn encode_component(value: &str) -> String {
+    let mut out = String::new();
+    for byte in value.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
+pub fn search(q: &str, scope: &str, server_id: Option<&str>, limit: u32) -> ApiRequest {
+    let mut path = format!(
+        "/api/v1/search?q={}&scope={}&limit={limit}",
+        encode_component(q),
+        scope
+    );
+    if let Some(server_id) = server_id {
+        path.push_str("&server_id=");
+        path.push_str(server_id);
+    }
+    ApiRequest::new(Method::Get, path)
+}
+
 pub fn health() -> ApiRequest {
     ApiRequest::new(Method::Get, "/api/v1/health")
 }
@@ -201,6 +227,24 @@ pub fn set_server_notify(server_id: &str, level: &str) -> ApiRequest {
 
 pub fn delete_channel(channel_id: &str) -> ApiRequest {
     ApiRequest::new(Method::Delete, format!("/api/v1/channels/{channel_id}"))
+}
+
+pub fn server_invites(server_id: &str) -> ApiRequest {
+    ApiRequest::new(Method::Get, format!("/api/v1/servers/{server_id}/invites"))
+}
+
+pub fn create_invite(channel_id: &str, expiry: &str, max_uses: Option<u32>) -> ApiRequest {
+    ApiRequest::new(Method::Post, format!("/api/v1/channels/{channel_id}/invites")).with_body(
+        json!({ "expiry": expiry, "max_uses": max_uses }),
+    )
+}
+
+pub fn revoke_invite(code: &str) -> ApiRequest {
+    ApiRequest::new(Method::Delete, format!("/api/v1/invites/{code}"))
+}
+
+pub fn server_bans(server_id: &str) -> ApiRequest {
+    ApiRequest::new(Method::Get, format!("/api/v1/servers/{server_id}/bans"))
 }
 
 pub fn create_role(server_id: &str, name: &str, color: u32) -> ApiRequest {

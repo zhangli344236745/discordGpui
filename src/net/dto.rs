@@ -277,6 +277,70 @@ pub struct MessageRequestPageDto {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct SearchHitDto {
+    pub message_id: String,
+    #[serde(default)]
+    pub channel_id: String,
+    #[serde(default)]
+    pub server_id: String,
+    #[serde(default)]
+    pub channel_name: String,
+    #[serde(default)]
+    pub dm_id: Option<String>,
+    pub author: AuthorDto,
+    #[serde(default)]
+    pub content: String,
+    #[serde(default)]
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+pub struct SearchPageDto {
+    #[serde(default)]
+    pub items: Vec<SearchHitDto>,
+    #[serde(default)]
+    pub has_more: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct InviteDto {
+    pub code: String,
+    #[serde(default)]
+    pub server_id: String,
+    #[serde(default)]
+    pub channel_id: String,
+    #[serde(default)]
+    pub created_by: String,
+    #[serde(default)]
+    pub max_uses: Option<u32>,
+    #[serde(default)]
+    pub uses: u32,
+    #[serde(default)]
+    pub expires_at: Option<String>,
+    #[serde(default)]
+    pub revoked: bool,
+    #[serde(default)]
+    pub valid: bool,
+    #[serde(default)]
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct BanDto {
+    pub user_id: String,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default)]
+    pub banned_by: String,
+    #[serde(default)]
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct BlockDto {
     pub user_id: String,
     #[serde(default)]

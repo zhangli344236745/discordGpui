@@ -15,7 +15,7 @@ use crate::data::{
 
 use super::dto::{
     ChannelDto, ChannelUnreadDto, DmDto, DmMessageDto, FriendDto, FriendGroupDto, FriendRequestDto,
-    MemberDto, MessageDto, MessageRequestDto,
+    InviteDto, MemberDto, MessageDto, MessageRequestDto,
     PermissionMatrixDto, RoleDto, ServerDto, ServerTreeDto, UnreadCountsDto, UserDto,
 };
 
@@ -44,6 +44,7 @@ pub struct BootData {
     pub friend_requests: Vec<FriendRequestDto>,
     pub blocks: Vec<super::dto::BlockDto>,
     pub message_requests: Vec<MessageRequestDto>,
+    pub invites: Vec<InviteDto>,
     pub groups: Vec<FriendGroupDto>,
     pub dms: Vec<DmDto>,
     pub counts: UnreadCountsDto,
@@ -67,6 +68,7 @@ pub struct Hydrated {
     pub friend_requests: Vec<FriendRequest>,
     pub blocked_users: Vec<String>,
     pub message_requests: Vec<MessageRequest>,
+    pub invites: Vec<crate::data::Invite>,
     pub dm_conversations: Vec<DmConversation>,
     pub messages: Vec<Message>,
     pub index: RemoteIndex,
@@ -76,7 +78,7 @@ fn leak(value: String) -> &'static str {
     Box::leak(value.into_boxed_str())
 }
 
-fn short_time(iso: &str) -> &'static str {
+pub(crate) fn short_time(iso: &str) -> &'static str {
     if let Some((_, rest)) = iso.split_once('T')
         && rest.len() >= 5
     {
@@ -435,6 +437,41 @@ pub fn hydrate(data: BootData) -> Hydrated {
     }
     friends.sort_by(|a, b| a.name.cmp(b.name));
 
+    let mut invites = Vec::new();
+    for invite in &data.invites {
+        let server_name = data
+            .servers
+            .iter()
+            .find(|server| server.id == invite.server_id)
+            .map(|server| server.name.clone())
+            .unwrap_or_default();
+        let channel_name = data
+            .trees
+            .iter()
+            .flat_map(|tree| tree.channels.iter())
+            .find(|channel| channel.id == invite.channel_id)
+            .map(|channel| channel.name.clone())
+            .unwrap_or_default();
+        invites.push(crate::data::Invite {
+            code: invite.code.clone(),
+            server: server_name,
+            channel: channel_name,
+            inviter: leak(if invite.created_by == index.me_id {
+                "你".to_string()
+            } else {
+                invite.created_at.clone()
+            }),
+            uses: invite.uses,
+            max_uses: invite.max_uses.unwrap_or(0),
+            expiry: if invite.expires_at.is_none() {
+                crate::data::InviteExpiry::Never
+            } else {
+                crate::data::InviteExpiry::SevenDays
+            },
+            created_minutes: 0,
+        });
+    }
+
     let message_requests = data
         .message_requests
         .iter()
@@ -507,6 +544,7 @@ pub fn hydrate(data: BootData) -> Hydrated {
         friend_requests,
         blocked_users,
         message_requests,
+        invites,
         dm_conversations: dms,
         messages,
         index,
@@ -572,6 +610,7 @@ mod tests {
             friend_requests: vec![],
             blocks: vec![],
             message_requests: vec![],
+            invites: vec![],
             groups: vec![],
             dms: vec![],
             counts: dto(json!({"channels":[{"channel_id":"ch1","server_id":"s1","unread":3}]})),
