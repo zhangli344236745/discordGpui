@@ -97,6 +97,8 @@ class Attachment(Base, IdMixin, CreatedAtMixin):
     mime: Mapped[str] = mapped_column(String(120), default="application/octet-stream", nullable=False)
     size: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     storage_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    # 图片缩略图的存储 key；非图片为空
+    thumb_storage_key: Mapped[str | None] = mapped_column(String(267), nullable=True)
     uploaded: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
 

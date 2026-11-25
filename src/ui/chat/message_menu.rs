@@ -9,6 +9,8 @@ use crate::ui::ico;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{v_flex, Size};
+
+use crate::data::DeliveryStatus;
 use gpui_kit::prelude::FluentBuilder as _;
 
 /// 菜单项：图标 + 文案 + 唯一 id + 点击行为。
@@ -105,6 +107,21 @@ fn menu_items(index: usize, app: &DiscordApp, cx: &mut Context<DiscordApp>) -> i
             cx,
             move |this, window, cx| this.open_forward(index, window, cx),
         ))
+        .when(
+            app.current_messages()
+                .get(index)
+                .is_some_and(|message| message.delivery == DeliveryStatus::Failed),
+            |el| {
+                el.child(menu_row(
+                    IconName::RefreshCw,
+                    "重试发送",
+                    format!("msg-menu-retry-{index}"),
+                    false,
+                    cx,
+                    move |this, window, cx| this.retry_failed_message(index, window, cx),
+                ))
+            },
+        )
         .child(div().h(px(1.)).my(px(2.)).bg(rgb(palette::bg_divider())))
         .when(app.is_mine(index), |el| {
             el.child(menu_row(

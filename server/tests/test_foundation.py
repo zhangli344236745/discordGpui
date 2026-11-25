@@ -68,7 +68,7 @@ async def test_outbox_broadcasts_only_after_commit(monkeypatch: pytest.MonkeyPat
     async def fake_dispatch(scope_kind, scope_id, event, data, event_id=None):  # noqa: ANN001, ANN202
         calls.append((scope_kind, scope_id, event, data, event_id))
 
-    monkeypatch.setattr(outbox.hub, "dispatch", fake_dispatch)
+    monkeypatch.setattr(outbox.bus, "dispatch", fake_dispatch)
 
     async with SessionLocal() as db:
         event_id = outbox.queue(db, "user", "u-commit", "TEST_EVENT", {"n": 1})

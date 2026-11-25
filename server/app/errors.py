@@ -49,6 +49,10 @@ def conflict(message: str, field: str | None = None) -> ApiError:
     return ApiError(409, ErrorCode.CONFLICT, message, field=field)
 
 
+def payload_too_large(message: str, field: str | None = None) -> ApiError:
+    return ApiError(413, "PAYLOAD_TOO_LARGE", message, field)
+
+
 def bad_request(message: str, field: str | None = None) -> ApiError:
     return ApiError(400, ErrorCode.VALIDATION_ERROR, message, field=field)
 

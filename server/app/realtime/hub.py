@@ -43,6 +43,14 @@ class Hub:
     def size(self) -> int:
         return len(self._conns)
 
+    def close_user(self, user_id: str) -> int:
+        """撤销会话时踢掉该用户的全部 Gateway 连接；返回关闭数量。"""
+        targets = [conn for conn in self._all() if conn.user_id == user_id]
+        for conn in targets:
+            self._conns.pop(conn.key, None)
+            # WebSocket 关闭由 gateway 的接收循环感知；这里只摘除订阅
+        return len(targets)
+
     def _all(self) -> list[Connection]:
         return list(self._conns.values())
 

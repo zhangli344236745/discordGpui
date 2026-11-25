@@ -13,8 +13,8 @@ from app.deps import ChannelContext, channel_context, current_user
 from app.errors import forbidden, not_found, unauthorized
 from app.livekit.token import build_token, server_room
 from app.models import User, VoiceParticipant
+from app.realtime.bus import bus
 from app.realtime.events import Event
-from app.realtime.hub import hub
 
 router = APIRouter(tags=["voice"])
 
@@ -58,7 +58,7 @@ async def join_voice(ctx: ChannelContext = Depends(channel_context), db: AsyncSe
         await db.commit()
 
     participants = await _participants(db, room)
-    await hub.to_server(
+    await bus.to_server(
         ctx.server_id,
         Event.VOICE_STATE_UPDATE,
         {"channel_id": ctx.channel.id, "room": room, "participants": participants},
@@ -79,7 +79,7 @@ async def leave_voice(ctx: ChannelContext = Depends(channel_context), db: AsyncS
         await db.delete(row)
         await db.commit()
     participants = await _participants(db, room)
-    await hub.to_server(
+    await bus.to_server(
         ctx.server_id,
         Event.VOICE_STATE_UPDATE,
         {"channel_id": ctx.channel.id, "room": room, "participants": participants},
@@ -130,7 +130,7 @@ async def moderate_participant(
     # 真实部署在此调用 LiveKit RoomService.MutePublishedTrack / RemoveParticipant，
     # 成功后再由 webhook 回写；Demo 直接改本地投影表。
     participants = await _participants(db, room)
-    await hub.to_server(server_id, Event.VOICE_STATE_UPDATE, {"room": room, "participants": participants})
+    await bus.to_server(server_id, Event.VOICE_STATE_UPDATE, {"room": room, "participants": participants})
     return {"ok": True, "action": action}
 
 
@@ -150,7 +150,7 @@ async def update_my_voice_state(
     await db.commit()
     parts = room.split(":")
     if len(parts) == 3 and parts[0] == "srv":
-        await hub.to_server(
+        await bus.to_server(
             parts[1],
             Event.VOICE_STATE_UPDATE,
             {"room": room, "participants": await _participants(db, room)},
@@ -212,5 +212,5 @@ async def livekit_webhook(request: Request, db: AsyncSession = Depends(get_db)) 
     parts = room.split(":")
     if len(parts) == 3 and parts[0] == "srv":
         payload = {"room": room, "participants": await _participants(db, room), "at": utcnow().isoformat()}
-        await hub.to_server(parts[1], Event.VOICE_STATE_UPDATE, payload)
+        await bus.to_server(parts[1], Event.VOICE_STATE_UPDATE, payload)
     return {"ok": True, "empty": row_check is None and kind != "participant_joined"}

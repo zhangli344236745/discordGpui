@@ -25,11 +25,12 @@ from app.models import (
     ServerMember,
     User,
 )
+from app.realtime.bus import bus
 from app.realtime.events import Event
-from app.realtime.hub import hub
 from app.schemas.message import MessageCreate, MessageOut, MessagePatch, ReactionIn
-from app.services import automod, notifications, ratelimit, storage
+from app.services import automod, notifications, ratelimit
 from app.services.permissions import effective_permissions
+from app.services.storage import storage
 
 router = APIRouter(tags=["messages"])
 
@@ -139,15 +140,16 @@ async def serialize(db: AsyncSession, msgs: list[Message], viewer_id: str) -> li
     for a in attachments:
         if not a.message_id:
             continue
-        attachment_map.setdefault(a.message_id, []).append(
-            {
-                "id": a.id,
-                "filename": a.filename,
-                "mime": a.mime,
-                "size": a.size,
-                "url": storage.url_for(a.storage_key),
-            }
-        )
+        item = {
+            "id": a.id,
+            "filename": a.filename,
+            "mime": a.mime,
+            "size": a.size,
+            "url": storage.url_for(a.storage_key),
+        }
+        if a.thumb_storage_key:
+            item["thumbnail_url"] = storage.url_for(a.thumb_storage_key)
+        attachment_map.setdefault(a.message_id, []).append(item)
 
     out: list[MessageOut] = []
     for m in msgs:
@@ -317,7 +319,7 @@ async def send_message(
         out.warnings = [{"rule": w.rule_name, "keyword": w.keyword, "rule_id": w.rule_id} for w in scan.warnings]
     data = out.model_dump()
     data["server_id"] = channel.server_id
-    await hub.to_server(channel.server_id, Event.MESSAGE_CREATE, data)
+    await bus.to_server(channel.server_id, Event.MESSAGE_CREATE, data)
     return out
 
 
@@ -372,7 +374,7 @@ async def edit_message(
         out.warnings = [
             {"rule": w.rule_name, "keyword": w.keyword, "rule_id": w.rule_id} for w in scan.warnings
         ]
-    await hub.to_server(
+    await bus.to_server(
         ctx.channel.server_id,
         Event.MESSAGE_UPDATE,
         {"message": out.model_dump(), "channel_id": ctx.channel.id},
@@ -389,7 +391,7 @@ async def delete_message(
         raise forbidden("MANAGE_MESSAGES")
     ctx.message.deleted_at = utcnow()
     await db.commit()
-    await hub.to_server(
+    await bus.to_server(
         ctx.channel.server_id,
         Event.MESSAGE_DELETE,
         {"id": message_id, "channel_id": ctx.channel.id},
@@ -421,7 +423,7 @@ async def toggle_pin(
     ctx.message.pinned = pinned
     await db.commit()
     out = (await serialize(db, [ctx.message], user.id))[0]
-    await hub.to_server(
+    await bus.to_server(
         ctx.channel.server_id,
         Event.MESSAGE_UPDATE,
         {"message": out.model_dump(), "channel_id": ctx.channel.id},
@@ -465,7 +467,7 @@ async def add_reaction(
     if existing is None:
         db.add(Reaction(message_id=message_id, user_id=user.id, emoji=body.emoji))
         await db.commit()
-        await hub.to_server(
+        await bus.to_server(
             ctx.channel.server_id,
             Event.MESSAGE_REACTION_ADD,
             {"message_id": message_id, "emoji": body.emoji, "user_id": user.id},
@@ -484,7 +486,7 @@ async def remove_reaction(
     if existing is not None:
         await db.delete(existing)
         await db.commit()
-        await hub.to_server(
+        await bus.to_server(
             ctx.channel.server_id,
             Event.MESSAGE_REACTION_REMOVE,
             {"message_id": message_id, "emoji": emoji, "user_id": user.id},
@@ -534,7 +536,7 @@ async def forward_message(
         out = (await serialize(db, [forwarded], user.id))[0]
         data = out.model_dump()
         data["server_id"] = target_channel.server_id
-        await hub.to_server(target_channel.server_id, Event.MESSAGE_CREATE, data)
+        await bus.to_server(target_channel.server_id, Event.MESSAGE_CREATE, data)
         return out
 
     # 私信转发：Demo 阶段先拒绝，DM 消息表结构不同，留给 P1 的 dms 路由
@@ -570,7 +572,7 @@ async def typing(channel_id: str, db: AsyncSession = Depends(get_db), user: User
     perms = await effective_permissions(db, channel.server_id, user.id, channel.id)
     if "VIEW_CHANNEL" not in perms:
         raise not_found("频道")
-    await hub.to_server(
+    await bus.to_server(
         channel.server_id,
         Event.TYPING_START,
         {"channel_id": channel_id, "user_id": user.id, "name": user.display_name},

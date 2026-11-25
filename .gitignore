@@ -14,3 +14,6 @@ server/**/__pycache__/
 server/**/*.pyc
 server/.pytest_cache/
 server/.ruff_cache/
+
+# 备份产物
+/backups/

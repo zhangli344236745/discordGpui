@@ -66,6 +66,7 @@ class AttachmentOut(BaseModel):
     mime: str
     size: int
     url: str = ""
+    thumbnail_url: str | None = None
 
 
 class MessageOut(BaseModel):

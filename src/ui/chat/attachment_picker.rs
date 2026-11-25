@@ -88,7 +88,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
         );
     }
 
-    v_flex()
+    let mut panel = v_flex()
         .absolute()
         .bottom(px(52.))
         .left(px(16.))
@@ -115,9 +115,37 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                     div()
                         .text_size(px(11.))
                         .text_color(rgb(palette::text_dim()))
-                        .child("Demo 环境，从下面的模拟文件中选择"),
+                        .child("选择本地文件上传，或从下面的演示文件中选择"),
                 ),
         )
+        .child(
+            h_flex()
+                .gap_2()
+                .px_2()
+                .py_2()
+                .rounded(px(6.))
+                .bg(rgb(palette::accent()))
+                .text_color(rgb(palette::WHITE))
+                .hover(|el| el.opacity(0.9))
+                .child(ico(IconName::FileText, Size::Small))
+                .child(div().text_size(px(12.)).child("选择本地文件…"))
+                .id("attach-pick-local")
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.pick_local_attachment(window, cx);
+                })),
+        );
+
+    if let Some(error) = &app.upload_error {
+        panel = panel.child(
+            div()
+                .px_1()
+                .text_size(px(11.))
+                .text_color(rgb(palette::danger()))
+                .child(error.clone()),
+        );
+    }
+
+    panel
         .child(list)
         .child(div().h(px(1.)).bg(rgb(palette::bg_divider())))
         .child(

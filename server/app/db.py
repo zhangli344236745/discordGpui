@@ -22,7 +22,12 @@ SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSe
 
 @event.listens_for(engine.sync_engine, "connect")
 def _sqlite_pragmas(dbapi_conn, _record):  # pragma: no cover - 连接级副作用
-    """SQLite 并发三件套：WAL 允许读写并行，busy_timeout 避免立刻报锁。"""
+    """SQLite 并发三件套：WAL 允许读写并行，busy_timeout 避免立刻报锁。
+
+    Postgres 跳过：PRAGMA 在 PG 上不合法。
+    """
+    if engine.dialect.name != "sqlite":
+        return
     cur = dbapi_conn.cursor()
     cur.execute("PRAGMA journal_mode=WAL")
     cur.execute("PRAGMA busy_timeout=5000")
@@ -70,7 +75,23 @@ def search_index_ddl() -> list[str]:
     return stmts
 
 
+PG_TRGM_INDEXES: tuple[tuple[str, str], ...] = (
+    ("ix_messages_content_trgm", "messages"),
+    ("ix_dm_messages_content_trgm", "dm_messages"),
+)
+
+
 async def apply_search_index(conn) -> None:  # noqa: ANN001 - AsyncConnection
+    """SQLite 建 FTS5 虚表与触发器；Postgres 建 pg_trgm 扩展与 GIN 索引。"""
+    dialect = conn.dialect.name
+    if dialect == "postgresql":
+        await conn.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+        for index, table in PG_TRGM_INDEXES:
+            await conn.exec_driver_sql(
+                f"CREATE INDEX IF NOT EXISTS {index} ON {table} USING gin (content gin_trgm_ops)"
+            )
+        return
+
     rows = (await conn.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'")).all()
     existing = {r[0] for r in rows}
     for stmt in search_index_ddl():
@@ -83,6 +104,10 @@ async def apply_search_index(conn) -> None:  # noqa: ANN001 - AsyncConnection
 
 
 async def drop_search_index(conn) -> None:  # noqa: ANN001 - AsyncConnection
+    if conn.dialect.name == "postgresql":
+        for index, _table in PG_TRGM_INDEXES:
+            await conn.exec_driver_sql(f"DROP INDEX IF EXISTS {index}")
+        return
     for fts, _table, prefix in _SEARCH_SPECS:
         for suffix in ("au", "ad", "ai"):
             await conn.exec_driver_sql(f"DROP TRIGGER IF EXISTS {prefix}_fts_{suffix}")

@@ -50,7 +50,7 @@ def test_alembic_upgrade_and_downgrade_roundtrip() -> None:
     assert hit == 1
     con.close()
 
-    down = _alembic(db_path, "downgrade", "-1")
+    down = _alembic(db_path, "downgrade", "41e386ed7335")
     assert down.returncode == 0, down.stderr
 
     con = sqlite3.connect(db_path)

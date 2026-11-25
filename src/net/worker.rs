@@ -46,6 +46,12 @@ enum Command {
     Logout {
         reply: Reply<()>,
     },
+    Upload {
+        path: std::path::PathBuf,
+        filename: String,
+        mime: String,
+        reply: Reply<String>,
+    },
     Shutdown,
 }
 
@@ -171,6 +177,26 @@ impl NetClient {
         rx.recv().await.map_err(|_| NetError::network("网络线程已退出"))?
     }
 
+    /// 上传附件：先建记录拿 file_id，再 PUT 原始字节。
+    pub async fn upload_attachment(
+        &self,
+        path: std::path::PathBuf,
+        filename: impl Into<String>,
+        mime: impl Into<String>,
+    ) -> Result<String, NetError> {
+        let (tx, rx) = bounded(1);
+        self.tx
+            .send(Command::Upload {
+                path,
+                filename: filename.into(),
+                mime: mime.into(),
+                reply: tx,
+            })
+            .await
+            .map_err(|_| NetError::network("网络线程已退出"))?;
+        rx.recv().await.map_err(|_| NetError::network("网络线程已退出"))?
+    }
+
     /// 执行一个 typed 请求；`auth=true` 自动附带并刷新 access token。
     pub async fn execute(&self, request: ApiRequest, auth: bool) -> Result<Value, NetError> {
         let (tx, rx) = bounded(1);
@@ -261,6 +287,15 @@ impl Worker {
                     let result = self.logout();
                     let _ = reply.send_blocking(result);
                 }
+                Command::Upload {
+                    path,
+                    filename,
+                    mime,
+                    reply,
+                } => {
+                    let result = self.upload(&path, &filename, &mime);
+                    let _ = reply.send_blocking(result);
+                }
                 Command::Shutdown => break,
             }
         }
@@ -308,6 +343,7 @@ impl Worker {
             url: self.config.url(&request.path),
             headers,
             body,
+            body_bytes: None,
         })
     }
 
@@ -338,6 +374,7 @@ impl Worker {
                 ("Content-Type".to_string(), "application/json".to_string()),
             ],
             body: Some(body),
+            body_bytes: None,
         })?;
         if !(200..300).contains(&raw.status) {
             self.store.clear();
@@ -379,6 +416,7 @@ impl Worker {
                 ("Content-Type".to_string(), "application/json".to_string()),
             ],
             body: Some(body),
+            body_bytes: None,
         })?;
         if !(200..300).contains(&raw.status) {
             return Err(NetError::from_response(raw.status, &raw.body));
@@ -428,6 +466,7 @@ impl Worker {
                 ("Content-Type".to_string(), "application/json".to_string()),
             ],
             body: Some(body),
+            body_bytes: None,
         })?;
         if !(200..300).contains(&raw.status) {
             return Err(NetError::from_response(raw.status, &raw.body));
@@ -449,6 +488,78 @@ impl Worker {
         Ok(tokens)
     }
 
+    fn upload(&mut self, path: &std::path::Path, filename: &str, mime: &str) -> Result<String, NetError> {
+        let bytes = std::fs::read(path)
+            .map_err(|error| NetError::new(NetErrorKind::Validation, "READ_FAILED", format!("读取文件失败：{error}")))?;
+        if bytes.is_empty() {
+            return Err(NetError::new(
+                NetErrorKind::Validation,
+                "VALIDATION_ERROR",
+                "不能上传空文件",
+            ));
+        }
+        let init = self.handle_http(
+            &ApiRequest::new(Method::Post, "/api/v1/uploads").with_body(serde_json::json!({
+                "filename": filename,
+                "size": bytes.len(),
+                "mime": mime,
+            })),
+            true,
+        )?;
+        let file_id = init
+            .get("file_id")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| NetError::decode("上传初始化缺少 file_id"))?
+            .to_string();
+        self.send_raw(
+            Method::Put,
+            &format!("/api/v1/uploads/{file_id}/content"),
+            bytes,
+            mime,
+        )?;
+        Ok(file_id)
+    }
+
+    fn send_raw(
+        &mut self,
+        method: Method,
+        path: &str,
+        bytes: Vec<u8>,
+        content_type: &str,
+    ) -> Result<RawResponse, NetError> {
+        let mut attempt = 0;
+        loop {
+            self.ensure_access_token()?;
+            let token = self
+                .store
+                .access_token()
+                .ok_or_else(|| NetError::unauthorized("UNAUTHORIZED", "未登录"))?;
+            let raw = self.transport.execute(&HttpRequest {
+                method,
+                url: self.config.url(path),
+                headers: vec![
+                    ("Accept".to_string(), "application/json".to_string()),
+                    ("Content-Type".to_string(), content_type.to_string()),
+                    ("Authorization".to_string(), format!("Bearer {token}")),
+                ],
+                body: None,
+                body_bytes: Some(bytes.clone()),
+            })?;
+            if raw.status == 401 && attempt == 0 {
+                let error = NetError::from_response(raw.status, &raw.body);
+                if error.is_auth_expired() {
+                    self.refresh()?;
+                    attempt += 1;
+                    continue;
+                }
+            }
+            if !(200..300).contains(&raw.status) {
+                return Err(NetError::from_response(raw.status, &raw.body));
+            }
+            return Ok(raw);
+        }
+    }
+
     fn logout(&mut self) -> Result<(), NetError> {
         if let Some(refresh_token) = self.store.refresh_token() {
             if let Ok(body) = serde_json::to_string(&RefreshDto { refresh_token }) {
@@ -460,6 +571,7 @@ impl Worker {
                         ("Content-Type".to_string(), "application/json".to_string()),
                     ],
                     body: Some(body),
+                    body_bytes: None,
                 });
             }
         }
@@ -500,9 +612,10 @@ impl Transport for UreqTransport {
         for (key, value) in &request.headers {
             outgoing = outgoing.set(key, value);
         }
-        let result = match &request.body {
-            Some(body) => outgoing.send_string(body),
-            None => outgoing.call(),
+        let result = match (&request.body_bytes, &request.body) {
+            (Some(bytes), _) => outgoing.send_bytes(bytes),
+            (None, Some(body)) => outgoing.send_string(body),
+            (None, None) => outgoing.call(),
         };
         match result {
             Ok(response) => read_response(response),
@@ -615,6 +728,76 @@ mod tests {
 
         let denied = pollster::block_on(client.execute(super::super::api::health(), false)).unwrap_err();
         assert_eq!(denied.kind, NetErrorKind::Forbidden);
+        client.shutdown();
+    }
+
+    #[test]
+    fn uploads_attachment_in_two_steps() {
+        let mock = MockTransport::new(vec![
+            ok(r#"{"file_id":"file-1"}"#),
+            Ok(RawResponse { status: 204, body: String::new() }),
+        ]);
+        let client = NetClient::spawn_with_transport(config(), Box::new(mock.clone()));
+        client.session().set(Tokens {
+            access_token: "access-1".into(),
+            refresh_token: "refresh-1".into(),
+            token_type: "Bearer".into(),
+            expires_in: 900,
+        });
+
+        let dir = std::env::temp_dir().join("dgpui-upload-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("note.txt");
+        std::fs::write(&file, b"hello upload").unwrap();
+
+        let file_id = pollster::block_on(client.upload_attachment(
+            file.clone(),
+            "note.txt",
+            "text/plain",
+        ))
+        .unwrap();
+        assert_eq!(file_id, "file-1");
+
+        let requests = mock.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].url, "http://127.0.0.1:8080/api/v1/uploads");
+        assert!(requests[0].body.as_ref().unwrap().contains("\"note.txt\""));
+        assert!(requests[0].body.as_ref().unwrap().contains("\"text/plain\""));
+        assert_eq!(requests[1].url, "http://127.0.0.1:8080/api/v1/uploads/file-1/content");
+        assert_eq!(requests[1].method, Method::Put);
+        assert_eq!(requests[1].body_bytes.as_deref(), Some(b"hello upload".as_slice()));
+        assert!(requests[1]
+            .headers
+            .iter()
+            .any(|(k, v)| k == "Content-Type" && v == "text/plain"));
+        std::fs::remove_file(&file).ok();
+        client.shutdown();
+    }
+
+    #[test]
+    fn upload_failure_propagates_without_content_step() {
+        let mock = MockTransport::new(vec![status(
+            400,
+            r#"{"error":{"code":"VALIDATION_ERROR","message":"文件超过 25MB 上限"}}"#,
+        )]);
+        let client = NetClient::spawn_with_transport(config(), Box::new(mock.clone()));
+        client.session().set(Tokens {
+            access_token: "access-1".into(),
+            refresh_token: "refresh-1".into(),
+            token_type: "Bearer".into(),
+            expires_in: 900,
+        });
+
+        let dir = std::env::temp_dir().join("dgpui-upload-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("big.bin");
+        std::fs::write(&file, b"payload").unwrap();
+
+        let error = pollster::block_on(client.upload_attachment(file.clone(), "big.bin", "application/octet-stream"))
+            .unwrap_err();
+        assert_eq!(error.kind, NetErrorKind::Validation);
+        assert_eq!(mock.requests.lock().unwrap().len(), 1);
+        std::fs::remove_file(&file).ok();
         client.shutdown();
     }
 

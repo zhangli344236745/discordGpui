@@ -617,11 +617,21 @@ pub fn send_message(
     reply_to: Option<&str>,
     client_nonce: Option<&str>,
 ) -> ApiRequest {
+    send_message_with_attachments(channel_id, content, reply_to, client_nonce, &[])
+}
+
+pub fn send_message_with_attachments(
+    channel_id: &str,
+    content: &str,
+    reply_to: Option<&str>,
+    client_nonce: Option<&str>,
+    attachment_ids: &[String],
+) -> ApiRequest {
     ApiRequest::new(Method::Post, format!("/api/v1/channels/{channel_id}/messages")).with_body(
         json!({
             "content": content,
             "reply_to": reply_to,
-            "attachment_ids": [],
+            "attachment_ids": attachment_ids,
             "client_nonce": client_nonce,
         }),
     )

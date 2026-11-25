@@ -1,3 +1,4 @@
+import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -26,6 +27,8 @@ def create_token(subject: str, kind: str, ttl: timedelta) -> str:
     payload = {
         "sub": subject,
         "kind": kind,
+        # jti：同一秒内多次签发也保证 token 唯一，避免撤销语义被“孪生 token”绕过
+        "jti": uuid.uuid4().hex,
         "iat": int(now.timestamp()),
         "exp": int((now + ttl).timestamp()),
     }

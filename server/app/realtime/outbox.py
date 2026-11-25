@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.ids import new_id
 from app.models import GatewayEvent
-from app.realtime.hub import hub
+from app.realtime.bus import bus
 
 log = logging.getLogger("server.outbox")
 
@@ -56,7 +56,7 @@ def _after_commit(session: Session) -> None:
         log.warning("drop %d gateway events: no running loop", len(pending))
         return
     for event_id, scope_kind, scope_id, name, data in pending:
-        loop.create_task(hub.dispatch(scope_kind, scope_id, name, data, event_id))
+        loop.create_task(bus.dispatch(scope_kind, scope_id, name, data, event_id))
 
 
 def _after_rollback(session: Session) -> None:

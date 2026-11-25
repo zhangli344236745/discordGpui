@@ -225,6 +225,8 @@ pub struct HttpRequest {
     pub url: String,
     pub headers: Vec<(String, String)>,
     pub body: Option<String>,
+    /// 二进制请求体（附件上传）；与 `body` 互斥。
+    pub body_bytes: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

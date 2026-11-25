@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db import get_db
-from app.realtime.hub import hub
+from app.realtime.bus import bus
 
 router = APIRouter(tags=["system"])
 
@@ -70,7 +70,7 @@ async def health(db: AsyncSession = Depends(get_db)) -> dict:
         "status": "ok" if db_ok else "degraded",
         "db": db_ok,
         "livekit": bool(settings.livekit_url),
-        "gateway_connections": hub.size,
+        "gateway_connections": bus.size,
     }
 
 

@@ -20,8 +20,8 @@ from app.models import (
     WelcomeRule,
     WelcomeScreen,
 )
+from app.realtime.bus import bus
 from app.realtime.events import Event
-from app.realtime.hub import hub
 from app.schemas.guild import ServerCreate, ServerOut, ServerPatch
 from app.services import audit
 from app.services.permissions import BASE_PERMISSIONS
@@ -165,7 +165,7 @@ async def create_server(
     await db.refresh(server)
 
     payload = {"server": ServerOut.model_validate(server).model_dump()}
-    await hub.to_user(user.id, Event.SERVER_UPDATE, payload)
+    await bus.to_user(user.id, Event.SERVER_UPDATE, payload)
     return ServerOut.model_validate(server)
 
 
@@ -204,7 +204,7 @@ async def patch_server(
 
     await db.commit()
     payload = {"server": ServerOut.model_validate(ctx.server).model_dump()}
-    await hub.to_server(ctx.server.id, Event.SERVER_UPDATE, payload)
+    await bus.to_server(ctx.server.id, Event.SERVER_UPDATE, payload)
     return ServerOut.model_validate(ctx.server)
 
 
@@ -217,7 +217,7 @@ async def delete_server(ctx: ServerContext = Depends(server_context), db: AsyncS
     server_id = ctx.server.id
     await db.delete(ctx.server)
     await db.commit()
-    await hub.to_server(server_id, Event.SERVER_UPDATE, {"server_id": server_id, "deleted": True})
+    await bus.to_server(server_id, Event.SERVER_UPDATE, {"server_id": server_id, "deleted": True})
 
 
 @router.post("/{server_id}/leave", status_code=status.HTTP_204_NO_CONTENT)
@@ -227,7 +227,7 @@ async def leave_server(ctx: ServerContext = Depends(server_context), db: AsyncSe
     await db.delete(ctx.member)
     ctx.server.member_count = max(0, ctx.server.member_count - 1)
     await db.commit()
-    await hub.to_server(ctx.server.id, Event.MEMBER_LEAVE, {"server_id": ctx.server.id, "user_id": ctx.user.id})
+    await bus.to_server(ctx.server.id, Event.MEMBER_LEAVE, {"server_id": ctx.server.id, "user_id": ctx.user.id})
 
 
 @router.put("/{server_id}/order", status_code=status.HTTP_204_NO_CONTENT)
@@ -316,7 +316,7 @@ async def join_server(server_id: str, db: AsyncSession = Depends(get_db), user: 
         if everyone is not None:
             db.add(MemberRole(server_id=server_id, user_id=user.id, role_id=everyone.id))
         await db.commit()
-        await hub.to_server(server_id, Event.MEMBER_JOIN, {"server_id": server_id, "user_id": user.id})
+        await bus.to_server(server_id, Event.MEMBER_JOIN, {"server_id": server_id, "user_id": user.id})
 
     welcome = await db.get(WelcomeScreen, server_id)
     accepted = await db.get(WelcomeAccept, (server_id, user.id))

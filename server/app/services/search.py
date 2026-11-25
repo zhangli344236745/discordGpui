@@ -97,7 +97,9 @@ async def _fts_ids(
 ) -> list[str]:
     if not scope_ids:
         return []
-    if len(q) >= 3:
+    # Postgres 用 pg_trgm + ILIKE；SQLite 用 FTS5 MATCH（短词回退 LIKE）
+    use_fts = db.get_bind().dialect.name == "sqlite" and len(q) >= 3
+    if use_fts:
         sql = text(
             f"SELECT m.id FROM {fts} f JOIN {table} m ON m.rowid = f.rowid "
             f"WHERE f.{fts} MATCH :q AND m.deleted_at IS NULL "
@@ -115,13 +117,13 @@ async def _fts_ids(
         stmt = select(Message.id).where(
             Message.channel_id.in_(scope_ids),
             Message.deleted_at.is_(None),
-            Message.content.like(like),
+            Message.content.ilike(like),
         )
     else:
         stmt = select(DmMessage.id).where(
             DmMessage.dm_id.in_(scope_ids),
             DmMessage.deleted_at.is_(None),
-            DmMessage.content.like(like),
+            DmMessage.content.ilike(like),
         )
     if before:
         stmt = stmt.where(Message.id < before if table == "messages" else DmMessage.id < before)

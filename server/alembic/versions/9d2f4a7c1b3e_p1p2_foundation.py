@@ -71,21 +71,35 @@ def upgrade() -> None:
     op.rename_table("bookmarks_new", "bookmarks")
     op.create_index("ix_bookmarks_user_created", "bookmarks", ["user_id", "created_at"])
 
-    # 6. FTS5 external-content 索引 + 同步触发器
-    for stmt in search_index_ddl():
-        op.execute(stmt)
-    op.execute("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')")
-    op.execute("INSERT INTO dm_messages_fts(dm_messages_fts) VALUES('rebuild')")
+    # 6. 搜索索引：SQLite 用 FTS5，Postgres 用 pg_trgm GIN
+    if op.get_bind().dialect.name == "postgresql":
+        op.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+        op.execute(
+            "CREATE INDEX IF NOT EXISTS ix_messages_content_trgm ON messages USING gin (content gin_trgm_ops)"
+        )
+        op.execute(
+            "CREATE INDEX IF NOT EXISTS ix_dm_messages_content_trgm "
+            "ON dm_messages USING gin (content gin_trgm_ops)"
+        )
+    else:
+        for stmt in search_index_ddl():
+            op.execute(stmt)
+        op.execute("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')")
+        op.execute("INSERT INTO dm_messages_fts(dm_messages_fts) VALUES('rebuild')")
 
 
 def downgrade() -> None:
-    for fts, _table, prefix in (
-        ("messages_fts", "messages", "messages"),
-        ("dm_messages_fts", "dm_messages", "dm_messages"),
-    ):
-        for suffix in ("au", "ad", "ai"):
-            op.execute(f"DROP TRIGGER IF EXISTS {prefix}_fts_{suffix}")
-        op.execute(f"DROP TABLE IF EXISTS {fts}")
+    if op.get_bind().dialect.name == "postgresql":
+        op.execute("DROP INDEX IF EXISTS ix_messages_content_trgm")
+        op.execute("DROP INDEX IF EXISTS ix_dm_messages_content_trgm")
+    else:
+        for fts, _table, prefix in (
+            ("messages_fts", "messages", "messages"),
+            ("dm_messages_fts", "dm_messages", "dm_messages"),
+        ):
+            for suffix in ("au", "ad", "ai"):
+                op.execute(f"DROP TRIGGER IF EXISTS {prefix}_fts_{suffix}")
+            op.execute(f"DROP TABLE IF EXISTS {fts}")
 
     op.create_table(
         "bookmarks_old",

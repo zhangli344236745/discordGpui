@@ -11,9 +11,12 @@ from app.config import settings
 from app.db import init_db
 from app.errors import ApiError, api_error_handler
 from app.realtime import outbox  # noqa: F401  注册 after_commit 广播监听
+from app.realtime.bus import close_bus, init_bus
 from app.realtime.gateway import router as gateway_router
 from app.services import calls as call_service
 from app.services import retention
+from app.services.mailer import init_mailer
+from app.services.storage import init_storage
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("server")
@@ -23,6 +26,9 @@ log = logging.getLogger("server")
 async def lifespan(app: FastAPI):  # noqa: ANN201
     settings.upload_dir.mkdir(parents=True, exist_ok=True)
     await init_db()
+    init_mailer()
+    init_storage()
+    await init_bus()
     cleaner = retention.start()
     call_watchdog = call_service.start()
     log.info("ready: %s", settings.database_url)
@@ -31,6 +37,7 @@ async def lifespan(app: FastAPI):  # noqa: ANN201
     finally:
         await retention.stop(cleaner)
         await call_service.stop(call_watchdog)
+        await close_bus()
 
 
 def create_app() -> FastAPI:

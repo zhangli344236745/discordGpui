@@ -13,8 +13,8 @@ from app.models import (
     User,
     UserSettings,
 )
+from app.realtime.bus import bus
 from app.realtime.events import Event
-from app.realtime.hub import hub
 from app.schemas.user import SettingsOut, SettingsPatch, StatusIn, UserOut, UserPatch
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -75,7 +75,7 @@ async def patch_status(
     # 只推给好友，别人不需要知道
     friend_ids = list((await db.scalars(select(Friendship.friend_id).where(Friendship.user_id == user.id))).all())
     for fid in friend_ids:
-        await hub.to_user(
+        await bus.to_user(
             fid,
             Event.PRESENCE_UPDATE,
             {"user_id": user.id, "status": body.status},

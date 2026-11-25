@@ -17,8 +17,8 @@ from app.models import (
     ServerMember,
     User,
 )
+from app.realtime.bus import bus
 from app.realtime.events import Event
-from app.realtime.hub import hub
 from app.schemas.message import (
     CategoryCreate,
     CategoryOut,
@@ -145,7 +145,7 @@ async def create_category(
     db.add(category)
     audit.log(db, ctx.server.id, ctx.user.id, audit.KIND_CHANNEL, f"创建了分类 / {category.name}")
     await db.commit()
-    await hub.to_server(ctx.server.id, Event.CATEGORY_CREATE, {"id": category.id, "name": category.name})
+    await bus.to_server(ctx.server.id, Event.CATEGORY_CREATE, {"id": category.id, "name": category.name})
     return CategoryOut.model_validate(category)
 
 
@@ -167,7 +167,7 @@ async def patch_category(
             f"重命名分类 / {old} → {ctx.category.name}",
         )
     await db.commit()
-    await hub.to_server(
+    await bus.to_server(
         ctx.category.server_id,
         Event.CATEGORY_UPDATE,
         {"id": ctx.category.id, "name": ctx.category.name},
@@ -185,7 +185,7 @@ async def delete_category(ctx: CategoryContext = Depends(category_context), db: 
     await db.delete(ctx.category)
     audit.log(db, server_id, ctx.user.id, audit.KIND_CHANNEL, "删除了分类")
     await db.commit()
-    await hub.to_server(server_id, Event.CATEGORY_DELETE, {"id": category_id})
+    await bus.to_server(server_id, Event.CATEGORY_DELETE, {"id": category_id})
 
 
 @router.post("/servers/{server_id}/channels", response_model=ChannelOut, status_code=201)
@@ -216,7 +216,7 @@ async def create_channel(
     db.add(channel)
     audit.log(db, ctx.server.id, ctx.user.id, audit.KIND_CHANNEL, f"创建了频道 / #{name}")
     await db.commit()
-    await hub.to_server(
+    await bus.to_server(
         ctx.server.id,
         Event.CHANNEL_CREATE,
         {"id": channel.id, "name": name, "kind": channel.kind, "category_id": channel.category_id},
@@ -244,7 +244,7 @@ async def patch_channel(
     if body.position is not None:
         channel.position = body.position
     await db.commit()
-    await hub.to_server(
+    await bus.to_server(
         ctx.server_id,
         Event.CHANNEL_UPDATE,
         {"channel": ChannelOut.model_validate(channel).model_dump()},
@@ -273,7 +273,7 @@ async def delete_channel(ctx: ChannelContext = Depends(channel_context), db: Asy
     await db.delete(ctx.channel)
     audit.log(db, ctx.server_id, ctx.user.id, audit.KIND_CHANNEL, f"删除了频道 / #{name}")
     await db.commit()
-    await hub.to_server(ctx.server_id, Event.CHANNEL_DELETE, {"id": channel_id})
+    await bus.to_server(ctx.server_id, Event.CHANNEL_DELETE, {"id": channel_id})
 
 
 @router.patch("/channels/{channel_id}/notify", status_code=status.HTTP_204_NO_CONTENT)

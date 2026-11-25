@@ -614,9 +614,13 @@ pub struct DiscordApp {
     /// 新建频道的目标分类；None 表示落到第一个分类。
     pub(crate) create_channel_category: Option<String>,
 
-    // 附件：待发送草稿 + 附件选择弹层显隐。
+    // 附件：待发送草稿 + 附件选择弹层显隐 + 真实上传状态。
     pub(crate) attachment_draft: Option<Attachment>,
     pub(crate) show_attachment_picker: bool,
+    pub(crate) pending_upload: Option<PendingUpload>,
+    pub(crate) upload_error: Option<String>,
+    /// 发送失败待重试的附件：nonce → 待上传文件。
+    pub(crate) failed_uploads: HashMap<String, PendingUpload>,
 
     // 贴纸弹层：全部贴纸 + 包顺序 + 当前包 + 显隐。
     pub(crate) stickers: Vec<Sticker>,
@@ -763,6 +767,47 @@ pub struct DiscordApp {
     // 本地持久化：上次落盘的快照 JSON（内容不变就不重复写盘）+ 数据页提示。
     pub(crate) saved_json: String,
     pub(crate) persist_note: Option<&'static str>,
+}
+
+fn mime_for_path(path: &std::path::Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "pdf" => "application/pdf",
+        "txt" | "md" | "log" => "text/plain",
+        "json" => "application/json",
+        "zip" => "application/zip",
+        "mp4" => "video/mp4",
+        "mp3" => "audio/mpeg",
+        _ => "application/octet-stream",
+    }
+}
+
+fn human_size(bytes: u64) -> String {
+    if bytes >= 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / 1024.0 / 1024.0)
+    } else if bytes >= 1024 {
+        format!("{:.0} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+/// 待上传的本地文件：真正发送时才读取字节并上传。
+#[derive(Clone, Debug)]
+pub(crate) struct PendingUpload {
+    pub path: std::path::PathBuf,
+    pub filename: String,
+    pub mime: String,
 }
 
 /// 单个会话的未发送消息草稿（文本 + 可选附件）。
@@ -1466,6 +1511,9 @@ impl DiscordApp {
             create_channel_category: None,
             attachment_draft: None,
             show_attachment_picker: false,
+            pending_upload: None,
+            upload_error: None,
+            failed_uploads: HashMap::new(),
             stickers: seed_stickers(),
             sticker_pack: sticker_packs().first().copied().unwrap_or("日常"),
             sticker_packs: sticker_packs(),
@@ -2267,6 +2315,8 @@ impl DiscordApp {
         self.rename_category_source.clear();
         self.create_channel_category = None;
         self.attachment_draft = None;
+        self.pending_upload = None;
+        self.upload_error = None;
         self.show_attachment_picker = false;
         self.show_sticker_picker = false;
         self.show_gif_picker = false;
@@ -3469,7 +3519,9 @@ impl DiscordApp {
 
         let key = self.session_key();
         let channel_id = self.remote.channels.get(&key).cloned();
-        let online_send = self.is_online() && channel_id.is_some() && !text.is_empty();
+        let pending = self.pending_upload.take();
+        let online_send =
+            self.is_online() && channel_id.is_some() && (!text.is_empty() || pending.is_some());
         let nonce = if online_send {
             let stamp = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -3493,10 +3545,36 @@ impl DiscordApp {
             self.net.clone(),
         ) {
             let key_for_send = key.clone();
+            if let Some(upload) = &pending {
+                self.failed_uploads.insert(nonce.clone(), upload.clone());
+            }
             cx.spawn(async move |this, cx| {
-                let result = net
-                    .execute(api::send_message(&channel_id, &text, None, Some(&nonce)), true)
-                    .await;
+                // 有本地文件时先上传拿 file_id，再带附件发消息；失败整体回滚为发送失败。
+                let result = match pending {
+                    Some(upload) => match net
+                        .upload_attachment(upload.path, upload.filename, upload.mime)
+                        .await
+                    {
+                        Ok(file_id) => {
+                            net.execute(
+                                api::send_message_with_attachments(
+                                    &channel_id,
+                                    &text,
+                                    None,
+                                    Some(&nonce),
+                                    &[file_id],
+                                ),
+                                true,
+                            )
+                            .await
+                        }
+                        Err(error) => Err(error),
+                    },
+                    None => {
+                        net.execute(api::send_message(&channel_id, &text, None, Some(&nonce)), true)
+                            .await
+                    }
+                };
                 let _ = this.update(cx, |app, cx| {
                     app.finish_send(&key_for_send, &nonce, result);
                     cx.notify();
@@ -3733,6 +3811,45 @@ impl DiscordApp {
         cx.notify();
     }
 
+    /// 打开系统文件选择器，登记待上传文件并展示附件条。
+    pub(crate) fn pick_local_attachment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.upload_error = None;
+        if self.net.is_none() {
+            self.upload_error = Some("离线演示模式无法上传文件，请先登录".into());
+            cx.notify();
+            return;
+        }
+        let Some(path) = rfd::FileDialog::new().pick_file() else {
+            return;
+        };
+        let Some(metadata) = std::fs::metadata(&path).ok() else {
+            self.upload_error = Some("无法读取文件信息".into());
+            cx.notify();
+            return;
+        };
+        let filename = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("file")
+            .to_string();
+        let mime = mime_for_path(&path).to_string();
+        let size_label = crate::data::persist::leak(human_size(metadata.len()));
+        let attachment = if mime.starts_with("image/") {
+            Attachment::image(filename.clone(), size_label)
+        } else {
+            Attachment::file(filename.clone(), size_label)
+        };
+        self.attachment_draft = Some(attachment);
+        self.pending_upload = Some(PendingUpload {
+            path,
+            filename,
+            mime,
+        });
+        self.show_attachment_picker = false;
+        self.composer.update(cx, |input, cx| input.focus(window, cx));
+        cx.notify();
+    }
+
     /// 选中一个模拟文件作为待发送附件：关闭弹层并聚焦输入框。
     pub(crate) fn pick_attachment(
         &mut self,
@@ -3749,6 +3866,8 @@ impl DiscordApp {
     /// 取消待发送附件。
     pub(crate) fn clear_attachment(&mut self, cx: &mut Context<Self>) {
         self.attachment_draft = None;
+        self.pending_upload = None;
+        self.upload_error = None;
         cx.notify();
     }
 
@@ -10290,6 +10409,7 @@ impl DiscordApp {
                 let Ok(dto) = serde_json::from_value::<MessageDto>(value) else {
                     return;
                 };
+                self.failed_uploads.remove(nonce);
                 let mut message = hydrate::message_from(&dto);
                 if dto.author.id == self.remote.me_id {
                     message.author = "你";
@@ -10313,6 +10433,66 @@ impl DiscordApp {
                 self.automod_notice = Some(format!("发送失败：{}", error.user_message()));
             }
         }
+    }
+
+    /// 重试一条发送失败的消息：复用原 nonce，附件走原上传记录重传。
+    pub(crate) fn retry_failed_message(&mut self, index: usize, _window: &mut Window, cx: &mut Context<Self>) {
+        self.close_message_menu();
+        let key = self.session_key();
+        let Some(channel_id) = self.remote.channels.get(&key).cloned() else {
+            return;
+        };
+        let Some(list) = self.messages.get_mut(&key) else {
+            return;
+        };
+        let Some(message) = list.get_mut(index) else {
+            return;
+        };
+        if message.delivery != DeliveryStatus::Failed {
+            return;
+        }
+        let Some(nonce) = message.client_nonce.clone() else {
+            return;
+        };
+        let text = message.text.clone();
+        message.delivery = DeliveryStatus::Sending;
+        let pending = self.failed_uploads.get(&nonce).cloned();
+        let Some(net) = self.net.clone() else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let result = match pending {
+                Some(upload) => match net
+                    .upload_attachment(upload.path, upload.filename, upload.mime)
+                    .await
+                {
+                    Ok(file_id) => {
+                        net.execute(
+                            api::send_message_with_attachments(
+                                &channel_id,
+                                &text,
+                                None,
+                                Some(&nonce),
+                                &[file_id],
+                            ),
+                            true,
+                        )
+                        .await
+                    }
+                    Err(error) => Err(error),
+                },
+                None => {
+                    net.execute(api::send_message(&channel_id, &text, None, Some(&nonce)), true)
+                        .await
+                }
+            };
+            let _ = this.update(cx, |app, cx| {
+                app.finish_send(&key, &nonce, result);
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
     }
 
     pub(crate) fn toggle_login_mode(&mut self, cx: &mut Context<Self>) {

@@ -10,7 +10,7 @@
 
 | 项 | 数量 |
 | --- | --- |
-| REST 端点 | **167 个**（GET 58 / POST 54 / PATCH 21 / DELETE 22 / PUT 12） |
+| REST 端点 | **175 个**（含 P1 身份安全 8 个新增；GET 59 / POST 62 / PATCH 21 / DELETE 22 / PUT 12，其中 PUT 含附件直传） |
 | WebSocket 通道 | 2 条（Gateway 主通道 + 语音信令走 LiveKit） |
 | 下行事件 | 30 类 |
 | 数据表 | 51 张 |
@@ -129,19 +129,27 @@ GET /channels/{id}/messages?before=<msg_id>&limit=50
 
 > 「界面」列指向当前代码里对应的视图/方法，方便前端逐个接线。
 
-### 3.1 认证与账户（9）
+### 3.1 认证与账户（17）
 
 | 方法 | 路径 | 说明 | 界面 |
 | --- | --- | --- | --- |
-| POST | `/auth/register` | 邮箱 + 密码 + 用户名，返回 tokens | 无（新增登录页） |
-| POST | `/auth/login` | 邮箱/用户名 + 密码 | 无（新增登录页） |
+| POST | `/auth/register` | 邮箱 + 密码 + 用户名，返回 tokens；同时发验证邮件 | 无（新增登录页） |
+| POST | `/auth/login` | 邮箱/用户名 + 密码；开启 2FA 时需 `totp_code`，缺码返回 `MFA_REQUIRED` | 无（新增登录页） |
 | POST | `/auth/refresh` | refresh 换 access | 全局拦截器 |
 | POST | `/auth/logout` | 撤销当前 refresh | 设置 → 账户 |
-| POST | `/auth/password` | 改密码（旧密码校验） | 设置 → 账户 |
+| POST | `/auth/logout-all` | 撤销全部会话并踢掉 Gateway 连接 | 设置 → 隐私与安全 |
+| POST | `/auth/password` | 改密码（旧密码校验，撤销全部会话） | 设置 → 账户 |
+| POST | `/auth/password/forgot` | 发重置邮件（不泄露邮箱是否存在） | 登录页 |
+| POST | `/auth/password/reset` | 重置 token + 新密码；撤销全部会话 | 登录页 |
 | GET | `/auth/sessions` | 已登录设备列表 | 设置 → 隐私与安全 |
-| DELETE | `/auth/sessions/{id}` | 踢掉某设备 | 同上 |
-| POST | `/auth/verify-email` | 邮箱验证码确认 | 注册流程 |
-| POST | `/auth/password/forgot` | 发重置邮件 | 登录页 |
+| DELETE | `/auth/sessions/{id}` | 踢掉某设备（同步断开 Gateway） | 同上 |
+| POST | `/auth/verify-email/send` | 重发邮箱验证码（已验证时幂等返回） | 注册流程 |
+| POST | `/auth/verify-email` | 验证码确认；重复确认幂等 | 注册流程 |
+| POST | `/auth/2fa/setup` | 生成 TOTP secret 与 otpauth URL | 设置 → 隐私与安全 |
+| POST | `/auth/2fa/enable` | 校验首码并启用，返回一次性恢复码 | 同上 |
+| POST | `/auth/2fa/disable` | 校验码或恢复码后关闭 2FA | 同上 |
+| GET | `/auth/security-audit` | 本人安全审计（`format=csv` 可导出） | 同上 |
+
 
 ### 3.2 用户与在线状态（8）
 
@@ -235,10 +243,10 @@ GET /channels/{id}/messages?before=<msg_id>&limit=50
 
 | 方法 | 路径 | 说明 | 界面 |
 | --- | --- | --- | --- |
-| POST | `/uploads` | 申请预签名（`filename`、`size`、`mime`）→ `{upload_url, file_id}` | `attachment_picker.rs` |
-| POST | `/uploads/{file_id}/complete` | 确认上传完成，入 `attachments` 表 | 同上 |
-| GET | `/attachments/{id}` | 元数据 + 短期下载 URL | 附件卡 |
-| DELETE | `/attachments/{id}` | 删除未引用的孤儿附件 | 定时任务 |
+| POST | `/uploads` | 声明上传（`filename`、`size`、`mime`）→ `{upload_url, file_id}`；校验单文件 25MB 上限（超限 413）与用户配额 | `attachment_picker.rs` |
+| PUT | `/uploads/{file_id}/content` | 二进制直传；MIME 魔数嗅探拒绝伪装，图片自动生成 512px 缩略图 | 客户端上传 worker |
+| GET | `/attachments/{id}` | 元数据 + 短期下载 URL（图片附 `thumbnail_url`） | 附件卡 |
+| DELETE | `/attachments/{id}` | 删除未引用的孤儿附件（连同缩略图） | 定时任务 |
 
 ### 3.9 投票 / 话题 / 书签（10）
 

@@ -15,7 +15,7 @@ from sqlalchemy import and_, delete, or_, select
 from app.config import settings
 from app.db import SessionLocal
 from app.models import Attachment, GatewayEvent, Invite
-from app.services import storage
+from app.services.storage import storage
 
 log = logging.getLogger("server.retention")
 
@@ -50,7 +50,9 @@ async def purge_once(now: datetime | None = None) -> dict[str, int]:
             ).all()
         )
         for attachment in orphans:
-            storage.delete(attachment.storage_key)
+            await asyncio.to_thread(storage.delete, attachment.storage_key)
+            if attachment.thumb_storage_key:
+                await asyncio.to_thread(storage.delete, attachment.thumb_storage_key)
             await db.delete(attachment)
         await db.commit()
 

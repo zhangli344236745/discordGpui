@@ -11,6 +11,7 @@ class RegisterIn(BaseModel):
 class LoginIn(BaseModel):
     email: EmailStr
     password: str
+    totp_code: str | None = Field(default=None, max_length=32)
 
 
 class RefreshIn(BaseModel):
@@ -34,3 +35,20 @@ class SessionOut(BaseModel):
     device: str
     ip: str
     created_at: str
+
+
+class EmailVerifyIn(BaseModel):
+    token: str = Field(min_length=1, max_length=64)
+
+
+class ForgotPasswordIn(BaseModel):
+    email: EmailStr
+
+
+class PasswordResetIn(BaseModel):
+    token: str = Field(min_length=1, max_length=64)
+    new_password: str = Field(min_length=8, max_length=128)
+
+
+class TwoFactorCodeIn(BaseModel):
+    code: str = Field(min_length=6, max_length=32)

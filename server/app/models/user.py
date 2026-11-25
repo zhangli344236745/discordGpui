@@ -23,6 +23,11 @@ class User(Base, IdMixin, CreatedAtMixin):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
     )
+    # TOTP 2FA：secret 仅在 setup 后写入，enabled 表示登录强制校验
+    totp_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # 恢复码只存哈希；明文仅在启用时返回一次
+    recovery_codes: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
     __table_args__ = (Index("ix_users_username_tag", "username", "tag", unique=True),)
 
