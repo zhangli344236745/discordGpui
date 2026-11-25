@@ -1,4 +1,5 @@
 import hashlib
+import logging
 from datetime import timedelta
 
 import jwt
@@ -23,6 +24,7 @@ from app.security import (
 from app.services import ratelimit
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+log = logging.getLogger("server.auth")
 
 
 def _digest(token: str) -> str:
@@ -86,6 +88,7 @@ async def login(body: LoginIn, request: Request, db: AsyncSession = Depends(get_
     )
     user = await db.scalar(select(User).where(User.email == body.email.lower()))
     if user is None or not verify_password(body.password, user.password_hash):
+        log.info("login failed for %s (user_exists=%s)", body.email.lower(), user is not None)
         raise unauthorized("邮箱或密码不正确")
     return await _issue_tokens(db, user, request.headers.get("user-agent", ""), _client_ip(request))
 

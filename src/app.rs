@@ -8820,6 +8820,16 @@ impl DiscordApp {
         cx.notify();
     }
 
+    pub(crate) fn fill_demo_account(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.login_mode = LoginMode::Login;
+        self.login_email
+            .update(cx, |input, cx| input.set_value("demo@example.com", window, cx));
+        self.login_password
+            .update(cx, |input, cx| input.set_value("password123", window, cx));
+        self.login_error = None;
+        cx.notify();
+    }
+
     pub(crate) fn toggle_login_remember(&mut self, cx: &mut Context<Self>) {
         self.login_remember = !self.login_remember;
         cx.notify();

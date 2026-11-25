@@ -158,7 +158,15 @@ impl NetError {
             NetErrorKind::Network => format!("连接失败：{}", self.message),
             NetErrorKind::Forbidden => self.message.clone(),
             NetErrorKind::Blocked => self.message.clone(),
-            NetErrorKind::Unauthorized => "登录已过期，请重新登录".into(),
+            NetErrorKind::Unauthorized => {
+                if self.code == "TOKEN_EXPIRED" {
+                    "登录已过期，请重新登录".into()
+                } else if self.message.is_empty() {
+                    "邮箱或密码不正确".into()
+                } else {
+                    self.message.clone()
+                }
+            }
             _ => {
                 if self.message.is_empty() {
                     "请求失败，请重试".into()

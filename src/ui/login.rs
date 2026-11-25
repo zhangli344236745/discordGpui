@@ -3,6 +3,7 @@
 use gpui_kit::*;
 use gpui_kit::component::input::Input;
 use gpui_kit::component::{h_flex, v_flex, Size, Sizable};
+use gpui_kit::prelude::FluentBuilder as _;
 
 use crate::app::{AuthStatus, DiscordApp, LoginMode};
 use crate::ui::theme::palette;
@@ -190,7 +191,19 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
                                 .on_click(cx.listener(|this, _, _, cx| this.toggle_login_mode(cx)))
                                 .child(if register { "去登录" } else { "注册" }),
                         ),
-                );
+                )
+                .when(!register, |el| {
+                    el.child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(rgb(palette::text_dim()))
+                            .id("login-fill-demo")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.fill_demo_account(window, cx)
+                            }))
+                            .child("使用演示账号：demo@example.com / password123"),
+                    )
+                });
             if app
                 .login_error
                 .as_deref()
