@@ -821,6 +821,7 @@ pgrep -fl 'target/debug/discord-gpui'   # 确认无残留
 - **启动阶段**：`DiscordApp.auth_status` 走 `Checking → Login → Booting → Ready`（或 `Demo`）；在线模式不写快照（`autosave` 直接返回），登录后由 `net::hydrate` 填充状态。
 - **id 映射**：显示名/`服务器/频道` 仍是 UI 键，但后端 id 统一存 `DiscordApp.remote`（`RemoteIndex`）；写操作必须查索引，不得按显示名反查。
 - **实时**：`net::ws` 线程负责连接/心跳/退避重连与 `?since`；事件经 `NetEvent` 进 UI，`apply_gateway_event` 只做状态变更，不直接发网络请求。消息以 `Message.id` 去重，乐观消息用 `client_nonce` 对齐。
+- **内容域**：论坛/投票/话题/日程/欢迎/加成/通知/书签都在 `fetch_boot` 水合，写操作走各自端点后用 `refresh_structure`（保留当前会话）回填；书签身份是 `message_id`，不再正文反查。
 - **测试**：网络逻辑用 `Transport` mock + `pollster::block_on` 单测；不依赖真实后端。改 DTO 时同步补 fixture。
 
 ### 后端（server/）验证

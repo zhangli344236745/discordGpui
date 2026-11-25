@@ -8107,6 +8107,25 @@ impl DiscordApp {
         let index = self.active_server;
         if self.servers[index].color != color {
             self.servers[index].color = color;
+            if self.is_online()
+                && let (Some(server_id), Some(net)) = (
+                    self.remote.servers.get(&self.active_server_name()).cloned(),
+                    self.net.clone(),
+                )
+            {
+                cx.spawn(async move |this, cx| {
+                    let result = net
+                        .execute(api::patch_server(&server_id, None, None, Some(color)), true)
+                        .await;
+                    let _ = this.update(cx, |app, cx| {
+                        if let Err(error) = result {
+                            app.automod_notice = Some(format!("换色失败：{}", error.user_message()));
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+            }
             self.log_audit(
                 AuditKind::Server,
                 "更新了服务器图标颜色",
@@ -9959,6 +9978,35 @@ impl DiscordApp {
                 {
                     self.dm_call = None;
                 }
+            }
+            "NOTIFICATION_CREATE" => {
+                if let Some(net) = self.net.clone() {
+                    cx.spawn(async move |this, cx| {
+                        let result = net
+                            .execute_as::<crate::net::dto::NotificationPageDto>(api::notifications(), true)
+                            .await;
+                        let _ = this.update(cx, |app, cx| {
+                            if let Ok(page) = result {
+                                app.backend_notifications.clear();
+                                for notification in page.items {
+                                    app.backend_notifications.push(Notification {
+                                        kind: NotificationKind::UnreadChannel,
+                                        title: notification.title.clone(),
+                                        body: notification.body.clone(),
+                                        time: "最近",
+                                        color: 0x5865f2,
+                                        target: NotificationTarget::Friends,
+                                    });
+                                }
+                                cx.notify();
+                            }
+                        });
+                    })
+                    .detach();
+                }
+            }
+            "BOOKMARK_UPDATE" => {
+                self.refresh_structure(cx);
             }
             "POLL_UPDATE" => {
                 let Some(poll_id) = data.get("id").and_then(|value| value.as_str()) else {

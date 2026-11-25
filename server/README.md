@@ -92,3 +92,7 @@ uv run pytest -q         # 72 passed
 - 生产用 `uvicorn --workers 1`；多进程会 `database is locked`（WAL 只解决读写并行，不解决多写者）。
 - 备份：`sqlite3 data/app.db "VACUUM INTO 'backup.db'"`。
 - 全文搜索（`/search`）还没实现，接入时建议 FTS5 + `tokenize='trigram'`。
+
+## 客户端
+
+Rust/GPUI 客户端主体已接入本后端（登录/实时/治理/内容域），详见根 README「客户端接后端」。
