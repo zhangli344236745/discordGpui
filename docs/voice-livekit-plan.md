@@ -5,7 +5,35 @@
 
 本文件把剩余任务（tasks 4.1–4.4、4.6、4.7）拆成可验收的步骤，避免后续实现时重新调研。
 
-## 已完成的「无 SDK」部分
+## 已实现：真实语音（voice-livekit feature）
+
+- 依赖：`livekit 0.12.1` + `tokio`（仅语音线程），Cargo feature `voice-livekit`，默认关闭；
+- `src/voice/`：独立线程 + tokio 运行时，`PlatformAudio`（CoreAudio ADM）负责采集与远端播放，
+  `LocalAudioTrack` 发布麦克风；UI 通过 `async_channel` 收 Connected/Reconnecting/Participant* 事件；
+- 加入频道后自动连接；麦克风开关同时驱动本地引擎静音与 `PUT /voice/{room}/me`；
+- 断线由 SDK 自动重连，UI 显示重连/恢复，READY 后信令层再校准参与者；
+- 验证：`scripts/voice-e2e.sh`（本地 LiveKit 容器）输出
+  `room + microphone`、`webhook participant_joined`、`webhook track_published`、`participant projection mic=true`。
+
+### 构建（本机已跑通）
+
+```bash
+scripts/build-voice.sh                # 使用 ~/Library/Caches/dgpui-webrtc/mac-x64-release
+AUTO_DOWNLOAD=1 scripts/build-voice.sh  # 缓存缺失时自动下载（镜像加速）
+scripts/voice-e2e.sh                  # 需要 docker + livekit/livekit-server 镜像
+```
+
+两个只在「旧 Command Line Tools（macOS 13 / clang 14）」下需要的兼容处理（脚本已自动打）：
+
+1. 预编译头 `rtc_base/buffer.h` 的 `std::span<T>::iterator` 缺 `typename`；
+2. `cxx` 的 `Slice<T>::iterator` 缺 `element_type`，旧 libc++ 的 `pointer_traits` 找不到。
+
+链接侧（`build.rs`，仅该 feature 生效）：
+- `-Wl,-ObjC`：libwebrtc 的 ObjC 分类（`NSString+StdString`）需要强制加载，否则运行时报 selector 缺失；
+- `-Wl,-undefined,dynamic_lookup`：预编译库引用 macOS 14+ ScreenCaptureKit 符号，旧 SDK 链接不到；
+  音频路径不会触发，升级到 macOS 14+ SDK 后可移除。
+
+## 更早的「仅信令」部分（离线/未启用 feature 时仍生效）
 
 - 客户端点击语音频道 → `POST /channels/{id}/voice/join`：拿 `room` 与参与者投影，面板显示真实在线成员；
 - 断开 → `POST /channels/{id}/voice/leave`；麦克风开关 → `PUT /voice/{room}/me`；

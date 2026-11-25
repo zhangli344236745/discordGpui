@@ -668,6 +668,8 @@ pub struct DiscordApp {
     pub(crate) automod_name_edit: Entity<InputState>,
     pub(crate) automod_keyword_edit: Entity<InputState>,
     pub(crate) automod_notice: Option<String>,
+    /// 语音状态提示（连接/重连/参与者变化），显示在语音状态条。
+    pub(crate) voice_notice: Option<String>,
 
     // 邀请管理：全部邀请 + 新建表单（频道 / 有效期 / 次数上限）+ 最近复制的邀请码。
     pub(crate) invites: Vec<Invite>,
@@ -695,6 +697,11 @@ pub struct DiscordApp {
     /// 真实语音房间（服务端下发），None 表示只在本地面板状态。
     pub(crate) voice_room: Option<String>,
     pub(crate) voice_channel_id: Option<String>,
+    /// 自动加入语音频道（仅 e2e/调试：DISCORD_VOICE_AUTOJOIN=<channel_id>）。
+    pub(crate) voice_autojoin_done: bool,
+    /// join 请求在途：避免 READY 重连校准与首次加入并发重复 join。
+    pub(crate) voice_joining: bool,
+    pub(crate) voice_handle: Option<crate::voice::VoiceHandle>,
 
     // 私信通话：Some 即显示悬浮通话面板，跨会话与设置页保持。
     pub(crate) dm_call: Option<DmCall>,
@@ -1551,6 +1558,7 @@ impl DiscordApp {
             automod_name_edit,
             automod_keyword_edit,
             automod_notice: None,
+            voice_notice: None,
             invites: seed_invites(),
             invite_channel: String::new(),
             invite_expiry: InviteExpiry::OneDay,
@@ -1568,6 +1576,9 @@ impl DiscordApp {
             voice_participants: Vec::new(),
             voice_room: None,
             voice_channel_id: None,
+            voice_autojoin_done: false,
+            voice_joining: false,
+            voice_handle: None,
             dm_call: None,
             discover_servers: seed_discover_servers(),
             discover_search,
@@ -7451,14 +7462,17 @@ impl DiscordApp {
 
         // 在线时加入真实语音房间：拿 token/room 并同步参与者投影。
         if let (true, Some(channel_id), Some(net)) = (self.is_online(), channel_id, self.net.clone()) {
+            self.voice_joining = true;
             cx.spawn(async move |this, cx| {
                 let result = net
                     .execute_as::<crate::net::dto::VoiceJoinDto>(api::voice_join(&channel_id), true)
                     .await;
                 let _ = this.update(cx, |app, cx| {
+                    app.voice_joining = false;
                     match result {
                         Ok(join) => {
                             app.voice_room = Some(join.room.clone());
+                            app.start_voice_engine(&join.url, &join.token, cx);
                             app.voice_participants.clear();
                             for participant in &join.participants {
                                 app.voice_participants.push(VoiceParticipant {
@@ -7487,11 +7501,96 @@ impl DiscordApp {
             })
             .detach();
         }
+        if let Some(handle) = self.voice_handle.take() {
+            let _ = handle.commands.send_blocking(crate::voice::VoiceCommand::Disconnect);
+        }
         self.voice_channel = None;
         self.voice_channel_id = None;
         self.voice_room = None;
         self.voice_participants.clear();
         self.show_voice_room = false;
+    }
+
+    /// e2e/调试入口：启动后按环境变量自动加入指定语音频道。
+    fn maybe_autojoin_voice(&mut self, cx: &mut Context<Self>) {
+        if self.voice_autojoin_done {
+            return;
+        }
+        let Ok(channel_id) = std::env::var("DISCORD_VOICE_AUTOJOIN") else {
+            return;
+        };
+        if channel_id.trim().is_empty() {
+            return;
+        }
+        self.voice_autojoin_done = true;
+        let scope = format!("channel:{channel_id}");
+        let Some(key) = self.session_key_for_scope(&scope) else {
+            return;
+        };
+        let Some((server_name, channel_name)) = key.split_once('/') else {
+            return;
+        };
+        let Some(server_index) = self
+            .servers
+            .iter()
+            .position(|server| server.name == server_name)
+        else {
+            return;
+        };
+        self.toggle_voice(server_index, channel_name.to_string(), cx);
+    }
+
+    /// 启动真实语音引擎（feature 未启用时返回，仅保留信令层）。
+    fn start_voice_engine(&mut self, url: &str, token: &str, cx: &mut Context<Self>) {
+        if !crate::voice::supported() {
+            return;
+        }
+        let Some(handle) = crate::voice::start(url.to_string(), token.to_string()) else {
+            return;
+        };
+        let events = handle.events.clone();
+        self.voice_handle = Some(handle);
+        cx.spawn(async move |this, cx| {
+            while let Ok(event) = events.recv().await {
+                let close = matches!(
+                    event,
+                    crate::voice::VoiceEvent::Disconnected(_) | crate::voice::VoiceEvent::Failed(_)
+                );
+                let _ = this.update(cx, |app, cx| {
+                    match &event {
+                        crate::voice::VoiceEvent::Connected => {
+                            app.voice_notice = Some("已连接语音".to_string());
+                        }
+                        crate::voice::VoiceEvent::Reconnecting => {
+                            app.voice_notice = Some("语音重连中…".to_string());
+                        }
+                        crate::voice::VoiceEvent::Reconnected => {
+                            app.voice_notice = Some("语音已恢复".to_string());
+                        }
+                        crate::voice::VoiceEvent::ParticipantJoined(name) => {
+                            app.voice_notice = Some(format!("{name} 加入了语音"));
+                        }
+                        crate::voice::VoiceEvent::ParticipantLeft(name) => {
+                            app.voice_notice = Some(format!("{name} 离开了语音"));
+                        }
+                        crate::voice::VoiceEvent::MicUnavailable(reason) => {
+                            app.voice_notice = Some(reason.clone());
+                        }
+                        crate::voice::VoiceEvent::Failed(reason) => {
+                            app.voice_notice = Some(reason.clone());
+                        }
+                        crate::voice::VoiceEvent::Disconnected(reason) => {
+                            app.voice_notice = Some(reason.clone());
+                        }
+                    }
+                    if close {
+                        app.voice_handle = None;
+                    }
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
     }
 
     /// 断线重连后同步语音状态：已有房间则拉取参与者，房间丢失则重新 join。
@@ -7500,6 +7599,9 @@ impl DiscordApp {
             return;
         };
         if !self.is_online() {
+            return;
+        }
+        if self.voice_joining {
             return;
         }
         let Some(net) = self.net.clone() else {
@@ -11158,6 +11260,7 @@ impl DiscordApp {
         self.current_session = self.session_key();
         self.sync_invite_channel();
         self.sync_drafts_from_server(cx);
+        self.maybe_autojoin_voice(cx);
         if restart_gateway {
             self.start_gateway(cx);
         }
@@ -11644,6 +11747,12 @@ impl DiscordApp {
 
     /// 把本端麦克风/摄像头/共享状态写回服务端，供其他端展示。
     fn sync_voice_state(&mut self, cx: &mut Context<Self>) {
+        // 先驱动本地引擎，再广播状态
+        if let Some(handle) = &self.voice_handle {
+            let _ = handle
+                .commands
+                .send_blocking(crate::voice::VoiceCommand::SetMic(self.mic_on));
+        }
         let (Some(room), Some(net)) = (self.voice_room.clone(), self.net.clone()) else {
             return;
         };

@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import json
+import logging
 
 import jwt
 from fastapi import APIRouter, Depends, Request, status
@@ -18,6 +19,7 @@ from app.realtime.bus import bus
 from app.realtime.events import Event
 
 router = APIRouter(tags=["voice"])
+log = logging.getLogger("server.voice")
 
 
 async def _participants(db: AsyncSession, room: str) -> list[dict]:
@@ -188,6 +190,12 @@ async def livekit_webhook(request: Request, db: AsyncSession = Depends(get_db)) 
 
     event = json.loads(raw or b"{}")
     kind = event.get("event")
+    log.info(
+        "livekit webhook event=%s room=%s identity=%s",
+        kind,
+        (event.get("room") or {}).get("name", ""),
+        (event.get("participant") or {}).get("identity", ""),
+    )
     room = (event.get("room") or {}).get("name", "")
     identity = (event.get("participant") or {}).get("identity", "")
     if not room or not identity:

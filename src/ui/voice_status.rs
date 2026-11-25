@@ -51,7 +51,10 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                         .truncate()
                         .text_size(px(11.))
                         .text_color(rgb(palette::text_secondary()))
-                        .child(format!("{channel} / {server}")),
+                        .child(match &app.voice_notice {
+                            Some(notice) => notice.clone(),
+                            None => format!("{channel} / {server}"),
+                        }),
                 ),
         )
         .child(

@@ -2,6 +2,7 @@ mod app;
 mod data;
 mod net;
 mod ui;
+mod voice;
 
 use gpui_kit::*;
 use gpui_kit::component::{Theme, ThemeMode};
