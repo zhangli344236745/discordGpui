@@ -80,9 +80,10 @@ json.dump(
     open(f"{tmp}/ctx.json", "w"),
 )
 json.dump({"base": api[: -len("/api/v1")], "refresh_token": a["refresh_token"]}, open(f"{tmp}/session.json", "w"))
+json.dump({"base": api[: -len("/api/v1")], "refresh_token": b["refresh_token"]}, open(f"{tmp}/bob-session.json", "w"))
 json.dump({"base": api[: -len("/api/v1")], "refresh_token": "invalid-token"}, open(f"{tmp}/bad-session.json", "w"))
 PY
-chmod 600 "$TMP/session.json" "$TMP/bad-session.json"
+chmod 600 "$TMP/session.json" "$TMP/bob-session.json" "$TMP/bad-session.json"
 
 start_client() {
   local name=$1
@@ -168,7 +169,100 @@ wait "$CLIENT_PID" 2>/dev/null || true
 CLIENT_PID=""
 sleep 0.3
 
-# 5. 后端不可达：回 Demo
+# 5. 断线重连：杀服务 → 同库重启 → 客户端退避重连并补齐事件
+# refresh token 一次一换：为每个会话场景重新登录换取新令牌
+mint_session() {
+  local email=$1
+  local out=$2
+  python3 - "$API" "$email" "$out" <<'PY'
+import json, sys, urllib.request
+api, email, out = sys.argv[1], sys.argv[2], sys.argv[3]
+req = urllib.request.Request(api + "/auth/login", method="POST")
+req.add_header("Content-Type", "application/json")
+data = json.dumps({"email": email, "password": "password123"}).encode()
+with urllib.request.urlopen(req, data=data) as resp:
+    tokens = json.loads(resp.read())
+json.dump({"base": api[: -len("/api/v1")], "refresh_token": tokens["refresh_token"]}, open(out, "w"))
+PY
+  chmod 600 "$out"
+}
+mint_session alice-e2e@example.com "$TMP/reconnect-session.json"
+mint_session alice-e2e@example.com "$TMP/multi-a-session.json"
+mint_session bob-e2e@example.com "$TMP/multi-b-session.json"
+
+start_client reconnect DISCORD_API_BASE="$BASE" DISCORD_SESSION_FILE="$TMP/reconnect-session.json"
+sleep 4
+[ "$(gateway_connections)" = "1" ] || { echo "FAIL reconnect: no initial ws"; exit 1; }
+kill "$SERVER_PID" 2>/dev/null || true
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=""
+(cd "$ROOT/server" && \
+  DATABASE_URL="sqlite+aiosqlite:///$TMP/app.db" \
+  UPLOAD_DIR="$TMP/uploads" \
+  uv run uvicorn app.main:app --port "$PORT" >"$TMP/server-restart.log" 2>&1) &
+SERVER_PID=$!
+for _ in $(seq 1 80); do
+  curl -sf --noproxy '*' "$API/health" >/dev/null 2>&1 && break
+  sleep 0.25
+done
+# 客户端重连成功前先投一条消息：靠 ?since 游标补齐
+python3 - "$TMP" "$API" <<'PY'
+import json, sys, urllib.request
+tmp, api = sys.argv[1], sys.argv[2]
+ctx = json.load(open(f"{tmp}/ctx.json"))
+req = urllib.request.Request(api + f"/channels/{ctx['channel']}/messages", method="POST")
+req.add_header("Content-Type", "application/json")
+req.add_header("Authorization", "Bearer " + ctx["bob"])
+data = json.dumps({"content": "断线期间的补偿消息", "client_nonce": "rt-reconnect-1"}).encode()
+with urllib.request.urlopen(req, data=data) as resp:
+    assert resp.status == 201
+PY
+reconnected=0
+for _ in $(seq 1 60); do
+  if [ "$(gateway_connections)" = "1" ]; then reconnected=1; break; fi
+  sleep 0.5
+done
+check_alive reconnect
+[ "$reconnected" = "1" ] && echo "PASS reconnect: ws restored via backoff" || { echo "FAIL reconnect: no ws after restart"; exit 1; }
+kill "$CLIENT_PID" 2>/dev/null || true
+wait "$CLIENT_PID" 2>/dev/null || true
+CLIENT_PID=""
+sleep 0.3
+
+# 6. 多端多账号同时在线：两份会话 → 两条 Gateway 连接
+env DISCORD_API_BASE="$BASE" DISCORD_SESSION_FILE="$TMP/multi-a-session.json" \
+  "$ROOT/target/debug/discord-gpui" >"$TMP/multi-a.log" 2>&1 &
+MULTI_A=$!
+env DISCORD_API_BASE="$BASE" DISCORD_SESSION_FILE="$TMP/multi-b-session.json" \
+  "$ROOT/target/debug/discord-gpui" >"$TMP/multi-b.log" 2>&1 &
+MULTI_B=$!
+CLIENT_PID="$MULTI_A"
+sleep 5
+multi_ok=0
+for _ in $(seq 1 20); do
+  if [ "$(gateway_connections)" = "2" ]; then multi_ok=1; break; fi
+  sleep 0.5
+done
+for name in multi-a multi-b; do
+  if ! kill -0 "$([ "$name" = multi-a ] && echo "$MULTI_A" || echo "$MULTI_B")" 2>/dev/null; then
+    echo "FAIL $name: process exited"
+    tail -20 "$TMP/$name.log"
+    exit 1
+  fi
+  if grep -qiE "panic|fatal" "$TMP/$name.log"; then
+    echo "FAIL $name: panic in log"
+    tail -20 "$TMP/$name.log"
+    exit 1
+  fi
+  echo "PASS $name: alive, no panic"
+done
+[ "$multi_ok" = "1" ] && echo "PASS multi: gateway=2" || { echo "FAIL multi: gateway!=2"; exit 1; }
+kill "$MULTI_A" "$MULTI_B" 2>/dev/null || true
+wait "$MULTI_A" "$MULTI_B" 2>/dev/null || true
+CLIENT_PID=""
+sleep 0.3
+
+# 7. 后端不可达：回 Demo
 kill "$SERVER_PID" 2>/dev/null || true
 wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""

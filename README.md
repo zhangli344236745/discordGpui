@@ -255,11 +255,12 @@ main → app → data
 
 | 状态 | 内容 |
 | --- | --- |
-| **已实现 166 个端点** | 认证（argon2 + JWT 轮换）、用户与偏好、服务器与模板、分类/频道、消息（分页·幂等·编辑历史·置顶·软删）、回应、转发、附件上传、语音 token 与 LiveKit webhook、Gateway 实时通道、系统信息；好友/分组/屏蔽、私信与消息请求、私信呼叫、成员/角色/权限覆盖、邀请、自动审核、审核日志、限流、投票/话题/书签、论坛、日程、欢迎屏幕、加成、搜索、频道状态/草稿、通知与推送注册、Gateway `?since` 补偿 |
+| **已实现 197 个操作（155 条路径）** | 认证（argon2 + JWT 轮换 + jti 唯一）、邮箱验证/找回密码/2FA（TOTP + 恢复码）、安全审计与 CSV 导出、会话管理（单撤销/全局退出即时踢 WS）、用户与偏好、服务器与模板、分类/频道、消息（分页·幂等·编辑历史·置顶·软删·bot 标记）、回应、转发、附件上传（魔数嗅探·413·缩略图·配额）、语音 token 与 LiveKit webhook、Gateway 实时通道、系统信息；好友/分组/屏蔽、私信与消息请求、私信呼叫、成员/角色/权限覆盖、邀请、自动审核、审核日志、限流、投票/话题/书签、论坛、日程、欢迎屏幕、加成、搜索、频道状态/草稿、通知与推送注册、Gateway `?since` 补偿；**机器人与集成**（Bot 账号/令牌、Webhook 外部投递、斜杠命令 help/shrug/自定义模板）；**举报合规**（举报合并计数、处理状态机、保留策略、法务持有、数据导出、账号删除匿名化）；**运维**（`/metrics`、JSON 日志 + request_id） |
 | **Demo 边界 1 个** | `/servers/{id}/boost/subscribe` 按文档约定返回 `501`，避免接入真实计费 |
-| 数据层 | **51 张表**（SQLAlchemy 2.0 + alembic 迁移），SQLite 开 WAL / busy_timeout；含 `gateway_events` 事件日志与 FTS5 索引 |
-| 服务端真正执行的规则 | 13 项权限矩阵、自动审核（block 返 422 且不落库 / warn 带 warnings）、至少保留一个文字频道、owner 不能直接离开 |
-| 验证 | `ruff check` 0 error、`pytest` 72 passed、真实起服务跑通「注册→建服→加入→WS 收消息→语音 token→好友→私信→消息请求→呼叫→邀请→角色→权限拒绝→审计→欢迎→活动→投票→书签→论坛→搜索→草稿→通知→Gateway 补发」 |
+| 数据层 | **60 张表**（SQLAlchemy 2.0 + alembic 迁移链 c7d1→d8e9→e9f1→f2a3），SQLite 开 WAL / busy_timeout；含 `gateway_events` 事件日志与 FTS5/pg_trgm 双后端搜索索引 |
+| 部署形态 | 单机 SQLite/本地磁盘（默认）↔ Postgres/Redis/MinIO 按环境变量切换；`docker compose up` 一键起全栈（见 `docs/operations.md`），多实例广播经 Redis Pub/Sub，备份/恢复脚本带演练 |
+| 服务端真正执行的规则 | 13 项权限矩阵、自动审核（block 返 422 且不落库 / warn 带 warnings）、至少保留一个文字频道、owner 不能直接离开、附件伪装拒绝、举报删除绕不过法务持有 |
+| 验证 | `ruff check` 0 error、`pytest` 96 passed、迁移全链可回滚；冒烟：`scripts/smoke.py` 26 步、双实例广播、Postgres、Compose、备份恢复、压测基线；客户端 `cargo test` 44 passed、`client-e2e.sh` 13 项（含断线重连与多端在线） |
 
 ```bash
 cd server

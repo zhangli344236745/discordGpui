@@ -1000,6 +1000,59 @@ mod tests {
         assert_eq!(hydrated.index.members.get("开发/alice").map(String::as_str), Some("u1"));
     }
 
+    /// P6 性能预算（可自动化部分）：会话重建 1000 条消息 ≤ 300ms。
+    /// 冷启动与滚动流畅度受 GPUI 窗口环境限制，走 README 手测清单。
+    fn message_dto(index: usize) -> serde_json::Value {
+        serde_json::json!({
+            "id": format!("m{index:06}"),
+            "channel_id": "c1",
+            "author": {"id": "u1", "name": "Nova", "color": 0x5865f2, "bot": false},
+            "content": format!("第 {index} 条压测消息：包含一些中等长度的中文正文，用于模拟真实会话。"),
+            "type": "text",
+            "created_at": "2026-11-25T10:00:00Z",
+            "pinned": false,
+            "reactions": [],
+            "attachments": []
+        })
+    }
+
+    #[test]
+    fn hydrate_1000_messages_under_budget() {
+        let dtos: Vec<serde_json::Value> = (0..1000).map(message_dto).collect();
+
+        let started = std::time::Instant::now();
+        let messages: Vec<_> = dtos
+            .iter()
+            .map(|dto| {
+                let parsed: super::super::dto::MessageDto = serde_json::from_value(dto.clone()).unwrap();
+                super::message_from(&parsed)
+            })
+            .collect();
+        let elapsed = started.elapsed();
+
+        assert_eq!(messages.len(), 1000);
+        assert!(
+            elapsed.as_millis() < 300,
+            "1000 条消息重建耗时 {elapsed:?}，超出 300ms 预算"
+        );
+    }
+
+    #[test]
+    fn parse_1000_message_json_under_budget() {
+        let dtos: Vec<serde_json::Value> = (0..1000).map(message_dto).collect();
+        let payload = serde_json::to_vec(&dtos).unwrap();
+
+        let started = std::time::Instant::now();
+        let parsed: Vec<super::super::dto::MessageDto> = serde_json::from_slice(&payload).unwrap();
+        let elapsed = started.elapsed();
+
+        assert_eq!(parsed.len(), 1000);
+        assert!(
+            elapsed.as_millis() < 300,
+            "1000 条消息 JSON 解析耗时 {elapsed:?}，超出 300ms 预算"
+        );
+    }
+
     #[test]
     fn fallback_server_keeps_ui_index_safe() {
         let (server, members) = fallback_server("Alice");
