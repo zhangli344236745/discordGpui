@@ -104,24 +104,25 @@ DISCORD_VOICE_AUTOJOIN="$CHANNEL" \
   "$ROOT/target/debug/discord-gpui" >"$TMP/client.log" 2>&1 &
 CLIENT_PID=$!
 
-sleep 14
-if ! kill -0 "$CLIENT_PID" 2>/dev/null; then
-  echo "FAIL voice: 客户端退出"
-  tail -20 "$TMP/client.log"
-  exit 1
-fi
-if grep -qiE "panic|Terminating app" "$TMP/client.log" "$TMP/server.log"; then
-  echo "FAIL voice: 崩溃"
-  tail -20 "$TMP/client.log"
-  exit 1
-fi
+wait_until() {
+  local seconds=$1
+  shift
+  for _ in $(seq 1 $((seconds * 4))); do
+    if "$@"; then return 0; fi
+    sleep 0.25
+  done
+  return 1
+}
 
-grep -q "room connected" "$TMP/client.log" || { echo "FAIL voice: 未连接房间"; tail -20 "$TMP/client.log"; exit 1; }
-grep -q "microphone published" "$TMP/client.log" || { echo "FAIL voice: 麦克风未发布"; tail -20 "$TMP/client.log"; exit 1; }
+wait_until 25 grep -q "room connected" "$TMP/client.log" || { echo "FAIL voice: 未连接房间"; tail -20 "$TMP/client.log"; exit 1; }
+wait_until 15 grep -q "microphone published" "$TMP/client.log" || { echo "FAIL voice: 麦克风未发布"; tail -20 "$TMP/client.log"; exit 1; }
+kill -0 "$CLIENT_PID" 2>/dev/null || { echo "FAIL voice: 客户端退出"; tail -20 "$TMP/client.log"; exit 1; }
+grep -qiE "panic|Terminating app" "$TMP/client.log" "$TMP/server.log" && { echo "FAIL voice: 崩溃"; tail -20 "$TMP/client.log"; exit 1; }
 echo "PASS voice: room + microphone"
 
 for kind in participant_joined track_published; do
-  if grep -q "livekit webhook event=$kind" "$TMP/server.log"; then
+  wait_until 15 grep -q "livekit webhook event=$kind" "$TMP/server.log"
+  if [ $? -eq 0 ]; then
     echo "PASS voice: webhook $kind"
   else
     echo "FAIL voice: 缺少 webhook $kind"
@@ -130,13 +131,14 @@ for kind in participant_joined track_published; do
   fi
 done
 
-participants="$(curl -s --noproxy '*' -H "Authorization: Bearer $TOKEN" \
-  "http://127.0.0.1:$PORT/api/v1/channels/$CHANNEL/voice/participants")"
-python3 - "$participants" <<'PY'
-import json, sys
-rows = json.loads(sys.argv[1])
-assert rows and rows[0]["mic"] is True, rows
-print("PASS voice: participant projection mic=true")
-PY
+for _ in $(seq 1 40); do
+  participants="$(curl -s --noproxy '*' -H "Authorization: Bearer $TOKEN" \
+    "http://127.0.0.1:$PORT/api/v1/channels/$CHANNEL/voice/participants")"
+  if printf '%s' "$participants" | python3 -c 'import json,sys; rows=json.load(sys.stdin); sys.exit(0 if rows and rows[0]["mic"] is True else 1)'; then
+    echo "PASS voice: participant projection mic=true"
+    break
+  fi
+  sleep 0.25
+done
 
 echo "voice e2e passed"

@@ -114,19 +114,28 @@ sleep 7
 DISCORD_API_BASE="http://127.0.0.1:$PORT" DISCORD_SESSION_FILE="$TMP/a.json" DISCORD_DM_CALL_AUTO="call" \
   "$ROOT/target/debug/discord-gpui" >"$TMP/a.log" 2>&1 &
 A_PID=$!
-sleep 22
+wait_until() {
+  local seconds=$1
+  shift
+  for _ in $(seq 1 $((seconds * 4))); do
+    if "$@"; then return 0; fi
+    sleep 0.25
+  done
+  return 1
+}
 
 fail() { echo "FAIL dm-call: $1" >&2; tail -20 "$TMP/a.log" "$TMP/b.log" >&2; exit 1; }
 
 for role in a b; do
+  wait_until 30 grep -q "\[voice\] room connected" "$TMP/$role.log" || fail "$role 未连接通话房间"
+  wait_until 15 grep -q "microphone published" "$TMP/$role.log" || fail "$role 麦克风未发布"
   kill -0 "$([ "$role" = a ] && echo "$A_PID" || echo "$B_PID")" 2>/dev/null || fail "$role 客户端退出"
   grep -qiE "panic|Terminating app" "$TMP/$role.log" && fail "$role 崩溃"
-  grep -q "\[voice\] room connected" "$TMP/$role.log" || fail "$role 未连接通话房间"
-  grep -q "microphone published" "$TMP/$role.log" || fail "$role 麦克风未发布"
 done
 echo "PASS dm-call: 双端连接房间并发布麦克风"
 
 for kind in participant_joined track_published; do
+  wait_until 15 grep -q "livekit webhook event=$kind" "$TMP/server.log"
   count="$(grep -c "livekit webhook event=$kind" "$TMP/server.log")"
   [ "$count" -ge 2 ] && echo "PASS dm-call: webhook $kind x$count" || fail "缺少 webhook $kind"
 done
