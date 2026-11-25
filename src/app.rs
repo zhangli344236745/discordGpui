@@ -462,6 +462,7 @@ pub struct DiscordApp {
     pub(crate) structure_refreshing: bool,
     pub(crate) pending_server_id: Option<String>,
     pub(crate) pending_channel: Option<String>,
+    pub(crate) pending_forum_post: Option<String>,
     pub(crate) has_more_messages: HashMap<String, bool>,
     pub(crate) loading_older: bool,
     pub(crate) loaded_dms: std::collections::HashSet<String>,
@@ -1331,6 +1332,7 @@ impl DiscordApp {
             structure_refreshing: false,
             pending_server_id: None,
             pending_channel: None,
+            pending_forum_post: None,
             has_more_messages: HashMap::new(),
             loading_older: false,
             loaded_dms: std::collections::HashSet::new(),
@@ -4779,10 +4781,41 @@ impl DiscordApp {
     }
 
     pub(crate) fn open_forum_post(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
-        self.forum_open = Some(id);
+        self.forum_open = Some(id.clone());
         self.forum_notice = None;
         self.forum_reply_edit
             .update(cx, |input, cx| input.set_value("", window, cx));
+        if self.is_online()
+            && let Some(net) = self.net.clone()
+        {
+            let post_id = id.clone();
+            cx.spawn(async move |this, cx| {
+                let result = net
+                    .execute_as::<crate::net::dto::ForumPostDetailDto>(api::forum_post(&post_id), true)
+                    .await;
+                let _ = this.update(cx, |app, cx| {
+                    if let Ok(detail) = result {
+                        if let Some(post) =
+                            app.forum_posts.iter_mut().find(|post| post.id == post_id)
+                        {
+                            post.replies = detail
+                                .replies
+                                .iter()
+                                .map(|reply| ForumReply::new(
+                                    reply.author.name.clone(),
+                                    reply.author.color,
+                                    reply.body.clone(),
+                                    0,
+                                ))
+                                .collect();
+                            post.reply_count_override = None;
+                        }
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
         cx.notify();
     }
 
@@ -4859,6 +4892,39 @@ impl DiscordApp {
         }
         let body = self.forum_body_edit.read(cx).value().trim().to_string();
         let (server, channel) = self.forum_key();
+        if self.is_online()
+            && let (Some(channel_id), Some(net)) = (
+                self.remote
+                    .channels
+                    .get(&format!("{server}/{channel}"))
+                    .cloned(),
+                self.net.clone(),
+            )
+        {
+            let tags = self.forum_tags_draft.clone();
+            let title_for_post = title.clone();
+            self.close_forum_composer(window, cx);
+            cx.spawn(async move |this, cx| {
+                let result = net
+                    .execute(api::create_forum_post(&channel_id, &title_for_post, &body, &tags), true)
+                    .await;
+                let _ = this.update(cx, |app, cx| match result {
+                    Ok(value) => {
+                        if let Some(post_id) = value.get("id").and_then(|id| id.as_str()) {
+                            app.pending_forum_post = Some(post_id.to_string());
+                        }
+                        app.forum_notice = Some(format!("帖子「{title_for_post}」已发布"));
+                        app.refresh_structure(cx);
+                    }
+                    Err(error) => {
+                        app.forum_notice = Some(format!("发帖失败：{}", error.user_message()));
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+            return;
+        }
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_millis())
@@ -4892,6 +4958,14 @@ impl DiscordApp {
         if body.is_empty() {
             return;
         }
+        let online_reply = self
+            .is_online()
+            .then(|| {
+                self.net
+                    .clone()
+                    .map(|net| (net, id.clone(), body.clone()))
+            })
+            .flatten();
         let Some(post) = self.forum_posts.iter_mut().find(|post| post.id == id) else {
             return;
         };
@@ -4906,6 +4980,20 @@ impl DiscordApp {
             body,
             0,
         ));
+        if let Some((net, post_id, reply_body)) = online_reply {
+            cx.spawn(async move |this, cx| {
+                let result = net
+                    .execute(api::create_forum_reply(&post_id, &reply_body), true)
+                    .await;
+                let _ = this.update(cx, |app, cx| {
+                    if let Err(error) = result {
+                        app.forum_notice = Some(format!("回帖失败：{}", error.user_message()));
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
         self.forum_reply_edit
             .update(cx, |input, cx| input.set_value("", window, cx));
         self.forum_notice = Some("回复已发布".into());
@@ -4921,6 +5009,23 @@ impl DiscordApp {
             title = post.title.clone();
         }
         if !title.is_empty() {
+            if self.is_online()
+                && let Some(net) = self.net.clone()
+            {
+                let post_id = id.clone();
+                cx.spawn(async move |this, cx| {
+                    let result = net
+                        .execute(api::patch_forum_post(&post_id, Some(pinned), None), true)
+                        .await;
+                    let _ = this.update(cx, |app, cx| {
+                        if let Err(error) = result {
+                            app.forum_notice = Some(format!("置顶失败：{}", error.user_message()));
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+            }
             self.log_audit(
                 AuditKind::Channel,
                 if pinned { "置顶了论坛帖子" } else { "取消置顶论坛帖子" },
@@ -4944,6 +5049,23 @@ impl DiscordApp {
             title = post.title.clone();
         }
         if !title.is_empty() {
+            if self.is_online()
+                && let Some(net) = self.net.clone()
+            {
+                let post_id = id.clone();
+                cx.spawn(async move |this, cx| {
+                    let result = net
+                        .execute(api::patch_forum_post(&post_id, None, Some(locked)), true)
+                        .await;
+                    let _ = this.update(cx, |app, cx| {
+                        if let Err(error) = result {
+                            app.forum_notice = Some(format!("锁定失败：{}", error.user_message()));
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+            }
             self.log_audit(
                 AuditKind::Channel,
                 if locked { "锁定了论坛帖子" } else { "解锁了论坛帖子" },
@@ -9226,6 +9348,8 @@ impl DiscordApp {
             | "FRIEND_REQUEST_CREATE" | "FRIEND_REQUEST_ACCEPT" | "FRIEND_REQUEST_REJECT"
             | "FRIEND_REQUEST_DELETE" | "FRIEND_GROUP_CREATE" | "FRIEND_GROUP_UPDATE"
             | "FRIEND_GROUP_DELETE" | "DM_CREATE" | "INVITE_CREATE" | "INVITE_DELETE"
+            | "FORUM_POST_CREATE" | "FORUM_POST_UPDATE" | "FORUM_POST_DELETE"
+            | "FORUM_REPLY_CREATE" | "FORUM_REPLY_DELETE"
             | "AUTOMOD_RULE_CREATE" | "AUTOMOD_RULE_UPDATE" | "AUTOMOD_RULE_DELETE" => {
                 self.refresh_structure(cx);
             }
@@ -9556,6 +9680,7 @@ impl DiscordApp {
         let mut trees = Vec::new();
         let mut members = Vec::new();
         let mut invites = Vec::new();
+        let mut forum_posts = Vec::new();
         let mut roles = Vec::new();
         let mut permissions = Vec::new();
         for server in &servers {
@@ -9567,6 +9692,17 @@ impl DiscordApp {
                 .await
             {
                 invites.extend(rows);
+            }
+            let tree = trees.last().cloned();
+            if let Some(tree) = tree {
+                for channel in tree.channels.iter().filter(|channel| channel.kind == "forum") {
+                    if let Ok(page) = net
+                        .execute_as::<crate::net::dto::ForumPostPageDto>(api::forum_posts(&channel.id), true)
+                        .await
+                    {
+                        forum_posts.extend(page.items);
+                    }
+                }
             }
             permissions.push(
                 match net
@@ -9629,6 +9765,7 @@ impl DiscordApp {
             blocks,
             message_requests: requests.items,
             invites,
+            forum_posts,
             groups,
             dms,
             counts,
@@ -9687,6 +9824,14 @@ impl DiscordApp {
             data.active_server.min(self.servers.len() - 1)
         };
         }
+        if let Some(forum_post) = self.pending_forum_post.take()
+            && self
+                .forum_posts
+                .iter()
+                .any(|post| post.id == forum_post)
+        {
+            self.forum_open = Some(forum_post);
+        }
         if let Some(channel) = self.pending_channel.take()
             && self.servers[self.active_server]
                 .categories
@@ -9731,6 +9876,8 @@ impl DiscordApp {
         self.blocked_users = data.blocked_users;
         self.message_requests = data.message_requests;
         self.invites = data.invites;
+        self.forum_posts = data.forum_posts;
+        self.forum_open = None;
         self.dm_conversations = data.dm_conversations;
         self.active_dm = if keep_view
             && previous_dm

@@ -15,7 +15,7 @@ use crate::data::{
 
 use super::dto::{
     ChannelDto, ChannelUnreadDto, DmDto, DmMessageDto, FriendDto, FriendGroupDto, FriendRequestDto,
-    InviteDto, MemberDto, MessageDto, MessageRequestDto,
+    ForumPostDto, InviteDto, MemberDto, MessageDto, MessageRequestDto,
     PermissionMatrixDto, RoleDto, ServerDto, ServerTreeDto, UnreadCountsDto, UserDto,
 };
 
@@ -45,6 +45,7 @@ pub struct BootData {
     pub blocks: Vec<super::dto::BlockDto>,
     pub message_requests: Vec<MessageRequestDto>,
     pub invites: Vec<InviteDto>,
+    pub forum_posts: Vec<ForumPostDto>,
     pub groups: Vec<FriendGroupDto>,
     pub dms: Vec<DmDto>,
     pub counts: UnreadCountsDto,
@@ -69,6 +70,7 @@ pub struct Hydrated {
     pub blocked_users: Vec<String>,
     pub message_requests: Vec<MessageRequest>,
     pub invites: Vec<crate::data::Invite>,
+    pub forum_posts: Vec<crate::data::ForumPost>,
     pub dm_conversations: Vec<DmConversation>,
     pub messages: Vec<Message>,
     pub index: RemoteIndex,
@@ -472,6 +474,41 @@ pub fn hydrate(data: BootData) -> Hydrated {
         });
     }
 
+    let mut forum_posts = Vec::new();
+    for post in &data.forum_posts {
+        let (server_name, channel_name) = data
+            .trees
+            .iter()
+            .flat_map(|tree| tree.channels.iter())
+            .find(|channel| channel.id == post.channel_id)
+            .map(|channel| {
+                data.servers
+                    .iter()
+                    .find(|server| server.id == channel.server_id)
+                    .map(|server| (server.name.clone(), channel.name.clone()))
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
+        if server_name.is_empty() {
+            continue;
+        }
+        let mut converted = crate::data::ForumPost::new(
+            post.id.clone(),
+            server_name,
+            channel_name,
+            post.title.clone(),
+            leak(post.author.name.clone()),
+            post.author.color,
+            post.body.clone(),
+            0,
+        );
+        converted.tags = post.tags.clone();
+        converted.pinned = post.pinned;
+        converted.locked = post.locked;
+        converted.reply_count_override = Some(post.reply_count);
+        forum_posts.push(converted);
+    }
+
     let message_requests = data
         .message_requests
         .iter()
@@ -545,6 +582,7 @@ pub fn hydrate(data: BootData) -> Hydrated {
         blocked_users,
         message_requests,
         invites,
+        forum_posts,
         dm_conversations: dms,
         messages,
         index,
@@ -611,6 +649,7 @@ mod tests {
             blocks: vec![],
             message_requests: vec![],
             invites: vec![],
+            forum_posts: vec![],
             groups: vec![],
             dms: vec![],
             counts: dto(json!({"channels":[{"channel_id":"ch1","server_id":"s1","unread":3}]})),

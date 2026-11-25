@@ -277,6 +277,56 @@ pub struct MessageRequestPageDto {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct ForumReplyDto {
+    pub id: String,
+    #[serde(default)]
+    pub post_id: String,
+    #[serde(default)]
+    pub body: String,
+    pub author: AuthorDto,
+    #[serde(default)]
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct ForumPostDto {
+    pub id: String,
+    #[serde(default)]
+    pub channel_id: String,
+    pub title: String,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub pinned: bool,
+    #[serde(default)]
+    pub locked: bool,
+    #[serde(default)]
+    pub reply_count: u32,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    pub author: AuthorDto,
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub last_activity_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct ForumPostDetailDto {
+    pub post: ForumPostDto,
+    #[serde(default)]
+    pub replies: Vec<ForumReplyDto>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+pub struct ForumPostPageDto {
+    #[serde(default)]
+    pub items: Vec<ForumPostDto>,
+    #[serde(default)]
+    pub has_more: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct SearchHitDto {
     pub message_id: String,
     #[serde(default)]

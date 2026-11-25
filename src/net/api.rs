@@ -60,6 +60,39 @@ pub fn search(q: &str, scope: &str, server_id: Option<&str>, limit: u32) -> ApiR
     ApiRequest::new(Method::Get, path)
 }
 
+pub fn forum_posts(channel_id: &str) -> ApiRequest {
+    ApiRequest::new(Method::Get, format!("/api/v1/channels/{channel_id}/posts"))
+}
+
+pub fn forum_post(post_id: &str) -> ApiRequest {
+    ApiRequest::new(Method::Get, format!("/api/v1/posts/{post_id}"))
+}
+
+pub fn create_forum_post(channel_id: &str, title: &str, body: &str, tags: &[String]) -> ApiRequest {
+    ApiRequest::new(Method::Post, format!("/api/v1/channels/{channel_id}/posts")).with_body(json!({
+        "title": title,
+        "body": body,
+        "tags": tags,
+    }))
+}
+
+pub fn create_forum_reply(post_id: &str, body: &str) -> ApiRequest {
+    ApiRequest::new(Method::Post, format!("/api/v1/posts/{post_id}/replies"))
+        .with_body(json!({ "body": body }))
+}
+
+pub fn patch_forum_post(post_id: &str, pinned: Option<bool>, locked: Option<bool>) -> ApiRequest {
+    let mut payload = serde_json::Map::new();
+    if let Some(value) = pinned {
+        payload.insert("pinned".into(), Value::from(value));
+    }
+    if let Some(value) = locked {
+        payload.insert("locked".into(), Value::from(value));
+    }
+    ApiRequest::new(Method::Patch, format!("/api/v1/posts/{post_id}"))
+        .with_body(Value::Object(payload))
+}
+
 pub fn health() -> ApiRequest {
     ApiRequest::new(Method::Get, "/api/v1/health")
 }

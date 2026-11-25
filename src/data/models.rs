@@ -1772,6 +1772,9 @@ pub struct ForumPost {
     pub pinned: bool,
     pub locked: bool,
     pub replies: Vec<ForumReply>,
+    /// 在线模式的回帖计数（详情未展开时 replies 为空，用它显示 N 条回帖）。
+    #[serde(default)]
+    pub reply_count_override: Option<u32>,
 }
 
 impl ForumPost {
@@ -1799,6 +1802,7 @@ impl ForumPost {
             pinned: false,
             locked: false,
             replies: Vec::new(),
+            reply_count_override: None,
         }
     }
 
@@ -1828,7 +1832,9 @@ impl ForumPost {
     }
 
     pub fn reply_count(&self) -> usize {
-        self.replies.len()
+        self.reply_count_override
+            .map(|count| count as usize)
+            .unwrap_or(self.replies.len())
     }
 
     /// 最后活动时间：有回帖则取最近的一条，否则用发帖时间。
