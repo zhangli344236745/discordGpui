@@ -74,19 +74,72 @@ fn preview(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElement {
             .into_any_element();
     }
 
-    // 远端真实画面优先：屏幕 > 摄像头
-    if let Some(frame) = app.remote_screen_frame.clone() {
-        return img(ImageSource::Render(frame))
+    // 远端真实画面优先：屏幕 > 摄像头；本端画面以画中画小窗叠加
+    let (tiles, _) = app.video_tiles(6);
+    let remote = tiles.iter().find(|tile| !tile.local).cloned();
+    let local = tiles.iter().find(|tile| tile.local).cloned();
+
+    if let Some(remote) = remote {
+        let mut stage = div()
+            .relative()
             .w_full()
             .h(px(180.))
-            .object_fit(ObjectFit::Cover)
-            .into_any_element();
+            .overflow_hidden()
+            .child(
+                img(ImageSource::Render(remote.frame.clone()))
+                    .w_full()
+                    .h(px(180.))
+                    .object_fit(ObjectFit::Cover),
+            );
+        if let Some(local) = local {
+            stage = stage.child(
+                div()
+                    .absolute()
+                    .right(px(8.))
+                    .bottom(px(8.))
+                    .w(px(96.))
+                    .h(px(54.))
+                    .rounded(px(4.))
+                    .overflow_hidden()
+                    .border_1()
+                    .border_color(rgb(palette::text_primary()))
+                    .child(
+                        img(ImageSource::Render(local.frame.clone()))
+                            .w_full()
+                            .h_full()
+                            .object_fit(ObjectFit::Cover),
+                    ),
+            );
+        }
+        return stage.into_any_element();
     }
-    if let Some(frame) = app.remote_camera_frame.clone() {
-        return img(ImageSource::Render(frame))
+
+    // 没有远端画面但有本端预览：直接展示本端
+    if let Some(local) = local {
+        return div()
+            .relative()
             .w_full()
             .h(px(180.))
-            .object_fit(ObjectFit::Cover)
+            .overflow_hidden()
+            .child(
+                img(ImageSource::Render(local.frame.clone()))
+                    .w_full()
+                    .h(px(180.))
+                    .object_fit(ObjectFit::Cover),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .left(px(8.))
+                    .top(px(8.))
+                    .px(px(6.))
+                    .py(px(2.))
+                    .rounded(px(3.))
+                    .bg(rgb(palette::bg_rail()))
+                    .text_size(px(10.))
+                    .text_color(rgb(palette::text_primary()))
+                    .child("你"),
+            )
             .into_any_element();
     }
 

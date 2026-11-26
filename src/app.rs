@@ -709,9 +709,8 @@ pub struct DiscordApp {
     /// 频道语音内的摄像头/屏幕共享开关。
     pub(crate) voice_camera_on: bool,
     pub(crate) voice_screen_on: bool,
-    /// 远端视频最近一帧（DM 通话面板直接展示）。
-    pub(crate) remote_camera_frame: Option<std::sync::Arc<gpui_kit::RenderImage>>,
-    pub(crate) remote_screen_frame: Option<std::sync::Arc<gpui_kit::RenderImage>>,
+    /// 视频帧：key = (参与者标识, "camera"|"screen")，值 = 最近一帧 + 接收序号。
+    pub(crate) video_frames: HashMap<(String, String), (std::sync::Arc<gpui_kit::RenderImage>, u64)>,
     pub(crate) remote_video_status: Option<String>,
     pub(crate) voice_handle: Option<crate::voice::VoiceHandle>,
 
@@ -835,6 +834,16 @@ fn human_size(bytes: u64) -> String {
     } else {
         format!("{bytes} B")
     }
+}
+
+/// UI 用的视频平铺项。
+#[derive(Clone)]
+pub(crate) struct VideoTile {
+    pub identity: String,
+    pub kind: String,
+    pub local: bool,
+    pub frame: std::sync::Arc<gpui_kit::RenderImage>,
+    pub seq: u64,
 }
 
 /// 待上传的本地文件：真正发送时才读取字节并上传。
@@ -1607,8 +1616,7 @@ impl DiscordApp {
             voice_input_device: None,
             voice_output_device: None,
             voice_device_note: None,
-            remote_camera_frame: None,
-            remote_screen_frame: None,
+            video_frames: HashMap::new(),
             remote_video_status: None,
             voice_camera_on: false,
             voice_screen_on: false,
@@ -7691,6 +7699,7 @@ impl DiscordApp {
                         }
                         crate::voice::VoiceEvent::ParticipantLeft(name) => {
                             app.voice_notice = Some(format!("{name} 离开了语音"));
+                            app.drop_video_frames(name);
                         }
                         crate::voice::VoiceEvent::MicUnavailable(reason) => {
                             app.voice_notice = Some(reason.clone());
@@ -7702,6 +7711,13 @@ impl DiscordApp {
                         crate::voice::VoiceEvent::ScreenUnavailable(reason) => {
                             app.voice_notice = Some(reason.clone());
                         }
+                        crate::voice::VoiceEvent::QualityChanged { low } => {
+                            app.voice_notice = Some(if *low {
+                                "网络较差，已降低画面质量".to_string()
+                            } else {
+                                "网络已恢复，画面质量已提升".to_string()
+                            });
+                        }
                         crate::voice::VoiceEvent::Failed(reason) => {
                             app.voice_notice = Some(reason.clone());
                         }
@@ -7711,8 +7727,7 @@ impl DiscordApp {
                     }
                     if close {
                         app.voice_handle = None;
-                        app.remote_camera_frame = None;
-                        app.remote_screen_frame = None;
+                        app.video_frames.clear();
                         app.remote_video_status = None;
                         app.voice_devices = None;
                         app.voice_input_device = None;
@@ -8011,6 +8026,10 @@ impl DiscordApp {
             let _ = handle
                 .commands
                 .send_blocking(crate::voice::VoiceCommand::SetCamera(camera_on));
+        }
+        if !camera_on {
+            self.video_frames
+                .remove(&("你".to_string(), "camera".to_string()));
         }
         self.sync_dm_call_state(cx);
         cx.notify();
@@ -11960,26 +11979,59 @@ impl DiscordApp {
             return;
         };
         let render = std::sync::Arc::new(gpui_kit::RenderImage::new([image::Frame::new(buffer)]));
-        let first = match frame.kind.as_str() {
-            "camera" => {
-                let first = self.remote_camera_frame.is_none();
-                self.remote_camera_frame = Some(render);
-                first
-            }
-            "screen" => {
-                let first = self.remote_screen_frame.is_none();
-                self.remote_screen_frame = Some(render);
-                first
-            }
-            _ => false,
-        };
+        let key = (frame.identity.clone(), frame.kind.clone());
+        let first = !self.video_frames.contains_key(&key);
+        let seq = self
+            .video_frames
+            .values()
+            .map(|(_, seq)| *seq)
+            .max()
+            .unwrap_or(0)
+            + 1;
+        self.video_frames.insert(key, (render, seq));
         if first {
             eprintln!(
-                "[video] first remote {} frame from {} ({}x{})",
-                frame.kind, frame.identity, frame.width, frame.height
+                "[video] first {} {} frame from {} ({}x{})",
+                if frame.local { "local" } else { "remote" },
+                frame.kind,
+                frame.identity,
+                frame.width,
+                frame.height
             );
-            self.remote_video_status = Some(format!("正在接收 {} 画面", frame.identity));
+            if !frame.local {
+                self.remote_video_status = Some(format!("正在接收 {} 画面", frame.identity));
+            }
         }
+    }
+
+    /// 视频平铺列表：屏幕共享优先、最近更新在前，最多 `limit` 路。
+    /// 返回 `(tiles, remaining)`。
+    pub(crate) fn video_tiles(&self, limit: usize) -> (Vec<VideoTile>, usize) {
+        let mut items: Vec<VideoTile> = self
+            .video_frames
+            .iter()
+            .map(|((identity, kind), (frame, seq))| VideoTile {
+                identity: identity.clone(),
+                kind: kind.clone(),
+                local: identity == "你",
+                frame: frame.clone(),
+                seq: *seq,
+            })
+            .collect();
+        items.sort_by(|a, b| {
+            let screen_rank = |tile: &VideoTile| usize::from(tile.kind != "screen");
+            screen_rank(a)
+                .cmp(&screen_rank(b))
+                .then_with(|| b.seq.cmp(&a.seq))
+        });
+        let remaining = items.len().saturating_sub(limit);
+        items.truncate(limit);
+        (items, remaining)
+    }
+
+    /// 清掉某参与者的所有视频帧（离开/关闭摄像头）。
+    pub(crate) fn drop_video_frames(&mut self, identity: &str) {
+        self.video_frames.retain(|(who, _), _| who != identity);
     }
 
     /// 拉取当前引擎的输入/输出设备列表（仅连接语音后可用）。
@@ -12065,6 +12117,10 @@ impl DiscordApp {
                 .commands
                 .send_blocking(crate::voice::VoiceCommand::SetCamera(self.voice_camera_on));
         }
+        if !self.voice_camera_on {
+            self.video_frames
+                .remove(&("你".to_string(), "camera".to_string()));
+        }
         self.sync_voice_state(cx);
         cx.notify();
     }
@@ -12076,6 +12132,10 @@ impl DiscordApp {
             let _ = handle
                 .commands
                 .send_blocking(crate::voice::VoiceCommand::SetScreen(self.voice_screen_on));
+        }
+        if !self.voice_screen_on {
+            self.video_frames
+                .remove(&("你".to_string(), "screen".to_string()));
         }
         self.sync_voice_state(cx);
         cx.notify();

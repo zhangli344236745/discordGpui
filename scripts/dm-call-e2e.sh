@@ -113,6 +113,7 @@ B_PID=$!
 sleep 7
 DISCORD_API_BASE="http://127.0.0.1:$PORT" DISCORD_SESSION_FILE="$TMP/a.json" \
 DISCORD_DM_CALL_AUTO="call" DISCORD_DM_CALL_CAMERA="1" DISCORD_DM_CALL_SCREEN="1" \
+DISCORD_VOICE_FORCE_LOW="1" \
   "$ROOT/target/debug/discord-gpui" >"$TMP/a.log" 2>&1 &
 A_PID=$!
 wait_until() {
@@ -159,9 +160,26 @@ wait_until 20 grep -q "event=track_published .*SCREEN_SHARE" "$TMP/server.log" |
   fail "缺少 SCREEN_SHARE track_published webhook"
 echo "PASS dm-call: 屏幕共享轨道已发布"
 
+# 本地预览：A 端应把自己的摄像头/屏幕回灌到 UI 管线
+wait_until 25 grep -q "first local camera frame" "$TMP/a.log" || fail "A 端无本地摄像头预览"
+wait_until 20 grep -q "first local screen frame" "$TMP/a.log" || fail "A 端无本地屏幕预览"
+echo "PASS dm-call: 本地摄像头/屏幕预览已生成"
+
 # 远端渲染：B 端应解出 A 的摄像头/屏幕帧（BGRA → RenderImage）
 wait_until 25 grep -q "first remote camera frame" "$TMP/b.log" || fail "B 端未渲染远端摄像头"
-wait_until 20 grep -q "first remote screen frame" "$TMP/b.log" || fail "B 端未渲染远端屏幕"
+wait_until 20 grep -q "first remote screen frame .*1280x720" "$TMP/b.log" ||
+  fail "B 端屏幕共享未按高码率单层（1280x720）渲染"
 echo "PASS dm-call: 远端摄像头/屏幕画面已渲染"
+
+# 码率自适应：强制降档后重新发布成功且进程存活
+wait_until 20 grep -q "video quality -> low" "$TMP/a.log" || fail "未触发降档"
+kill -0 "$A_PID" 2>/dev/null || fail "降档后客户端退出"
+grep -qiE "panic|Terminating app" "$TMP/a.log" && fail "降档后崩溃"
+echo "PASS dm-call: 弱网降档重新发布成功"
+
+# 降档后重新发布：订阅端应再次收到轨道（初始 2 路 + 重发 2 路）
+wait_until 20 bash -c "[ \$(grep -c 'remote video subscribed' '$TMP/b.log') -ge 4 ]" ||
+  fail "降档后未重新订阅轨道"
+echo "PASS dm-call: 降档后对端重新订阅"
 
 echo "dm call e2e passed"

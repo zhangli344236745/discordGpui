@@ -125,6 +125,10 @@ wait_until 20 grep -q "camera published" "$TMP/client.log" || { echo "FAIL voice
 wait_until 20 grep -q "screen published" "$TMP/client.log" || { echo "FAIL voice: 屏幕共享未发布"; exit 1; }
 echo "PASS voice: 摄像头与屏幕共享已发布"
 
+wait_until 20 grep -q "first local camera frame" "$TMP/client.log" || { echo "FAIL voice: 无本地摄像头预览"; exit 1; }
+wait_until 20 grep -q "first local screen frame" "$TMP/client.log" || { echo "FAIL voice: 无本地屏幕预览"; exit 1; }
+echo "PASS voice: 本地预览已生成"
+
 wait_until 20 grep -q "event=track_published .*CAMERA" "$TMP/server.log" || { echo "FAIL voice: 缺少 CAMERA webhook"; exit 1; }
 wait_until 20 grep -q "event=track_published .*SCREEN_SHARE" "$TMP/server.log" || { echo "FAIL voice: 缺少 SCREEN_SHARE webhook"; exit 1; }
 echo "PASS voice: webhook CAMERA + SCREEN_SHARE"

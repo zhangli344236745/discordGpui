@@ -17,19 +17,55 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
         None => return div().into_any_element(),
     };
 
-    // 远端画面：优先显示屏幕共享，其次摄像头
-    let mut panel = v_flex();
-    if let Some(frame) = app
-        .remote_screen_frame
-        .clone()
-        .or_else(|| app.remote_camera_frame.clone())
-    {
+    // 视频平铺：屏幕共享优先、最近更新在前，最多 6 路
+    let mut panel = v_flex().gap_1();
+    let (tiles, remaining) = app.video_tiles(6);
+    for chunk in tiles.chunks(2) {
+        let mut row = h_flex().gap_1();
+        for tile in chunk {
+            row = row.child(
+                div()
+                    .flex_1()
+                    .relative()
+                    .h(px(84.))
+                    .rounded(px(4.))
+                    .overflow_hidden()
+                    .child(
+                        img(ImageSource::Render(tile.frame.clone()))
+                            .w_full()
+                            .h_full()
+                            .object_fit(ObjectFit::Cover),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(4.))
+                            .bottom(px(4.))
+                            .px(px(4.))
+                            .py(px(1.))
+                            .rounded(px(2.))
+                            .bg(rgb(palette::bg_rail()))
+                            .text_size(px(9.))
+                            .text_color(rgb(palette::text_primary()))
+                            .child(if tile.local {
+                                format!("你 · {}", if tile.kind == "screen" { "屏幕" } else { "摄像头" })
+                            } else {
+                                format!("{} · {}", tile.identity, if tile.kind == "screen" { "屏幕" } else { "摄像头" })
+                            }),
+                    ),
+            );
+        }
+        if chunk.len() == 1 {
+            row = row.child(div().flex_1());
+        }
+        panel = panel.child(row);
+    }
+    if remaining > 0 {
         panel = panel.child(
-            img(ImageSource::Render(frame))
-                .w_full()
-                .h(px(120.))
-                .object_fit(ObjectFit::Cover)
-                .rounded(px(6.)),
+            div()
+                .text_size(px(10.))
+                .text_color(rgb(palette::text_dim()))
+                .child(format!("还有 {remaining} 路画面未显示")),
         );
     }
 

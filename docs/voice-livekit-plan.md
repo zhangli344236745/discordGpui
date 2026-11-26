@@ -82,10 +82,21 @@ scripts/voice-e2e.sh                  # 需要 docker + livekit/livekit-server �
   - `scripts/dm-call-e2e.sh`：双端通话中 B 端解出 A 的摄像头/屏幕帧并渲染
     （日志 `first remote camera/screen frame`）。
 
-## 后续可选增量
+## 视频体验增强（本地预览 / 多路平铺 / 码率自适应）
 
-- 本地摄像头小窗预览（把 `NativeVideoSource` 最近一帧同样送 UI）；
-- 屏享分辨率/码率自适应、按参与者平铺的多路视频布局（当前展示最近一帧）。
+- **本地预览**：发布后的本端轨道同样走 `NativeVideoStream` 解码，以 `identity="你"` 进入
+  同一条帧通道；DM 通话显示为右下角画中画，单独开启时铺满预览区并标注「你」。
+- **多路平铺**：帧状态改为 `(参与者, 来源) → 最近一帧 + 接收序号`；语音房间按
+  「屏幕共享优先、最近更新在前」两列平铺，最多 6 路并提示剩余数量；参与者离开时清理其画面。
+- **码率自适应**：
+  - 摄像头高档 900kbps/24fps、低档 400kbps/15fps；
+  - 屏幕共享高档 1500kbps/10fps、低档 600kbps/8fps，且不使用 simulcast（单层直出清晰画面）；
+  - 监听本端 `ConnectionQualityChanged`：连续 2 次 Poor/Lost 降档、连续 3 次 Excellent/Good 升档，
+    10 秒冷却；降档通过「取消发布→按新参数重新发布→重建本地预览」完成，并提示用户；
+  - 调试入口 `DISCORD_VOICE_FORCE_LOW=1`（连接 6 秒后强制降档），供 e2e 覆盖重发布链路。
+
+验证：`scripts/dm-call-e2e.sh` 覆盖本地预览、远端渲染（屏幕 1280x720 单层）、强制降档后
+对端重新订阅；`cargo test` 覆盖档位判定（阈值与冷却）。
 
 ## 更早的「仅信令」部分（离线/未启用 feature 时仍生效）
 
