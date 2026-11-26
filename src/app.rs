@@ -246,8 +246,10 @@ pub(crate) struct DmCall {
     pub(crate) color: u32,
     pub(crate) online: bool,
     pub(crate) mode: CallMode,
-    /// false 表示仍在呼叫对方，true 表示已接通（Demo 用「模拟接通」按钮推进）。
+    /// false 表示仍在呼叫，true 表示已接通。
     pub(crate) connected: bool,
+    /// true = 收到对方来电（显示接听/拒绝）。
+    pub(crate) incoming: bool,
     pub(crate) mic_on: bool,
     pub(crate) camera_on: bool,
     pub(crate) screen_sharing: bool,
@@ -7601,6 +7603,13 @@ impl DiscordApp {
     /// - `DISCORD_DM_CALL_AUTO=call`：启动后自动向第一个私信会话发起语音呼叫；
     /// - `DISCORD_DM_CALL_AUTO=answer`：收到 CALL_RING 自动接听。
     fn maybe_auto_dm_call(&mut self, cx: &mut Context<Self>) {
+        // 调试：按名字直接呼叫（可用于验证成员列表里的 username 解析）
+        if let Ok(target) = std::env::var("DISCORD_DM_CALL_TO") {
+            if !target.trim().is_empty() && self.dm_call.is_none() {
+                self.start_dm_call(target, CallMode::Voice, cx);
+            }
+            return;
+        }
         if std::env::var("DISCORD_DM_CALL_AUTO").ok().as_deref() != Some("call") {
             return;
         }
@@ -7913,6 +7922,7 @@ impl DiscordApp {
             online,
             mode,
             connected: false,
+            incoming: false,
             mic_on: self.mic_on,
             camera_on: mode == CallMode::Video,
             screen_sharing: false,
@@ -7923,43 +7933,105 @@ impl DiscordApp {
         self.show_inbox = false;
         self.show_pins = false;
         self.close_message_menu();
-        if self.is_online()
-            && let (Some(dm_id), Some(net)) = (
-                self.remote.dms.get(&base).cloned(),
-                self.net.clone(),
-            )
-        {
-            let kind = match mode {
-                CallMode::Voice => "voice",
-                CallMode::Video => "video",
-            };
-            let friend_for_call = base.clone();
-            cx.spawn(async move |this, cx| {
-                let result = net.execute(api::start_dm_call(&dm_id, kind), true).await;
-                let _ = this.update(cx, |app, cx| match result {
-                    Ok(value) => {
-                        if let Some(call_id) = value.get("id").and_then(|id| id.as_str())
-                            && let Some(call) = app.dm_call.as_mut()
-                            && call.friend == friend_for_call
-                        {
-                            call.call_id = Some(call_id.to_string());
-                            let url = value.get("url").and_then(|v| v.as_str()).unwrap_or("");
-                            let token = value.get("token").and_then(|v| v.as_str()).unwrap_or("");
-                            if !url.is_empty() && !token.is_empty() {
-                                app.start_voice_engine(url, token, cx);
+        let existing_dm = self.remote.dms.get(&base).cloned();
+        let target_user = self.remote.people.get(&base).cloned();
+        eprintln!(
+            "[call] friend={base:?} dm={:?} user={:?}",
+            existing_dm, target_user
+        );
+        if !self.is_online() {
+            cx.notify();
+            return;
+        }
+        let Some(net) = self.net.clone() else {
+            cx.notify();
+            return;
+        };
+        let kind = match mode {
+            CallMode::Voice => "voice",
+            CallMode::Video => "video",
+        };
+        let friend_for_call = base.clone();
+
+        match (existing_dm, target_user) {
+            (Some(dm_id), _) => self.dispatch_dm_call(net, dm_id, kind, friend_for_call, cx),
+            (None, Some(user_id)) => {
+                // 还没有私信：先建会话（同服/好友可直接建，否则落消息请求）
+                cx.spawn(async move |this, cx| {
+                    let opened = net
+                        .execute(api::open_dm(&user_id, None), true)
+                        .await;
+                    let _ = this.update(cx, |app, cx| match opened {
+                        Ok(value) => {
+                            let Some(dm_id) = value
+                                .get("dm")
+                                .and_then(|dm| dm.get("id"))
+                                .and_then(|id| id.as_str())
+                                .map(str::to_string)
+                            else {
+                                app.dm_call = None;
+                                app.automod_notice =
+                                    Some("对方尚未接受私信请求，无法呼叫".into());
+                                cx.notify();
+                                return;
+                            };
+                            app.remote.dms.insert(friend_for_call.clone(), dm_id.clone());
+                            if let Some(net) = app.net.clone() {
+                                app.dispatch_dm_call(net, dm_id, kind, friend_for_call, cx);
                             }
                         }
-                    }
-                    Err(error) => {
-                        app.dm_call = None;
-                        app.automod_notice = Some(format!("呼叫失败：{}", error.user_message()));
-                        cx.notify();
-                    }
-                });
-            })
-            .detach();
+                        Err(error) => {
+                            app.dm_call = None;
+                            app.automod_notice =
+                                Some(format!("创建私信失败：{}", error.user_message()));
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+            }
+            (None, None) => {
+                self.dm_call = None;
+                self.automod_notice = Some(format!("找不到 {base} 的私信会话，请先发一条消息"));
+            }
         }
         cx.notify();
+    }
+
+    /// 向已有私信发起呼叫，并处理返回的 token/url。
+    fn dispatch_dm_call(
+        &mut self,
+        net: std::sync::Arc<crate::net::NetClient>,
+        dm_id: String,
+        kind: &'static str,
+        friend_for_call: String,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(async move |this, cx| {
+            let result = net.execute(api::start_dm_call(&dm_id, kind), true).await;
+            let _ = this.update(cx, |app, cx| match result {
+                Ok(value) => {
+                    if let Some(call_id) = value.get("id").and_then(|id| id.as_str())
+                        && let Some(call) = app.dm_call.as_mut()
+                        && call.friend == friend_for_call
+                    {
+                        call.call_id = Some(call_id.to_string());
+                        let url = value.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                        let token = value.get("token").and_then(|v| v.as_str()).unwrap_or("");
+                        if !url.is_empty() && !token.is_empty() {
+                            app.start_voice_engine(url, token, cx);
+                        }
+                    }
+                }
+                Err(error) => {
+                    eprintln!("[call] start failed: {error:?}");
+                    app.dm_call = None;
+                    app.automod_notice = Some(format!("呼叫失败：{}", error.user_message()));
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     /// Demo：把「正在呼叫」推进为「已接通」。
@@ -7998,6 +8070,22 @@ impl DiscordApp {
         }
         if let Some(call) = self.dm_call.as_mut() {
             call.connected = true;
+        }
+        cx.notify();
+    }
+
+    /// 拒接来电：调服务端拒绝并关闭面板。
+    pub(crate) fn decline_dm_call(&mut self, cx: &mut Context<Self>) {
+        let friend = self.dm_call.as_ref().map(|call| call.friend.clone());
+        self.dm_call = None;
+        if self.is_online()
+            && let (Some(friend), Some(net)) = (friend, self.net.clone())
+            && let Some(dm_id) = self.remote.dms.get(&friend).cloned()
+        {
+            cx.spawn(async move |_, _| {
+                let _ = net.execute(api::decline_dm_call(&dm_id), true).await;
+            })
+            .detach();
         }
         cx.notify();
     }
@@ -10663,6 +10751,7 @@ impl DiscordApp {
                         friend,
                         color,
                         online: true,
+                        incoming: true,
                         mode: if data.get("kind").and_then(|value| value.as_str()) == Some("video") {
                             CallMode::Video
                         } else {

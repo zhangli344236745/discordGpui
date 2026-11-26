@@ -29,6 +29,8 @@ pub struct RemoteIndex {
     pub members: HashMap<String, String>,
     pub roles: HashMap<String, String>,
     pub friends: HashMap<String, String>,
+    /// 显示名/用户名 → user_id（成员与私信对象），用于没有现成私信时创建会话。
+    pub people: HashMap<String, String>,
     pub friend_groups: HashMap<String, String>,
     pub blocks: HashMap<String, String>,
     pub dms: HashMap<String, String>,
@@ -324,6 +326,14 @@ pub fn hydrate(data: BootData) -> Hydrated {
                     format!("{}/{}", server_dto.name, member.username),
                     member.user_id.clone(),
                 );
+                index
+                    .people
+                    .insert(member.username.clone(), member.user_id.clone());
+                if !member.display_name.is_empty() {
+                    index
+                        .people
+                        .insert(member.display_name.clone(), member.user_id.clone());
+                }
                 let role = member
                     .role_ids
                     .iter()
@@ -491,6 +501,9 @@ pub fn hydrate(data: BootData) -> Hydrated {
     for friend in &data.friends {
         index
             .friends
+            .insert(friend.display_name.clone(), friend.id.clone());
+        index
+            .people
             .insert(friend.display_name.clone(), friend.id.clone());
         friends.push(Friend {
             name: leak(friend.display_name.clone()),
@@ -849,6 +862,14 @@ pub fn hydrate(data: BootData) -> Hydrated {
     let mut dms = Vec::new();
     for dm in &data.dms {
         index.dms.insert(dm.user.display_name.clone(), dm.id.clone());
+        // 成员列表使用 username，这里同时登记别名，避免从成员资料呼叫时找不到会话
+        index.dms.insert(dm.user.username.clone(), dm.id.clone());
+        index
+            .people
+            .insert(dm.user.display_name.clone(), dm.user.id.clone());
+        index
+            .people
+            .insert(dm.user.username.clone(), dm.user.id.clone());
         dms.push(DmConversation {
             friend: leak(dm.user.display_name.clone()),
             color: dm.user.avatar_color,

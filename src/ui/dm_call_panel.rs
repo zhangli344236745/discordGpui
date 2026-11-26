@@ -9,6 +9,7 @@ use crate::ui::{avatar, danger_icon_button, icon_button, ico};
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{h_flex, v_flex, Size};
+use gpui_kit::prelude::FluentBuilder as _;
 
 /// 通话控件：图标在上、文字在下，统一走公共图标按钮。
 fn control(
@@ -271,6 +272,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
     let friend = call.friend.clone();
     let mode = call.mode;
     let connected = call.connected;
+    let incoming = call.incoming;
     let mic_on = call.mic_on;
     let camera_on = call.camera_on;
     let screen_sharing = call.screen_sharing;
@@ -328,7 +330,13 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
                                 } else {
                                     palette::text_muted()
                                 }))
-                                .child(if connected { "通话中" } else { "正在呼叫" }),
+                                .child(if connected {
+                                    "通话中"
+                                } else if incoming {
+                                    "来电"
+                                } else {
+                                    "正在呼叫"
+                                }),
                         ),
                 ),
         )
@@ -408,17 +416,28 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
                     .text_size(px(12.))
                     .font_weight(FontWeight::SEMIBOLD)
                     .hover(|el| el.bg(rgb(palette::accent_hover())))
-                    .child("模拟接通")
+                    .child(if incoming { "接听" } else { "等待接听…" })
+                    .when(!incoming, |el| el.opacity(0.6))
                     .id("dm-call-connect")
-                    .on_click(cx.listener(|this, _, _, cx| this.connect_dm_call(cx))),
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if incoming {
+                            this.connect_dm_call(cx);
+                        }
+                    })),
             )
             .child(control(
                 IconName::PhoneOff,
-                "取消",
+                if incoming { "拒绝" } else { "取消" },
                 "dm-call-cancel",
                 true,
                 true,
-                Box::new(|this, _, cx| this.end_dm_call(cx)),
+                Box::new(move |this, _, cx| {
+                    if incoming {
+                        this.decline_dm_call(cx);
+                    } else {
+                        this.end_dm_call(cx);
+                    }
+                }),
                 cx,
             ))
     };
@@ -444,7 +463,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
                 .pb_2()
                 .text_size(px(10.))
                 .text_color(rgb(palette::text_dim()))
-                .child(format!("@{} · 演示通话，不采集真实音视频", friend)),
+                .child(format!("@{friend} · 语音/视频通话")),
         )
         .into_any_element()
 }
