@@ -728,6 +728,8 @@ pub struct DiscordApp {
     pub(crate) commands_by_server: HashMap<String, Vec<crate::net::dto::SlashCommandDto>>,
     /// 输入框里的斜杠命令前缀（不含 `/`）；None 表示不显示候选。
     pub(crate) command_query: Option<String>,
+    /// 来电铃声句柄：Some 时循环播放，问答/挂断时丢弃。
+    pub(crate) call_ring: Option<crate::ui::sound::CallRing>,
     pub(crate) voice_handle: Option<crate::voice::VoiceHandle>,
 
     // 私信通话：Some 即显示悬浮通话面板，跨会话与设置页保持。
@@ -1664,6 +1666,7 @@ impl DiscordApp {
             video_focus: None,
             commands_by_server: HashMap::new(),
             command_query: None,
+            call_ring: None,
             voice_camera_on: false,
             voice_screen_on: false,
             screen_targets: Vec::new(),
@@ -8240,6 +8243,7 @@ impl DiscordApp {
                 let result = net.execute(api::accept_dm_call(&dm_id), true).await;
                 let _ = this.update(cx, |app, cx| match result {
                     Ok(value) => {
+                        app.call_ring = None;
                         if let Some(call) = app.dm_call.as_mut() {
                             call.connected = true;
                         }
@@ -8267,6 +8271,7 @@ impl DiscordApp {
 
     /// 拒接来电：调服务端拒绝并关闭面板。
     pub(crate) fn decline_dm_call(&mut self, cx: &mut Context<Self>) {
+        self.call_ring = None;
         let friend = self.dm_call.as_ref().map(|call| call.friend.clone());
         self.dm_call = None;
         if self.is_online()
@@ -8283,6 +8288,7 @@ impl DiscordApp {
 
     /// 挂断私信通话（面板由 `dm_call.is_some()` 决定是否渲染）。
     pub(crate) fn end_dm_call(&mut self, cx: &mut Context<Self>) {
+        self.call_ring = None;
         let friend = self.dm_call.as_ref().map(|call| call.friend.clone());
         if let Some(handle) = self.voice_handle.take() {
             let _ = handle.commands.send_blocking(crate::voice::VoiceCommand::Disconnect);
@@ -10938,6 +10944,7 @@ impl DiscordApp {
                         .unwrap_or(0x5865f2) as u32;
                     let auto_accept =
                         std::env::var("DISCORD_DM_CALL_AUTO").ok().as_deref() == Some("answer");
+                    self.call_ring = Some(crate::ui::sound::CallRing::start(0.7));
                     self.dm_call = Some(DmCall {
                         friend,
                         color,
@@ -10960,6 +10967,7 @@ impl DiscordApp {
                 }
             }
             "CALL_ACCEPT" => {
+                self.call_ring = None;
                 if let Some(call) = self.dm_call.as_mut()
                     && call.call_id.as_deref()
                         == data.get("id").and_then(|value| value.as_str())
@@ -10968,6 +10976,7 @@ impl DiscordApp {
                 }
             }
             "CALL_DECLINE" | "CALL_END" => {
+                self.call_ring = None;
                 if self.dm_call.as_ref().and_then(|call| call.call_id.as_deref())
                     == data.get("id").and_then(|value| value.as_str())
                 {
@@ -11141,10 +11150,59 @@ impl DiscordApp {
 
     fn insert_message(&mut self, key: &str, dto: &MessageDto) {
         let mut message = hydrate::message_from(dto);
-        if dto.author.id == self.remote.me_id {
+        let mine = dto.author.id == self.remote.me_id;
+        if mine {
             message.author = "你";
         }
+        if !mine && self.should_play_message_sound(key, &dto.content, None) {
+            crate::ui::sound::play_message(self.output_volume as f32 / 100.0 * 0.7);
+        }
         self.upsert_message(key, message);
+    }
+
+    /// 是否会为这条消息播放提示音：受「通知音效」开关、频道级别与当前会话影响。
+    fn should_play_message_sound(
+        &self,
+        key: &str,
+        content: &str,
+        dm_friend: Option<&str>,
+    ) -> bool {
+        if !self.notification_sound {
+            return false;
+        }
+        if let Some(friend) = dm_friend {
+            return !(self.view_mode == ViewMode::DirectMessage
+                && self.active_dm.as_deref() == Some(friend));
+        }
+        if self.view_mode == ViewMode::Server && self.session_key() == key {
+            return false;
+        }
+        let mentioned = content.contains(&format!("@{}", self.me.username))
+            || content.contains(&format!("@{}", self.me.display_name));
+        match self.channel_notify(key) {
+            NotifyLevel::Nothing => false,
+            NotifyLevel::Mentions => mentioned,
+            NotifyLevel::All | NotifyLevel::Inherit => true,
+        }
+    }
+
+    /// 频道通知级别（找不到时按 All）。
+    fn channel_notify(&self, key: &str) -> NotifyLevel {
+        let Some((server_name, channel_name)) = key.split_once('/') else {
+            return NotifyLevel::All;
+        };
+        self.servers
+            .iter()
+            .find(|server| server.name == server_name)
+            .and_then(|server| {
+                server
+                    .categories
+                    .iter()
+                    .flat_map(|category| category.channels.iter())
+                    .find(|channel| channel.name == channel_name)
+            })
+            .map(|channel| channel.notify)
+            .unwrap_or(NotifyLevel::All)
     }
 
     fn upsert_message(&mut self, key: &str, message: Message) {
@@ -11190,8 +11248,11 @@ impl DiscordApp {
             return;
         };
         let mut message = hydrate::dm_message_from(dto);
-        if dto.author.id == self.remote.me_id {
+        let mine = dto.author.id == self.remote.me_id;
+        if mine {
             message.author = "你";
+        } else if self.should_play_message_sound("", &dto.content, Some(friend.as_str())) {
+            crate::ui::sound::play_message(self.output_volume as f32 / 100.0 * 0.7);
         }
         let list = self.dm_messages.entry(friend.clone()).or_default();
         if let Some(existing) = list.iter_mut().find(|item| item.id == message.id) {

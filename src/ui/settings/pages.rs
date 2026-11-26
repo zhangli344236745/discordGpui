@@ -549,7 +549,7 @@ fn voice_video(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
     ));
     page = page.child(group("通知")).child(toggle_row(
         "通知音效",
-        "收到消息时播放提示音。",
+        "收到消息或来电时播放提示音。",
         app.notification_sound,
         "settings-voice-sound",
         Box::new(|this, _, _| this.toggle_notification_sound()),
