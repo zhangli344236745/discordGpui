@@ -41,8 +41,8 @@ use crate::ui::{
     dm_sidebar, discover, events_panel, friend_group_dialog, friend_group_menu, forum, friends,
     help_center, invite_dialog, member_list, member_nick_dialog, message_requests_panel, profile_card,
     server_menu, server_rail,
-    login, member_menu, search_center, server_settings, settings, status_menu, topic_dialog,
-    voice_room, voice_status, welcome,
+    login, member_menu, screen_picker, search_center, server_settings, settings, status_menu,
+    topic_dialog, voice_room, voice_status, welcome,
 };
 
 /// 启动 / 登录阶段：检查后端 → 登录页 → 首屏同步 → 主界面。
@@ -709,6 +709,10 @@ pub struct DiscordApp {
     /// 频道语音内的摄像头/屏幕共享开关。
     pub(crate) voice_camera_on: bool,
     pub(crate) voice_screen_on: bool,
+    /// 屏幕共享目标选择：候选列表、弹层显隐与失败提示。
+    pub(crate) screen_targets: Vec<crate::voice::ScreenTarget>,
+    pub(crate) screen_picker_open: bool,
+    pub(crate) screen_picker_note: Option<String>,
     /// 视频帧：key = (参与者标识, "camera"|"screen")，值 = 最近一帧 + 接收序号。
     pub(crate) video_frames: HashMap<(String, String), (std::sync::Arc<gpui_kit::RenderImage>, u64)>,
     pub(crate) remote_video_status: Option<String>,
@@ -1632,6 +1636,9 @@ impl DiscordApp {
             video_focus: None,
             voice_camera_on: false,
             voice_screen_on: false,
+            screen_targets: Vec::new(),
+            screen_picker_open: false,
+            screen_picker_note: None,
             voice_handle: None,
             dm_call: None,
             discover_servers: seed_discover_servers(),
@@ -7614,7 +7621,7 @@ impl DiscordApp {
             self.toggle_voice_camera(cx);
         }
         if std::env::var("DISCORD_VOICE_SCREEN").ok().as_deref() == Some("1") {
-            self.toggle_voice_screen(cx);
+            self.force_full_screen_share(cx);
         }
     }
 
@@ -7681,6 +7688,13 @@ impl DiscordApp {
                                 }
                                 app.sync_dm_call_state(cx);
                             }
+                            if std::env::var("DISCORD_VOICE_SCREEN_FIRST")
+                                .ok()
+                                .as_deref()
+                                == Some("1")
+                            {
+                                app.share_first_display(cx);
+                            }
                             // e2e/调试：屏幕共享（DISCORD_DM_CALL_SCREEN=1）
                             if std::env::var("DISCORD_DM_CALL_SCREEN").ok().as_deref() == Some("1")
                                 && app
@@ -7688,16 +7702,7 @@ impl DiscordApp {
                                     .as_ref()
                                     .is_some_and(|call| !call.screen_sharing)
                             {
-                                if let Some(call) = app.dm_call.as_mut() {
-                                    call.screen_sharing = true;
-                                    call.camera_on = true;
-                                }
-                                if let Some(handle) = &app.voice_handle {
-                                    let _ = handle.commands.send_blocking(
-                                        crate::voice::VoiceCommand::SetScreen(true),
-                                    );
-                                }
-                                app.sync_dm_call_state(cx);
+                                app.force_full_screen_share(cx);
                             }
                         }
                         crate::voice::VoiceEvent::Reconnecting => {
@@ -8053,22 +8058,7 @@ impl DiscordApp {
 
     /// 通话内屏幕分享开关；开分享时自动开摄像头，让预览区有画面。
     pub(crate) fn toggle_dm_call_screen(&mut self, cx: &mut Context<Self>) {
-        let sharing = if let Some(call) = self.dm_call.as_mut() {
-            call.screen_sharing = !call.screen_sharing;
-            if call.screen_sharing {
-                call.camera_on = true;
-            }
-            call.screen_sharing
-        } else {
-            false
-        };
-        if let Some(handle) = &self.voice_handle {
-            let _ = handle
-                .commands
-                .send_blocking(crate::voice::VoiceCommand::SetScreen(sharing));
-        }
-        self.sync_dm_call_state(cx);
-        cx.notify();
+        self.request_screen_share(cx);
     }
 
     /// 把某位参与者移出语音房间（Demo：仅从列表移除）。
@@ -12179,22 +12169,156 @@ impl DiscordApp {
         cx.notify();
     }
 
-    /// 频道语音：切换屏幕共享。
+    /// 频道语音：打开屏幕共享选择器（已在共享则停止）。
     pub(crate) fn toggle_voice_screen(&mut self, cx: &mut Context<Self>) {
-        self.voice_screen_on = !self.voice_screen_on;
+        self.request_screen_share(cx);
+    }
+
+    /// 当前是否正在共享屏幕（私信通话或频道语音）。
+    fn screen_sharing(&self) -> bool {
+        self.voice_screen_on
+            || self
+                .dm_call
+                .as_ref()
+                .is_some_and(|call| call.screen_sharing)
+    }
+
+    /// 请求开始屏幕共享：先拉取可共享的窗口/显示器供选择。
+    pub(crate) fn request_screen_share(&mut self, cx: &mut Context<Self>) {
+        if self.screen_sharing() {
+            self.stop_screen_share(cx);
+            return;
+        }
+        let Some(handle) = &self.voice_handle else {
+            // 无引擎（Demo/离线）：保持旧的本地状态行为
+            self.set_screen_shared(true, cx);
+            return;
+        };
+        let (reply_tx, reply_rx) = async_channel::bounded(1);
+        if handle
+            .commands
+            .send_blocking(crate::voice::VoiceCommand::ListScreenTargets { reply: reply_tx })
+            .is_err()
+        {
+            self.screen_picker_note = Some("语音未连接，无法枚举共享目标".into());
+            cx.notify();
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            let result = reply_rx.recv().await;
+            let _ = this.update(cx, |app, cx| {
+                match result {
+                    Ok(Ok(targets)) if !targets.is_empty() => {
+                        eprintln!(
+                            "[screen] targets={} displays={} windows={}",
+                            targets.len(),
+                            targets.iter().filter(|t| t.kind == "display").count(),
+                            targets.iter().filter(|t| t.kind == "window").count()
+                        );
+                        app.screen_targets = targets;
+                        app.screen_picker_note = None;
+                        app.screen_picker_open = true;
+                    }
+                    Ok(Ok(_)) => {
+                        app.screen_picker_note = Some("没有找到可共享的窗口或显示器".into());
+                    }
+                    Ok(Err(reason)) => app.screen_picker_note = Some(reason),
+                    Err(_) => app.screen_picker_note = Some("语音连接已断开".into()),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// 用户从选择器里选中一个目标。
+    pub(crate) fn start_screen_share(
+        &mut self,
+        target: crate::voice::ScreenTarget,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(handle) = &self.voice_handle {
             let _ = handle
                 .commands
-                .send_blocking(crate::voice::VoiceCommand::SetScreen(self.voice_screen_on));
+                .send_blocking(crate::voice::VoiceCommand::SetScreenTarget(target));
         }
-        if !self.voice_screen_on {
+        self.screen_picker_open = false;
+        self.set_screen_shared(true, cx);
+    }
+
+    /// 停止共享。
+    pub(crate) fn stop_screen_share(&mut self, cx: &mut Context<Self>) {
+        if let Some(handle) = &self.voice_handle {
+            let _ = handle
+                .commands
+                .send_blocking(crate::voice::VoiceCommand::SetScreen(false));
+        }
+        self.screen_picker_open = false;
+        self.set_screen_shared(false, cx);
+    }
+
+    pub(crate) fn cancel_screen_picker(&mut self, cx: &mut Context<Self>) {
+        self.screen_picker_open = false;
+        cx.notify();
+    }
+
+    /// 调试/e2e：枚举目标后直接共享第一个显示器。
+    pub(crate) fn share_first_display(&mut self, cx: &mut Context<Self>) {
+        let Some(handle) = &self.voice_handle else {
+            return;
+        };
+        let (reply_tx, reply_rx) = async_channel::bounded(1);
+        if handle
+            .commands
+            .send_blocking(crate::voice::VoiceCommand::ListScreenTargets { reply: reply_tx })
+            .is_err()
+        {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            let result = reply_rx.recv().await;
+            let _ = this.update(cx, |app, cx| {
+                if let Ok(Ok(targets)) = result {
+                    eprintln!("[screen] targets={} (auto-share first display)", targets.len());
+                    if let Some(target) = targets.into_iter().find(|t| t.kind == "display") {
+                        app.start_screen_share(target, cx);
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// 调试/e2e：直接整屏共享（跳过选择器）。
+    pub(crate) fn force_full_screen_share(&mut self, cx: &mut Context<Self>) {
+        if let Some(handle) = &self.voice_handle {
+            let _ = handle
+                .commands
+                .send_blocking(crate::voice::VoiceCommand::SetScreen(true));
+        }
+        self.set_screen_shared(true, cx);
+    }
+
+    /// 更新共享状态（区分私信通话与频道语音）并做清理。
+    fn set_screen_shared(&mut self, shared: bool, cx: &mut Context<Self>) {
+        let in_dm = self.dm_call.is_some();
+        if in_dm {
+            if let Some(call) = self.dm_call.as_mut() {
+                call.screen_sharing = shared;
+            }
+            self.sync_dm_call_state(cx);
+        } else {
+            self.voice_screen_on = shared;
+            self.sync_voice_state(cx);
+        }
+        if !shared {
             self.video_frames
                 .remove(&("你".to_string(), "screen".to_string()));
             if self.video_focus.as_ref() == Some(&("你".to_string(), "screen".to_string())) {
                 self.video_focus = None;
             }
         }
-        self.sync_voice_state(cx);
         cx.notify();
     }
 
@@ -12386,6 +12510,9 @@ impl DiscordApp {
             })
             .when(self.show_voice_room && self.voice_channel.is_some(), |el| {
                 el.child(voice_room::render(self, cx))
+            })
+            .when(self.screen_picker_open, |el| {
+                el.child(screen_picker::render(self, cx))
             })
             .when(self.show_help_center, |el| {
                 el.child(help_center::render(self, cx))

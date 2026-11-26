@@ -21,6 +21,7 @@ pub mod member_nick_dialog;
 pub mod message_requests_panel;
 pub mod profile_card;
 pub mod server_menu;
+pub mod screen_picker;
 pub mod search_center;
 pub mod server_rail;
 pub mod server_settings;

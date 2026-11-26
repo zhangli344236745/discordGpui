@@ -16,6 +16,17 @@ struct NativeScreenHandle {
 type FrameCallback = extern "C" fn(*const u8, *const u8, c_int, c_int, c_int, c_int);
 
 unsafe extern "C" {
+    fn dgpu_screen_list_json(err: *mut c_char, err_len: usize) -> *mut c_char;
+    fn dgpu_screen_start_target(
+        target_id: u32,
+        is_window: c_int,
+        max_width: c_int,
+        max_height: c_int,
+        callback: FrameCallback,
+        err: *mut c_char,
+        err_len: usize,
+    ) -> *mut NativeScreenHandle;
+    fn dgpu_free_string(value: *mut c_char);
     fn dgpu_screen_start(
         callback: FrameCallback,
         max_width: c_int,
@@ -98,6 +109,106 @@ pub fn start() -> Result<(ScreenSession, NativeVideoSource), String> {
             .to_string();
         return Err(if message.is_empty() {
             "屏幕采集启动失败".to_string()
+        } else {
+            message
+        });
+    }
+    Ok((ScreenSession { handle }, source))
+}
+
+
+/// 枚举可共享的显示器与窗口。
+pub fn list_targets() -> Result<Vec<super::ScreenTarget>, String> {
+    let mut err = [0i8; 256];
+    let raw = unsafe { dgpu_screen_list_json(err.as_mut_ptr(), err.len()) };
+    if raw.is_null() {
+        let message = unsafe { CStr::from_ptr(err.as_ptr()) }
+            .to_string_lossy()
+            .to_string();
+        return Err(if message.is_empty() {
+            "无法枚举共享目标".to_string()
+        } else {
+            message
+        });
+    }
+    let json = unsafe { CStr::from_ptr(raw) }
+        .to_string_lossy()
+        .to_string();
+    unsafe { dgpu_free_string(raw) };
+
+    let items: serde_json::Value =
+        serde_json::from_str(&json).map_err(|error| format!("解析共享目标失败：{error}"))?;
+    let mut targets = Vec::new();
+    for item in items.as_array().into_iter().flatten() {
+        let Some(id) = item.get("id").and_then(|value| value.as_u64()) else {
+            continue;
+        };
+        targets.push(super::ScreenTarget {
+            id: id as u32,
+            kind: item
+                .get("kind")
+                .and_then(|value| value.as_str())
+                .unwrap_or("display")
+                .to_string(),
+            title: item
+                .get("title")
+                .and_then(|value| value.as_str())
+                .unwrap_or("")
+                .to_string(),
+            app: item
+                .get("app")
+                .and_then(|value| value.as_str())
+                .unwrap_or("")
+                .to_string(),
+            width: item
+                .get("width")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0) as u32,
+            height: item
+                .get("height")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0) as u32,
+        });
+    }
+    Ok(targets)
+}
+
+/// 按指定显示器/窗口启动共享。
+pub fn start_target(
+    target: &super::ScreenTarget,
+) -> Result<(ScreenSession, NativeVideoSource), String> {
+    let source = NativeVideoSource::new(
+        VideoResolution {
+            width: 1280,
+            height: 720,
+        },
+        false,
+    );
+    if let Ok(mut guard) = sink().lock() {
+        *guard = Some(source.clone());
+    }
+
+    let mut err = [0i8; 256];
+    let handle = unsafe {
+        dgpu_screen_start_target(
+            target.id,
+            i32::from(target.kind == "window"),
+            1280,
+            720,
+            on_frame,
+            err.as_mut_ptr(),
+            err.len(),
+        )
+    };
+    if handle.is_null() {
+        if let Ok(mut guard) = sink().lock() {
+            *guard = None;
+        }
+        let message = unsafe { CStr::from_ptr(err.as_ptr()) }
+            .to_string_lossy()
+            .to_string();
+        return Err(if message.is_empty() {
+            "屏幕共享启动失败".to_string()
         } else {
             message
         });

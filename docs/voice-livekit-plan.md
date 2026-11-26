@@ -65,6 +65,16 @@ scripts/voice-e2e.sh                  # 需要 docker + livekit/livekit-server �
   LiveKit webhook 分别上报 `source=CAMERA`（640x360 编码层）与 `source=SCREEN_SHARE`（1280x720）；
 - 服务端 webhook 按 `track.source`（而不是 `type`）更新 mic/camera/screen 投影。
 
+## 屏幕共享目标选择（ScreenCaptureKit）
+
+- 点击屏幕共享 → 枚举共享目标（显示器 + 窗口），模态选择器中选择后开始；
+- 显示器按「显示器 N」分组在前，窗口显示应用名/标题，最多 12 个；
+- 采集参数：NV12、15fps、最长边 1280；窗口共享只发布该窗口内容；
+- 枚举失败（无权限/超时）时提示并保留「整屏共享（CGDisplayStream）」回退；
+  应用退出或停止共享会释放 `SCStream`；
+- 验证：`scripts/voice-e2e.sh` 走「枚举 → 共享第一个显示器」并断言 `SCREEN_SHARE` webhook；
+  `scripts/dm-call-e2e.sh` 继续覆盖整屏回退路径。
+
 ## 远端画面渲染与频道面板开关（已实现）
 
 - 解码：`RoomEvent::TrackSubscribed` 里对远端视频建 `NativeVideoStream`，异步流按 ~15fps

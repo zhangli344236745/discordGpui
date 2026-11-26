@@ -52,6 +52,18 @@ pub struct DeviceList {
     pub playout: Vec<(String, String)>,
 }
 
+/// 可共享的屏幕目标（显示器或窗口）。
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScreenTarget {
+    pub id: u32,
+    pub kind: String,
+    pub title: String,
+    pub app: String,
+    pub width: u32,
+    pub height: u32,
+}
+
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub enum VoiceCommand {
@@ -62,7 +74,13 @@ pub enum VoiceCommand {
     SetRecordingDevice(String),
     SetPlayoutDevice(String),
     SetCamera(bool),
+    /// true = 整屏共享（旧入口/回退），false = 停止。
     SetScreen(bool),
+    /// 共享指定显示器或窗口。
+    SetScreenTarget(ScreenTarget),
+    ListScreenTargets {
+        reply: Sender<Result<Vec<ScreenTarget>, String>>,
+    },
     Disconnect,
 }
 
@@ -296,6 +314,47 @@ async fn republish_videos(
 }
 
 #[cfg(all(feature = "voice-livekit", target_os = "macos"))]
+async fn stop_screen(room: &livekit::prelude::Room, slot: &mut Option<LocalVideo>) {
+    if let Some(video) = slot.take() {
+        let _ = room.local_participant().unpublish_track(&video.sid).await;
+        drop(video);
+        eprintln!("[voice] screen unpublished");
+    }
+}
+
+#[cfg(all(feature = "voice-livekit", target_os = "macos"))]
+async fn begin_screen(
+    room: &livekit::prelude::Room,
+    slot: &mut Option<LocalVideo>,
+    target: Option<ScreenTarget>,
+    quality: VideoQuality,
+    frames: &Sender<VideoFrameData>,
+) -> Result<(), String> {
+    let (session, source) = match &target {
+        Some(target) => screen::start_target(target)?,
+        None => screen::start()?,
+    };
+    let (track, sid) = publish_video(room, "screen", &source, quality).await?;
+    eprintln!("[voice] screen published sid={sid}");
+    spawn_video_pump(
+        track.rtc_track(),
+        "你".into(),
+        "screen".into(),
+        true,
+        frames.clone(),
+    );
+    *slot = Some(LocalVideo {
+        kind: "screen",
+        source,
+        track,
+        sid,
+        quality,
+        _capture: CaptureSession::Screen(session),
+    });
+    Ok(())
+}
+
+#[cfg(all(feature = "voice-livekit", target_os = "macos"))]
 struct LocalVideo {
     kind: &'static str,
     source: livekit::webrtc::video_source::native::NativeVideoSource,
@@ -458,47 +517,42 @@ async fn run(
                     Ok(VoiceCommand::SetScreen(on)) => {
                         #[cfg(target_os = "macos")]
                         if on && screen.is_none() {
-                            match screen::start() {
-                                Ok((session, source)) => {
-                                    match publish_video(&room, "screen", &source, quality).await {
-                                        Ok((track, sid)) => {
-                                            eprintln!("[voice] screen published sid={sid}");
-                                            spawn_video_pump(
-                                                track.rtc_track(),
-                                                "你".into(),
-                                                "screen".into(),
-                                                true,
-                                                frames.clone(),
-                                            );
-                                            screen = Some(LocalVideo {
-                                                kind: "screen",
-                                                source,
-                                                track,
-                                                sid,
-                                                quality,
-                                                _capture: CaptureSession::Screen(session),
-                                            });
-                                        }
-                                        Err(error) => {
-                                            eprintln!("[voice] publish screen failed: {error}");
-                                            let _ = events
-                                                .send(VoiceEvent::ScreenUnavailable(format!(
-                                                    "屏幕共享发布失败：{error}"
-                                                )))
-                                                .await;
-                                        }
-                                    }
-                                }
-                                Err(reason) => {
-                                    eprintln!("[voice] screen start failed: {reason}");
-                                    let _ = events.send(VoiceEvent::ScreenUnavailable(reason)).await;
-                                }
+                            if let Err(reason) =
+                                begin_screen(&room, &mut screen, None, quality, &frames).await
+                            {
+                                eprintln!("[voice] screen start failed: {reason}");
+                                let _ = events.send(VoiceEvent::ScreenUnavailable(reason)).await;
                             }
                         } else if !on && screen.is_some() {
-                            let video = screen.take().unwrap();
-                            let _ = room.local_participant().unpublish_track(&video.sid).await;
-                            drop(video);
-                            eprintln!("[voice] screen unpublished");
+                            stop_screen(&room, &mut screen).await;
+                        }
+                    }
+                    Ok(VoiceCommand::SetScreenTarget(target)) => {
+                        #[cfg(target_os = "macos")]
+                        {
+                            if screen.is_some() {
+                                stop_screen(&room, &mut screen).await;
+                            }
+                            if let Err(reason) =
+                                begin_screen(&room, &mut screen, Some(target), quality, &frames)
+                                    .await
+                            {
+                                eprintln!("[voice] screen target failed: {reason}");
+                                let _ = events.send(VoiceEvent::ScreenUnavailable(reason)).await;
+                            }
+                        }
+                    }
+                    Ok(VoiceCommand::ListScreenTargets { reply }) => {
+                        #[cfg(target_os = "macos")]
+                        {
+                            let result = tokio::task::spawn_blocking(screen::list_targets)
+                                .await
+                                .unwrap_or_else(|error| Err(error.to_string()));
+                            let _ = reply.send(result).await;
+                        }
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            let _ = reply.send(Err("当前平台不支持屏幕共享".into())).await;
                         }
                     }
                     Ok(VoiceCommand::Disconnect) | Err(_) => {

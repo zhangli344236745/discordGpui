@@ -102,7 +102,7 @@ TOKEN="$(python3 -c "import json;print(json.load(open('$TMP/ctx.json'))['token']
 DISCORD_API_BASE="http://127.0.0.1:$PORT" \
 DISCORD_SESSION_FILE="$TMP/session.json" \
 DISCORD_VOICE_AUTOJOIN="$CHANNEL" \
-DISCORD_VOICE_CAMERA="1" DISCORD_VOICE_SCREEN="1" \
+DISCORD_VOICE_CAMERA="1" DISCORD_VOICE_SCREEN_FIRST="1" \
   "$ROOT/target/debug/discord-gpui" >"$TMP/client.log" 2>&1 &
 CLIENT_PID=$!
 
@@ -121,6 +121,9 @@ wait_until 15 grep -q "microphone published" "$TMP/client.log" || { echo "FAIL v
 kill -0 "$CLIENT_PID" 2>/dev/null || { echo "FAIL voice: 客户端退出"; tail -20 "$TMP/client.log"; exit 1; }
 grep -qiE "panic|Terminating app" "$TMP/client.log" "$TMP/server.log" && { echo "FAIL voice: 崩溃"; tail -20 "$TMP/client.log"; exit 1; }
 echo "PASS voice: room + microphone"
+
+wait_until 20 grep -q "\[screen\] targets=" "$TMP/client.log" || { echo "FAIL voice: 未枚举到共享目标"; exit 1; }
+echo "PASS voice: 共享目标枚举（ScreenCaptureKit）"
 
 wait_until 20 grep -q "camera published" "$TMP/client.log" || { echo "FAIL voice: 摄像头未发布"; exit 1; }
 wait_until 20 grep -q "screen published" "$TMP/client.log" || { echo "FAIL voice: 屏幕共享未发布"; exit 1; }

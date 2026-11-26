@@ -1,0 +1,3 @@
+schema: spec-driven
+created: 2026-11-26
+goal: 用 ScreenCaptureKit 枚举共享目标，让用户选择具体窗口/屏幕后再开始共享
