@@ -44,6 +44,10 @@ pub struct AuthorDto {
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct UserDto {
     pub id: String,
+    #[serde(default)]
+    pub email_verified: bool,
+    #[serde(default)]
+    pub totp_enabled: bool,
     pub username: String,
     pub tag: String,
     pub display_name: String,
@@ -458,6 +462,46 @@ pub struct VoiceJoinDto {
     pub room: String,
     #[serde(default)]
     pub participants: Vec<VoiceParticipantDto>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct SessionInfoDto {
+    pub id: String,
+    #[serde(default)]
+    pub device: String,
+    #[serde(default)]
+    pub ip: String,
+    #[serde(default)]
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct TwoFactorSetupDto {
+    pub secret: String,
+    #[serde(default)]
+    pub otpauth_url: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct TwoFactorEnabledDto {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub recovery_codes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct SecurityAuditDto {
+    #[serde(default)]
+    pub event: String,
+    #[serde(default)]
+    pub success: bool,
+    #[serde(default)]
+    pub ip: String,
+    #[serde(default)]
+    pub detail: String,
+    #[serde(default)]
+    pub created_at: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]

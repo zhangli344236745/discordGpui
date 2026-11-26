@@ -217,6 +217,41 @@ pub fn voice_set_state(room: &str, mic: bool, camera: bool, screen: bool) -> Api
     .with_body(json!({ "mic": mic, "camera": camera, "screen": screen }))
 }
 
+pub fn sessions() -> ApiRequest {
+    ApiRequest::new(Method::Get, "/api/v1/auth/sessions")
+}
+
+pub fn revoke_session(session_id: &str) -> ApiRequest {
+    ApiRequest::new(Method::Delete, format!("/api/v1/auth/sessions/{session_id}"))
+}
+
+pub fn logout_all() -> ApiRequest {
+    ApiRequest::new(Method::Post, "/api/v1/auth/logout-all")
+}
+
+pub fn change_password(old_password: &str, new_password: &str) -> ApiRequest {
+    ApiRequest::new(Method::Post, "/api/v1/auth/password").with_body(json!({
+        "old_password": old_password,
+        "new_password": new_password,
+    }))
+}
+
+pub fn two_factor_setup() -> ApiRequest {
+    ApiRequest::new(Method::Post, "/api/v1/auth/2fa/setup")
+}
+
+pub fn two_factor_enable(code: &str) -> ApiRequest {
+    ApiRequest::new(Method::Post, "/api/v1/auth/2fa/enable").with_body(json!({ "code": code }))
+}
+
+pub fn two_factor_disable(code: &str) -> ApiRequest {
+    ApiRequest::new(Method::Post, "/api/v1/auth/2fa/disable").with_body(json!({ "code": code }))
+}
+
+pub fn security_audit() -> ApiRequest {
+    ApiRequest::new(Method::Get, "/api/v1/auth/security-audit?limit=20")
+}
+
 pub fn server_bots(server_id: &str) -> ApiRequest {
     ApiRequest::new(Method::Get, format!("/api/v1/servers/{server_id}/bots"))
 }

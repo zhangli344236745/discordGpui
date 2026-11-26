@@ -12,6 +12,8 @@ class UserOut(BaseModel):
     about: str
     status: str
     email: str | None = None
+    email_verified: bool = False
+    totp_enabled: bool = False
 
 
 class AuthorOut(BaseModel):

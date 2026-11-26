@@ -740,6 +740,16 @@ pub struct DiscordApp {
     pub(crate) remote_video_status: Option<String>,
     /// 当前聚焦放大的画面键：(参与者标识, 来源)。
     pub(crate) video_focus: Option<(String, String)>,
+    /// 账号安全：会话、2FA、审计与输入。
+    pub(crate) security_sessions: Vec<crate::net::dto::SessionInfoDto>,
+    pub(crate) security_audit: Vec<crate::net::dto::SecurityAuditDto>,
+    pub(crate) security_notice: Option<String>,
+    pub(crate) twofa_enabled: bool,
+    pub(crate) twofa_secret: Option<(String, String)>,
+    pub(crate) recovery_codes: Vec<String>,
+    pub(crate) twofa_code_edit: Entity<InputState>,
+    pub(crate) old_password_edit: Entity<InputState>,
+    pub(crate) new_password_edit: Entity<InputState>,
     /// 本地通话记录（最新在前，最多 30 条）与面板显隐。
     pub(crate) call_history: Vec<crate::data::CallRecord>,
     pub(crate) show_call_history: bool,
@@ -1144,6 +1154,12 @@ impl DiscordApp {
         let command_response_edit =
             cx.new(|cx| InputState::new(window, cx).placeholder("回复模板，可含 {args}"));
         let bot_name_edit = cx.new(|cx| InputState::new(window, cx).placeholder("机器人名称"));
+        let twofa_code_edit =
+            cx.new(|cx| InputState::new(window, cx).placeholder("6 位验证码或恢复码"));
+        let old_password_edit =
+            cx.new(|cx| InputState::new(window, cx).placeholder("当前密码"));
+        let new_password_edit =
+            cx.new(|cx| InputState::new(window, cx).placeholder("新密码（至少 8 位）"));
         let webhook_name_edit =
             cx.new(|cx| InputState::new(window, cx).placeholder("Webhook 名称"));
         let role_name_edit = cx.new(|cx| InputState::new(window, cx).placeholder("角色名称"));
@@ -1670,6 +1686,15 @@ impl DiscordApp {
             bot_secret: None,
             webhook_secret: None,
             integrations_notice: None,
+            security_sessions: Vec::new(),
+            security_audit: Vec::new(),
+            security_notice: None,
+            twofa_enabled: false,
+            twofa_secret: None,
+            recovery_codes: Vec::new(),
+            twofa_code_edit,
+            old_password_edit,
+            new_password_edit,
             server_emojis: vec![
                 "🎨", "🚀", "🔥", "✅", "👀", "🦀", "🎧", "🎮", "🍜", "🌙", "💡", "🐧",
             ],
@@ -9502,6 +9527,207 @@ impl DiscordApp {
         .detach();
     }
 
+    /// 拉取会话列表、2FA 状态与最近安全审计。
+    pub(crate) fn refresh_security(&mut self, cx: &mut Context<Self>) {
+        let Some(net) = self.net.clone() else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let sessions = net
+                .execute_as::<Vec<crate::net::dto::SessionInfoDto>>(api::sessions(), true)
+                .await;
+            let me = net
+                .execute_as::<crate::net::dto::UserDto>(api::me(), true)
+                .await;
+            let audit = net
+                .execute_as::<Vec<crate::net::dto::SecurityAuditDto>>(api::security_audit(), true)
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                if let Ok(rows) = sessions {
+                    app.security_sessions = rows;
+                }
+                if let Ok(me) = me {
+                    app.twofa_enabled = me.totp_enabled;
+                }
+                if let Ok(rows) = audit {
+                    app.security_audit = rows;
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub(crate) fn revoke_security_session(&mut self, session_id: String, cx: &mut Context<Self>) {
+        let Some(net) = self.net.clone() else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let result = net.execute(api::revoke_session(&session_id), true).await;
+            let _ = this.update(cx, |app, cx| {
+                app.security_notice = Some(match result {
+                    Ok(_) => "会话已撤销".into(),
+                    Err(error) => format!("撤销失败：{}", error.user_message()),
+                });
+                app.refresh_security(cx);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub(crate) fn logout_everywhere(&mut self, cx: &mut Context<Self>) {
+        let Some(net) = self.net.clone() else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let result = net.execute(api::logout_all(), true).await;
+            let _ = this.update(cx, |app, cx| {
+                app.security_notice = Some(match result {
+                    Ok(_) => "已退出全部设备，请重新登录".into(),
+                    Err(error) => format!("退出失败：{}", error.user_message()),
+                });
+                app.logout(cx);
+            });
+        })
+        .detach();
+    }
+
+    pub(crate) fn change_account_password(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let old = self.old_password_edit.read(cx).value().to_string();
+        let new = self.new_password_edit.read(cx).value().to_string();
+        if old.is_empty() || new.len() < 8 {
+            self.security_notice = Some("请填写当前密码，新密码至少 8 位".into());
+            cx.notify();
+            return;
+        }
+        let Some(net) = self.net.clone() else {
+            return;
+        };
+        self.old_password_edit
+            .update(cx, |input, cx| input.set_value(String::new(), window, cx));
+        self.new_password_edit
+            .update(cx, |input, cx| input.set_value(String::new(), window, cx));
+        cx.spawn(async move |this, cx| {
+            let result = net
+                .execute(api::change_password(&old, &new), true)
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                app.security_notice = Some(match result {
+                    Ok(_) => "密码已修改，其他设备会话已撤销".into(),
+                    Err(error) => format!("修改失败：{}", error.user_message()),
+                });
+                app.refresh_security(cx);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub(crate) fn start_two_factor(&mut self, cx: &mut Context<Self>) {
+        let Some(net) = self.net.clone() else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let result = net
+                .execute_as::<crate::net::dto::TwoFactorSetupDto>(api::two_factor_setup(), true)
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                match result {
+                    Ok(setup) => {
+                        app.twofa_secret = Some((setup.secret, setup.otpauth_url));
+                        app.security_notice = Some("请用验证器扫描/录入密钥后输入验证码启用".into());
+                    }
+                    Err(error) => {
+                        app.security_notice =
+                            Some(format!("初始化 2FA 失败：{}", error.user_message()));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub(crate) fn enable_two_factor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let code = self.twofa_code_edit.read(cx).value().trim().to_string();
+        if code.is_empty() {
+            self.security_notice = Some("请输入验证器中的 6 位验证码".into());
+            cx.notify();
+            return;
+        }
+        let Some(net) = self.net.clone() else {
+            return;
+        };
+        self.twofa_code_edit
+            .update(cx, |input, cx| input.set_value(String::new(), window, cx));
+        cx.spawn(async move |this, cx| {
+            let result = net
+                .execute_as::<crate::net::dto::TwoFactorEnabledDto>(
+                    api::two_factor_enable(&code),
+                    true,
+                )
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                match result {
+                    Ok(enabled) => {
+                        app.twofa_enabled = true;
+                        app.twofa_secret = None;
+                        app.recovery_codes = enabled.recovery_codes;
+                        app.security_notice =
+                            Some("双因素认证已启用，恢复码只显示一次".into());
+                    }
+                    Err(error) => {
+                        app.security_notice =
+                            Some(format!("启用失败：{}", error.user_message()));
+                    }
+                }
+                app.refresh_security(cx);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub(crate) fn disable_two_factor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let code = self.twofa_code_edit.read(cx).value().trim().to_string();
+        if code.is_empty() {
+            self.security_notice = Some("请输入验证码或恢复码".into());
+            cx.notify();
+            return;
+        }
+        let Some(net) = self.net.clone() else {
+            return;
+        };
+        self.twofa_code_edit
+            .update(cx, |input, cx| input.set_value(String::new(), window, cx));
+        cx.spawn(async move |this, cx| {
+            let result = net
+                .execute(api::two_factor_disable(&code), true)
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                match result {
+                    Ok(_) => {
+                        app.twofa_enabled = false;
+                        app.recovery_codes.clear();
+                        app.security_notice = Some("双因素认证已关闭".into());
+                    }
+                    Err(error) => {
+                        app.security_notice =
+                            Some(format!("关闭失败：{}", error.user_message()));
+                    }
+                }
+                app.refresh_security(cx);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     /// 保存「概览」：改名时同步迁移消息键与折叠键，保留分类展开状态。
     pub(crate) fn save_server_overview(&mut self, cx: &mut Context<Self>) {
         let index = self.active_server;
@@ -10974,8 +11200,17 @@ impl DiscordApp {
     }
 
     /// 切换设置页左侧分类。
-    pub(crate) fn select_settings_section(&mut self, section: SettingsSection) {
+    pub(crate) fn select_settings_section(
+        &mut self,
+        section: SettingsSection,
+        cx: &mut Context<Self>,
+    ) {
         self.settings_section = section;
+        self.security_notice = None;
+        if section == SettingsSection::Privacy {
+            self.refresh_security(cx);
+        }
+        cx.notify();
     }
 
     /// 切换主题：同时改自定义色板与 gpui-component 的组件主题（输入框等控件读后者）。

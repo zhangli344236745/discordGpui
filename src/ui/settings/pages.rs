@@ -365,9 +365,218 @@ fn privacy(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
         Box::new(|this, _, _| this.toggle_notifications()),
         cx,
     ));
-    page = page
-        .child(group("说明"))
-        .child(note_row("本 Demo 为纯前端模拟，数据仅保存在内存中。"));
+    if let Some(note) = &app.security_notice {
+        page = page.child(
+            div()
+                .text_size(px(12.))
+                .text_color(rgb(palette::text_secondary()))
+                .child(note.clone()),
+        );
+    }
+
+    // ---- 已登录设备 ----
+    let mut sessions = v_flex().gap(px(8.));
+    if app.security_sessions.is_empty() {
+        sessions = sessions.child(note_row("正在加载，或当前没有其它会话。"));
+    }
+    for (index, session) in app.security_sessions.iter().enumerate() {
+        let session_id = session.id.clone();
+        let device = if session.device.trim().is_empty() {
+            "未知设备".to_string()
+        } else {
+            session.device.chars().take(60).collect()
+        };
+        sessions = sessions.child(
+            h_flex()
+                .justify_between()
+                .items_center()
+                .px_3()
+                .py_2()
+                .rounded(px(6.))
+                .bg(rgb(palette::bg_sidebar()))
+                .child(
+                    v_flex()
+                        .gap(px(2.))
+                        .child(
+                            div()
+                                .text_size(px(13.))
+                                .text_color(rgb(palette::text_primary()))
+                                .child(device),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(rgb(palette::text_dim()))
+                                .child(format!("{} · {}", session.ip, session.created_at)),
+                        ),
+                )
+                .child(small_button(
+                    "撤销",
+                    format!("security-session-{index}"),
+                    Box::new(move |this, _, cx| {
+                        this.revoke_security_session(session_id.clone(), cx)
+                    }),
+                    cx,
+                )),
+        );
+    }
+    page = page.child(group("已登录设备")).child(sessions).child(
+        h_flex().w_full().justify_end().child(small_button(
+            "退出全部设备",
+            "security-logout-all".into(),
+            Box::new(|this, _, cx| this.logout_everywhere(cx)),
+            cx,
+        )),
+    );
+
+    // ---- 修改密码 ----
+    page = page.child(group("修改密码")).child(
+        v_flex()
+            .gap(px(8.))
+            .child(
+                h_flex()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .child(<Input as Sizable>::with_size(
+                                Input::new(&app.old_password_edit),
+                                Size::Small,
+                            )),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .child(<Input as Sizable>::with_size(
+                                Input::new(&app.new_password_edit),
+                                Size::Small,
+                            )),
+                    )
+                    .child(small_button(
+                        "保存",
+                        "security-password-save".into(),
+                        Box::new(|this, window, cx| this.change_account_password(window, cx)),
+                        cx,
+                    )),
+            )
+            .child(note_row("修改密码会撤销其它设备会话。")),
+    );
+
+    // ---- 双因素认证 ----
+    let mut twofa = v_flex().gap(px(8.));
+    if app.twofa_enabled {
+        twofa = twofa
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(rgb(palette::success()))
+                    .child("已启用：登录时需要 TOTP 验证码"),
+            )
+            .child(
+                h_flex()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .w(px(220.))
+                            .child(<Input as Sizable>::with_size(
+                                Input::new(&app.twofa_code_edit),
+                                Size::Small,
+                            )),
+                    )
+                    .child(small_button(
+                        "关闭 2FA",
+                        "security-2fa-disable".into(),
+                        Box::new(|this, window, cx| this.disable_two_factor(window, cx)),
+                        cx,
+                    )),
+            );
+    } else if let Some((secret, url)) = &app.twofa_secret {
+        twofa = twofa
+            .child(note_row("用验证器录入下面的密钥（或打开 otpauth 链接），再输入 6 位验证码。"))
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(rgb(palette::text_link()))
+                    .child(format!("密钥：{secret}")),
+            )
+            .child(
+                div()
+                    .text_size(px(10.))
+                    .text_color(rgb(palette::text_dim()))
+                    .child(url.clone()),
+            )
+            .child(
+                h_flex()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .w(px(220.))
+                            .child(<Input as Sizable>::with_size(
+                                Input::new(&app.twofa_code_edit),
+                                Size::Small,
+                            )),
+                    )
+                    .child(small_button(
+                        "启用",
+                        "security-2fa-enable".into(),
+                        Box::new(|this, window, cx| this.enable_two_factor(window, cx)),
+                        cx,
+                    )),
+            );
+    } else {
+        twofa = twofa.child(small_button(
+            "开始设置 2FA",
+            "security-2fa-setup".into(),
+            Box::new(|this, _, cx| this.start_two_factor(cx)),
+            cx,
+        ));
+    }
+    if !app.recovery_codes.is_empty() {
+        twofa = twofa.child(note_row("恢复码（只显示一次，请妥善保存）：")).child(
+            div()
+                .text_size(px(11.))
+                .text_color(rgb(palette::text_secondary()))
+                .child(app.recovery_codes.join("  ·  ")),
+        );
+    }
+    page = page.child(group("双因素认证")).child(twofa);
+
+    // ---- 安全审计 ----
+    let mut audit = v_flex().gap(px(4.));
+    if app.security_audit.is_empty() {
+        audit = audit.child(note_row("暂无安全审计记录。"));
+    }
+    for entry in app.security_audit.iter().take(10) {
+        audit = audit.child(
+            h_flex()
+                .gap(px(8.))
+                .px_3()
+                .py_1()
+                .rounded(px(4.))
+                .bg(rgb(palette::bg_sidebar()))
+                .child(
+                    div()
+                        .w(px(150.))
+                        .text_size(px(12.))
+                        .text_color(if entry.success {
+                            rgb(palette::text_primary())
+                        } else {
+                            rgb(palette::danger())
+                        })
+                        .child(entry.event.clone()),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .truncate()
+                        .text_size(px(11.))
+                        .text_color(rgb(palette::text_dim()))
+                        .child(format!("{} · {}", entry.ip, entry.created_at)),
+                ),
+        );
+    }
+    page = page.child(group("安全审计")).child(audit);
+
     page
 }
 
