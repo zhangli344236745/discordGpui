@@ -11305,6 +11305,9 @@ impl DiscordApp {
                     let auto_accept =
                         std::env::var("DISCORD_DM_CALL_AUTO").ok().as_deref() == Some("answer");
                     self.call_ring = Some(crate::ui::sound::CallRing::start(0.7));
+                    // Dock 图标跳动提示（不抢焦点）
+                    let entity_id = cx.entity_id();
+                    cx.with_window(entity_id, |window, _| window.request_attention());
                     self.dm_call = Some(DmCall {
                         friend,
                         color,
@@ -11337,6 +11340,14 @@ impl DiscordApp {
             }
             "CALL_DECLINE" | "CALL_END" => {
                 self.call_ring = None;
+                if let Some(call) = &self.dm_call
+                    && call.incoming
+                    && !call.connected
+                    && call.call_id.as_deref()
+                        == data.get("id").and_then(|value| value.as_str())
+                {
+                    self.automod_notice = Some(format!("未接来电：{}", call.friend));
+                }
                 if self.dm_call.as_ref().and_then(|call| call.call_id.as_deref())
                     == data.get("id").and_then(|value| value.as_str())
                 {

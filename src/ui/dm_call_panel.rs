@@ -451,7 +451,11 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> AnyElement {
         .overflow_hidden()
         .bg(rgb(palette::bg_footer()))
         .border_1()
-        .border_color(rgb(palette::border_default()))
+        .border_color(rgb(if incoming && !connected {
+            palette::danger()
+        } else {
+            palette::border_default()
+        }))
         .shadow_lg()
         .id("dm-call-panel")
         .child(header)
