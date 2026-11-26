@@ -172,6 +172,13 @@ async def send_dm_message(
     db.add(message)
     dm.last_message_id = message.id
     dm_service.set_last_read(dm, user.id, message.id)
+    outbox.queue(
+        db,
+        "user",
+        user.id,
+        Event.DM_READ,
+        {"dm_id": dm.id, "last_read_message_id": message.id},
+    )
     try:
         await db.flush()
     except IntegrityError:
@@ -240,6 +247,13 @@ async def mark_dm_read(
     current = dm_service.last_read_of(dm, user.id)
     if latest and (current is None or latest > current):
         dm_service.set_last_read(dm, user.id, latest)
+        outbox.queue(
+            db,
+            "user",
+            user.id,
+            Event.DM_READ,
+            {"dm_id": dm.id, "last_read_message_id": latest},
+        )
         await db.commit()
     return {"dm_id": dm.id, "last_read_message_id": dm_service.last_read_of(dm, user.id), "unread": 0}
 

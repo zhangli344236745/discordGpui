@@ -69,6 +69,8 @@ class Event:
     CALL_END = "CALL_END"
     BOOKMARK_UPDATE = "BOOKMARK_UPDATE"
     DRAFT_UPDATE = "DRAFT_UPDATE"
+    CHANNEL_READ = "CHANNEL_READ"
+    DM_READ = "DM_READ"
     PONG = "PONG"
     ERROR = "ERROR"
 
@@ -136,6 +138,8 @@ DOWNLINK_EVENTS: tuple[str, ...] = (
     Event.CALL_END,
     Event.BOOKMARK_UPDATE,
     Event.DRAFT_UPDATE,
+    Event.CHANNEL_READ,
+    Event.DM_READ,
 )
 
 

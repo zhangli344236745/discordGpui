@@ -72,6 +72,16 @@ async def update_channel_state(
         current = state.last_read_message_id
         if current is None or body.last_read_message_id > current:
             state.last_read_message_id = body.last_read_message_id
+            outbox.queue(
+                db,
+                "user",
+                user.id,
+                Event.CHANNEL_READ,
+                {
+                    "channel_id": channel_id,
+                    "last_read_message_id": body.last_read_message_id,
+                },
+            )
             read = await db.get(ReadState, (channel_id, user.id))
             if read is None:
                 db.add(

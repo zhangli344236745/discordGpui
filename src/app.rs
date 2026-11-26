@@ -2411,6 +2411,7 @@ impl DiscordApp {
         self.sync_invite_channel();
         self.reset_session(window, cx);
         self.ensure_channel_loaded(cx);
+        self.mark_current_channel_read(cx);
     }
 
     /// 切换当前服务器的频道。
@@ -2427,6 +2428,7 @@ impl DiscordApp {
         self.active_channel = name;
         self.reset_session(window, cx);
         self.ensure_channel_loaded(cx);
+        self.mark_current_channel_read(cx);
     }
 
     /// 打开与某好友的私信。
@@ -2440,6 +2442,7 @@ impl DiscordApp {
         self.active_dm = Some(friend.clone());
         self.reset_session(window, cx);
         self.ensure_dm_loaded(friend, cx);
+        self.mark_current_dm_read(cx);
     }
 
     /// 从好友发起新私信：若还没有会话则补建会话条目与空消息列表，再切入。
@@ -8319,6 +8322,84 @@ impl DiscordApp {
         cx.notify();
     }
 
+    /// 当前频道已读：清本地角标并上报服务端（其它设备通过 CHANNEL_READ 同步）。
+    pub(crate) fn mark_current_channel_read(&mut self, cx: &mut Context<Self>) {
+        let key = self.session_key();
+        let Some(channel_id) = self.remote.channels.get(&key).cloned() else {
+            return;
+        };
+        let Some(last) = self
+            .messages
+            .get(&key)
+            .and_then(|list| list.last())
+            .map(|message| message.id.clone())
+        else {
+            return;
+        };
+        self.clear_channel_unread(&key);
+        if !self.is_online() {
+            return;
+        }
+        let Some(net) = self.net.clone() else {
+            return;
+        };
+        cx.spawn(async move |_, _| {
+            let _ = net
+                .execute(api::mark_channel_read(&channel_id, &last), true)
+                .await;
+        })
+        .detach();
+    }
+
+    /// 当前私信已读：清角标并上报。
+    pub(crate) fn mark_current_dm_read(&mut self, cx: &mut Context<Self>) {
+        let Some(friend) = self.active_dm.clone() else {
+            return;
+        };
+        let Some(dm_id) = self.remote.dms.get(&friend).cloned() else {
+            return;
+        };
+        let last = self
+            .dm_messages
+            .get(&friend)
+            .and_then(|list| list.last())
+            .map(|message| message.id.clone());
+        if let Some(conversation) = self
+            .dm_conversations
+            .iter_mut()
+            .find(|conversation| conversation.friend == friend)
+        {
+            conversation.unread = 0;
+        }
+        if !self.is_online() {
+            return;
+        }
+        let Some(net) = self.net.clone() else {
+            return;
+        };
+        cx.spawn(async move |_, _| {
+            let _ = net
+                .execute(api::mark_dm_read(&dm_id, last.as_deref()), true)
+                .await;
+        })
+        .detach();
+    }
+
+    fn clear_channel_unread(&mut self, key: &str) {
+        let Some((server, channel)) = key.split_once('/') else {
+            return;
+        };
+        if let Some(server) = self.servers.iter_mut().find(|item| item.name == server)
+            && let Some(channel) = server
+                .categories
+                .iter_mut()
+                .flat_map(|category| category.channels.iter_mut())
+                .find(|item| item.name == channel)
+        {
+            channel.unread = 0;
+        }
+    }
+
     /// 追加一条通话记录（最新在前）。
     fn record_call(&mut self, outcome: &str) {
         let Some(call) = &self.dm_call else {
@@ -11269,11 +11350,25 @@ impl DiscordApp {
                 if let Some(dm_id) = data.get("dm_id").and_then(|value| value.as_str()) {
                     if let Ok(dto) = serde_json::from_value::<crate::net::dto::DmMessageDto>(data.clone()) {
                         self.insert_dm_message(dm_id, &dto);
+                        if self.view_mode == ViewMode::DirectMessage
+                            && self
+                                .remote
+                                .dms
+                                .iter()
+                                .any(|(friend, id)| {
+                                    id == dm_id && Some(friend.as_str()) == self.active_dm.as_deref()
+                                })
+                        {
+                            self.mark_current_dm_read(cx);
+                        }
                     }
                 } else if let Ok(dto) = serde_json::from_value::<MessageDto>(data.clone())
                     && let Some(key) = self.channel_key_for_id(&dto.channel_id)
                 {
                     self.insert_message(&key, &dto);
+                    if self.view_mode == ViewMode::Server && key == self.session_key() {
+                        self.mark_current_channel_read(cx);
+                    }
                 }
             }
             "MESSAGE_UPDATE" => {
@@ -11475,6 +11570,31 @@ impl DiscordApp {
                         }
                         cx.notify();
                     }
+                }
+            }
+            "CHANNEL_READ" => {
+                if let Some(channel_id) = data.get("channel_id").and_then(|value| value.as_str())
+                    && let Some(key) = self.channel_key_for_id(channel_id)
+                {
+                    self.clear_channel_unread(&key);
+                    cx.notify();
+                }
+            }
+            "DM_READ" => {
+                if let Some(dm_id) = data.get("dm_id").and_then(|value| value.as_str())
+                    && let Some(friend) = self
+                        .remote
+                        .dms
+                        .iter()
+                        .find(|(_, id)| id.as_str() == dm_id)
+                        .map(|(name, _)| name.clone())
+                    && let Some(conversation) = self
+                        .dm_conversations
+                        .iter_mut()
+                        .find(|conversation| conversation.friend == friend)
+                {
+                    conversation.unread = 0;
+                    cx.notify();
                 }
             }
             "DRAFT_UPDATE" => {
@@ -11734,7 +11854,7 @@ impl DiscordApp {
                 )
                 .await;
             if result.is_ok() {
-                let _ = net.execute(api::mark_dm_read(&dm_id), true).await;
+                let _ = net.execute(api::mark_dm_read(&dm_id, None), true).await;
             }
             let _ = this.update(cx, |app, _cx| match result {
                 Ok(page) => {

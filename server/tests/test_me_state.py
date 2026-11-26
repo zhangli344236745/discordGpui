@@ -108,3 +108,25 @@ async def test_drafts_upsert_clear_and_isolation(client: AsyncClient, world: dic
     assert (
         await client.put(f"/api/v1/me/drafts/{dm_scope}", headers=outsider_headers, json={"content": "x"})
     ).status_code == 404
+
+
+async def test_channel_read_broadcasts_event(client: AsyncClient, world: dict) -> None:
+    alice = world["alice"]
+    channel_id = world["channel"]["id"]
+    sent = await client.post(
+        f"/api/v1/channels/{channel_id}/messages",
+        headers=alice,
+        json={"content": "已读同步", "client_nonce": "read-sync-1"},
+    )
+    assert sent.status_code == 201
+
+    async with SessionLocal() as db:
+        rows = (
+            await db.scalars(
+                select(GatewayEvent).where(
+                    GatewayEvent.scope_kind == "user",
+                    GatewayEvent.event == "CHANNEL_READ",
+                )
+            )
+        ).all()
+    assert any(row.payload.get("channel_id") == channel_id for row in rows)

@@ -293,7 +293,7 @@ async def mark_read(
     ctx: ChannelContext = Depends(channel_context),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    message_id = body.get("message_id")
+    message_id = body.get("message_id") or body.get("last_read_message_id")
     if message_id is None:
         message_id = await db.scalar(
             select(Message.id).where(Message.channel_id == ctx.channel.id).order_by(Message.id.desc()).limit(1)
@@ -305,6 +305,16 @@ async def mark_read(
         db.add(ReadState(channel_id=ctx.channel.id, user_id=ctx.user.id, last_read_message_id=message_id))
     else:
         read.last_read_message_id = message_id
+    from app.realtime import outbox
+    from app.realtime.events import Event
+
+    outbox.queue(
+        db,
+        "user",
+        ctx.user.id,
+        Event.CHANNEL_READ,
+        {"channel_id": ctx.channel.id, "last_read_message_id": message_id},
+    )
     await db.commit()
 
 

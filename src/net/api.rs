@@ -780,7 +780,7 @@ pub fn remove_reaction(message_id: &str, emoji: &str) -> ApiRequest {
 
 pub fn mark_channel_read(channel_id: &str, message_id: &str) -> ApiRequest {
     ApiRequest::new(Method::Post, format!("/api/v1/channels/{channel_id}/read"))
-        .with_body(json!({ "last_read_message_id": message_id }))
+        .with_body(json!({ "message_id": message_id }))
 }
 
 pub fn typing(channel_id: &str) -> ApiRequest {
@@ -843,8 +843,9 @@ pub fn hangup_dm_call(dm_id: &str) -> ApiRequest {
     ApiRequest::new(Method::Post, format!("/api/v1/dms/{dm_id}/call/hangup"))
 }
 
-pub fn mark_dm_read(dm_id: &str) -> ApiRequest {
-    ApiRequest::new(Method::Patch, format!("/api/v1/dms/{dm_id}/read")).with_body(json!({}))
+pub fn mark_dm_read(dm_id: &str, message_id: Option<&str>) -> ApiRequest {
+    ApiRequest::new(Method::Patch, format!("/api/v1/dms/{dm_id}/read"))
+        .with_body(json!({ "last_read_message_id": message_id }))
 }
 
 pub fn message_requests() -> ApiRequest {

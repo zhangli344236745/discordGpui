@@ -134,3 +134,30 @@ async def test_message_request_ignore_and_delete(client: AsyncClient, world: dic
     )
     assert bob_to_dave.status_code == 409
 
+
+
+async def test_dm_read_broadcasts_event(client: AsyncClient, world: dict) -> None:
+    from sqlalchemy import select
+
+    from app.db import SessionLocal
+    from app.models import GatewayEvent
+
+    dm_id = world["dm_id"]
+    bob = world["bob"]
+    sent = await client.post(
+        f"/api/v1/dms/{dm_id}/messages",
+        headers=bob,
+        json={"content": "私信已读", "client_nonce": "dm-read-1"},
+    )
+    assert sent.status_code == 201
+
+    async with SessionLocal() as db:
+        rows = (
+            await db.scalars(
+                select(GatewayEvent).where(
+                    GatewayEvent.scope_kind == "user",
+                    GatewayEvent.event == "DM_READ",
+                )
+            )
+        ).all()
+    assert any(row.payload.get("dm_id") == dm_id for row in rows)

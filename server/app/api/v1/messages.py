@@ -26,6 +26,7 @@ from app.models import (
     User,
 )
 from app.ops import MESSAGES_TOTAL
+from app.realtime import outbox
 from app.realtime.bus import bus
 from app.realtime.events import Event
 from app.schemas.message import MessageCreate, MessageOut, MessagePatch, ReactionIn
@@ -298,6 +299,13 @@ async def send_message(
     read = await db.get(ReadState, (channel.id, user.id))
     if read is not None:
         read.last_read_message_id = message.id
+    outbox.queue(
+        db,
+        "user",
+        user.id,
+        Event.CHANNEL_READ,
+        {"channel_id": channel.id, "last_read_message_id": message.id},
+    )
 
     await notifications.channel_mentions(
         db, message, channel, user, can_everyone="MENTION_EVERYONE" in perms
