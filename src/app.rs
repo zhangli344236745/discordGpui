@@ -701,6 +701,11 @@ pub struct DiscordApp {
     pub(crate) voice_autojoin_done: bool,
     /// join 请求在途：避免 READY 重连校准与首次加入并发重复 join。
     pub(crate) voice_joining: bool,
+    /// 语音设备：引擎枚举结果与当前选择（名称用于设置页展示）。
+    pub(crate) voice_devices: Option<crate::voice::DeviceList>,
+    pub(crate) voice_input_device: Option<(String, String)>,
+    pub(crate) voice_output_device: Option<(String, String)>,
+    pub(crate) voice_device_note: Option<String>,
     pub(crate) voice_handle: Option<crate::voice::VoiceHandle>,
 
     // 私信通话：Some 即显示悬浮通话面板，跨会话与设置页保持。
@@ -777,6 +782,19 @@ pub struct DiscordApp {
     // 本地持久化：上次落盘的快照 JSON（内容不变就不重复写盘）+ 数据页提示。
     pub(crate) saved_json: String,
     pub(crate) persist_note: Option<&'static str>,
+}
+
+/// 在设备列表里取当前项的下一个（循环）。
+fn next_device(list: &[(String, String)], current: Option<&(String, String)>) -> (String, String) {
+    let position = current
+        .and_then(|(id, _)| list.iter().position(|(candidate, _)| candidate == id))
+        .unwrap_or(usize::MAX);
+    let index = if position == usize::MAX {
+        0
+    } else {
+        (position + 1) % list.len()
+    };
+    list[index].clone()
 }
 
 fn mime_for_path(path: &std::path::Path) -> &'static str {
@@ -1578,6 +1596,10 @@ impl DiscordApp {
             voice_channel_id: None,
             voice_autojoin_done: false,
             voice_joining: false,
+            voice_devices: None,
+            voice_input_device: None,
+            voice_output_device: None,
+            voice_device_note: None,
             voice_handle: None,
             dm_call: None,
             discover_servers: seed_discover_servers(),
@@ -7576,6 +7598,7 @@ impl DiscordApp {
                     match &event {
                         crate::voice::VoiceEvent::Connected => {
                             app.voice_notice = Some("已连接语音".to_string());
+                            app.refresh_voice_devices(cx);
                         }
                         crate::voice::VoiceEvent::Reconnecting => {
                             app.voice_notice = Some("语音重连中…".to_string());
@@ -7591,6 +7614,7 @@ impl DiscordApp {
                         }
                         crate::voice::VoiceEvent::MicUnavailable(reason) => {
                             app.voice_notice = Some(reason.clone());
+                            app.voice_device_note = Some(reason.clone());
                         }
                         crate::voice::VoiceEvent::Failed(reason) => {
                             app.voice_notice = Some(reason.clone());
@@ -7601,6 +7625,10 @@ impl DiscordApp {
                     }
                     if close {
                         app.voice_handle = None;
+                        app.voice_devices = None;
+                        app.voice_input_device = None;
+                        app.voice_output_device = None;
+                        app.voice_device_note = None;
                     }
                     cx.notify();
                 });
@@ -11784,6 +11812,81 @@ impl DiscordApp {
     pub(crate) fn toggle_mic(&mut self, cx: &mut Context<Self>) {
         self.mic_on = !self.mic_on;
         self.sync_voice_state(cx);
+    }
+
+    /// 拉取当前引擎的输入/输出设备列表（仅连接语音后可用）。
+    pub(crate) fn refresh_voice_devices(&mut self, cx: &mut Context<Self>) {
+        let Some(handle) = &self.voice_handle else {
+            self.voice_devices = None;
+            self.voice_device_note = Some("加入语音频道后可切换设备".into());
+            return;
+        };
+        let (tx, rx) = async_channel::bounded(1);
+        if handle
+            .commands
+            .send_blocking(crate::voice::VoiceCommand::ListDevices { reply: tx })
+            .is_err()
+        {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            if let Ok(list) = rx.recv().await {
+                let _ = this.update(cx, |app, cx| {
+                    if app.voice_input_device.is_none() {
+                        app.voice_input_device = list.recording.first().cloned();
+                    }
+                    if app.voice_output_device.is_none() {
+                        app.voice_output_device = list.playout.first().cloned();
+                    }
+                    if list.recording.is_empty() {
+                        app.voice_device_note =
+                            Some("没有检测到麦克风，请检查系统权限与设备连接".into());
+                    } else {
+                        app.voice_device_note = None;
+                    }
+                    app.voice_devices = Some(list);
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// 在可用设备间循环切换（设置页与语音面板共用）。
+    pub(crate) fn cycle_input_device(&mut self, cx: &mut Context<Self>) {
+        let Some(list) = self.voice_devices.clone() else {
+            self.refresh_voice_devices(cx);
+            return;
+        };
+        if list.recording.is_empty() {
+            return;
+        }
+        let next = next_device(&list.recording, self.voice_input_device.as_ref());
+        if let Some(handle) = &self.voice_handle {
+            let _ = handle
+                .commands
+                .send_blocking(crate::voice::VoiceCommand::SetRecordingDevice(next.0.clone()));
+        }
+        self.voice_input_device = Some(next);
+        cx.notify();
+    }
+
+    pub(crate) fn cycle_output_device(&mut self, cx: &mut Context<Self>) {
+        let Some(list) = self.voice_devices.clone() else {
+            self.refresh_voice_devices(cx);
+            return;
+        };
+        if list.playout.is_empty() {
+            return;
+        }
+        let next = next_device(&list.playout, self.voice_output_device.as_ref());
+        if let Some(handle) = &self.voice_handle {
+            let _ = handle
+                .commands
+                .send_blocking(crate::voice::VoiceCommand::SetPlayoutDevice(next.0.clone()));
+        }
+        self.voice_output_device = Some(next);
+        cx.notify();
     }
 
     /// 把本端麦克风/摄像头/共享状态写回服务端，供其他端展示。

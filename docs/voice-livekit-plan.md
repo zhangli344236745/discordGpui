@@ -40,6 +40,27 @@ scripts/voice-e2e.sh                  # 需要 docker + livekit/livekit-server �
 - `-Wl,-undefined,dynamic_lookup`：预编译库引用 macOS 14+ ScreenCaptureKit 符号，旧 SDK 链接不到；
   音频路径不会触发，升级到 macOS 14+ SDK 后可移除。
 
+## 4.4 设备选择（已实现）
+
+- 设置 → 声音与视频新增「设备」分组：输入/输出设备名 + 「切换」循环切换；
+- 设备来自引擎侧 `PlatformAudio::recording_devices/playout_devices`，切换调用
+  `set_recording_device/set_playout_device`；
+- 麦克风权限被拒时提示（语音面板状态条 + 设置页说明），不崩溃。
+
+## 仍未实现：摄像头与屏幕共享（4.3 剩余）
+
+LiveKit Rust SDK 只提供 `NativeVideoSource`（手动推帧），没有平台摄像头/屏幕采集封装，需要：
+
+1. **摄像头**：`AVCaptureSession` + `AVCaptureVideoDataOutput`（objc2-av-foundation），
+   将 `CVPixelBuffer` 转 I420 后 `NativeVideoSource::capture_frame`；
+2. **屏幕共享**：`ScreenCaptureKit`（macOS 13+）的 `SCStream`，同样转 I420 推帧；
+   需要「屏幕录制」权限引导；
+3. 发布/取消发布：`LocalVideoTrack::create_video_track` + `publish_track/unpublish_track`，
+   状态回写 `PUT /voice/{room}/me` 的 `camera/screen` 字段（后端与 webhook 已支持）。
+
+本机无摄像头硬件、且无法可视化验证画面，因此未提交未经运行验证的采集代码；
+该部分建议在具备 AVFoundation 调试环境的机器上作为独立增量实现。
+
 ## 更早的「仅信令」部分（离线/未启用 feature 时仍生效）
 
 - 客户端点击语音频道 → `POST /channels/{id}/voice/join`：拿 `room` 与参与者投影，面板显示真实在线成员；

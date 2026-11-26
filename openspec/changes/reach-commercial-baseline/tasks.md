@@ -33,7 +33,7 @@
 - [x] 4.1 引入 LiveKit Rust SDK（voice-livekit feature）+ VoiceProvider 抽象；未启用/构建失败时回退仅信令
 - [x] 4.2 客户端连接语音频道：真实房间 + 麦克风发布 + 平台 ADM 自动播放远端音频（scripts/voice-e2e.sh 验证）
 - [ ] 4.3 麦克风/摄像头/屏幕共享开关与服务端状态同步（麦克风已完成并联动服务端；摄像头/屏幕共享待补）
-- [ ] 4.4 设备选择与权限缺失提示（SDK 已暴露 PlatformAudio 设备枚举，待接设置页 UI）
+- [x] 4.4 设备选择与权限缺失提示：设置页「设备」行循环切换（引擎 PlatformAudio 枚举/切换），权限拒绝提示且不崩溃
 - [x] 4.5 服务器侧静音/移除走 RoomService（LIVEKIT_ROOMSERVICE_ENABLED 开关，不可达回退 Demo 投影）；验证 webhook 状态回写
 - [x] 4.6 弱网自动重连：SDK Reconnecting/Reconnected 事件 + 信令层参与者校准；验证重连后无重复参与者
 - [x] 4.7 私信真实通话：呼叫/接听返回 token，双端加入 dm: 房间并发布麦克风（scripts/dm-call-e2e.sh 验证）

@@ -21,10 +21,22 @@ pub enum VoiceEvent {
     Failed(String),
 }
 
+/// 可用音频设备：`(id, name)`，按系统顺序。
+#[derive(Clone, Debug, Default)]
+pub struct DeviceList {
+    pub recording: Vec<(String, String)>,
+    pub playout: Vec<(String, String)>,
+}
+
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub enum VoiceCommand {
     SetMic(bool),
+    ListDevices {
+        reply: Sender<DeviceList>,
+    },
+    SetRecordingDevice(String),
+    SetPlayoutDevice(String),
     Disconnect,
 }
 
@@ -133,6 +145,31 @@ async fn run(
                     Ok(VoiceCommand::SetMic(on)) => {
                         if let Some(track) = &mic {
                             if on { track.unmute() } else { track.mute() }
+                        }
+                    }
+                    Ok(VoiceCommand::ListDevices { reply }) => {
+                        let list = DeviceList {
+                            recording: audio
+                                .recording_devices()
+                                .map(|device| (device.id.as_str().to_string(), device.name))
+                                .collect(),
+                            playout: audio
+                                .playout_devices()
+                                .map(|device| (device.id.as_str().to_string(), device.name))
+                                .collect(),
+                        };
+                        let _ = reply.send(list).await;
+                    }
+                    Ok(VoiceCommand::SetRecordingDevice(id)) => {
+                        let device = RecordingDeviceId::from_unchecked_guid(&id);
+                        if let Err(error) = audio.set_recording_device(&device) {
+                            eprintln!("[voice] set recording device failed: {error}");
+                        }
+                    }
+                    Ok(VoiceCommand::SetPlayoutDevice(id)) => {
+                        let device = PlayoutDeviceId::from_unchecked_guid(&id);
+                        if let Err(error) = audio.set_playout_device(&device) {
+                            eprintln!("[voice] set playout device failed: {error}");
                         }
                     }
                     Ok(VoiceCommand::Disconnect) | Err(_) => {

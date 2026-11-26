@@ -458,8 +458,77 @@ fn appearance(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
     page
 }
 
+/// 设备行：左侧标签 + 当前设备名，右侧「切换」按钮。
+fn device_row(
+    label: &'static str,
+    value: Option<String>,
+    id: String,
+    handler: Box<ClickHandler>,
+    cx: &mut Context<DiscordApp>,
+) -> Div {
+    h_flex()
+        .w_full()
+        .items_center()
+        .justify_between()
+        .px(px(16.))
+        .py(px(12.))
+        .rounded(px(8.))
+        .bg(rgb(palette::bg_sidebar()))
+        .child(
+            v_flex()
+                .gap(px(4.))
+                .child(
+                    div()
+                        .text_size(px(14.))
+                        .text_color(rgb(palette::text_primary()))
+                        .child(label),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(rgb(palette::text_secondary()))
+                        .child(value.unwrap_or_else(|| "未检测到设备".into())),
+                ),
+        )
+        .child(small_button("切换", id, handler, cx))
+}
+
 fn voice_video(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
-    let mut page = shell("声音与视频", "调整输入与输出设备音量。");
+    let mut page = shell("声音与视频", "选择设备并调整输入与输出音量。");
+
+    page = page.child(group("设备")).child(
+        v_flex()
+            .gap(px(8.))
+            .child(device_row(
+                "输入设备",
+                app.voice_input_device.as_ref().map(|(_, name)| name.clone()),
+                "settings-input-device".into(),
+                Box::new(|this, _, cx| this.cycle_input_device(cx)),
+                cx,
+            ))
+            .child(device_row(
+                "输出设备",
+                app.voice_output_device.as_ref().map(|(_, name)| name.clone()),
+                "settings-output-device".into(),
+                Box::new(|this, _, cx| this.cycle_output_device(cx)),
+                cx,
+            ))
+            .child(
+                div()
+                    .px(px(16.))
+                    .text_size(px(12.))
+                    .text_color(rgb(palette::text_dim()))
+                    .child(
+                        app.voice_device_note
+                            .clone()
+                            .unwrap_or_else(|| {
+                                "设备列表在加入语音后可用；若系统拒绝麦克风权限，请到 系统设置 → 隐私与安全性 → 麦克风 开启。"
+                                    .into()
+                            }),
+                    ),
+            ),
+    );
+
     page = page.child(group("音量")).child(volume_row(
         "输入音量",
         app.input_volume,
