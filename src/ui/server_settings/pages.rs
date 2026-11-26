@@ -28,6 +28,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
         ServerSettingsSection::Emoji => emoji(app, cx),
         ServerSettingsSection::Invites => invites(app, cx),
         ServerSettingsSection::Members => members(app, cx),
+        ServerSettingsSection::Commands => commands(app, cx),
         ServerSettingsSection::Audit => audit(app, cx),
         ServerSettingsSection::Boost => boost(app, cx),
     }
@@ -1078,6 +1079,153 @@ fn automod(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
 }
 
 /// 动作二选一按钮。
+fn commands(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
+    let server = app.active_server_name();
+    let rows = app.commands_by_server.get(&server).cloned().unwrap_or_default();
+
+    let mut page = shell(
+        "斜杠命令",
+        "自定义命令需要 MANAGE_SERVER；内置 /help 与 /shrug 对所有服务器可用。",
+    );
+
+    if let Some(note) = &app.commands_notice {
+        page = page.child(
+            div()
+                .text_size(px(12.))
+                .text_color(rgb(palette::text_secondary()))
+                .child(note.clone()),
+        );
+    }
+
+    let form = card()
+        .child(field_label("新建命令"))
+        .child(
+            h_flex()
+                .gap_2()
+                .items_center()
+                .child(
+                    div()
+                        .w(px(190.))
+                        .min_w_0()
+                        .child(
+                            <Input as Sizable>::with_size(
+                                Input::new(&app.command_name_edit),
+                                Size::Small,
+                            )
+                            .w_full(),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(
+                            <Input as Sizable>::with_size(
+                                Input::new(&app.command_response_edit),
+                                Size::Small,
+                            )
+                            .w_full(),
+                        ),
+                )
+                .child(command_action(
+                    "创建",
+                    "server-command-create".to_string(),
+                    false,
+                    Box::new(|this, window, cx| this.create_server_command(window, cx)),
+                    cx,
+                )),
+        )
+        .child(hint("回复模板可用 {args} 插入参数，例如：开始部署 {args}"));
+
+    let mut list = card().child(field_label("现有命令"));
+    if rows.is_empty() {
+        list = list.child(hint("还没有命令，或正在加载…"));
+    }
+    for (index, row) in rows.into_iter().enumerate() {
+        let kind_label = if row.kind == "builtin" { "内置" } else { "自定义" };
+        let detail = if !row.description.is_empty() {
+            row.description.clone()
+        } else if !row.response.is_empty() {
+            row.response.clone()
+        } else {
+            "—".to_string()
+        };
+        let mut line = h_flex()
+            .gap_3()
+            .items_center()
+            .px_2()
+            .py_2()
+            .rounded(px(6.))
+            .bg(rgb(palette::bg_rail()))
+            .child(
+                div()
+                    .w(px(150.))
+                    .text_size(px(13.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(palette::text_primary()))
+                    .child(format!("/{}", row.name)),
+            )
+            .child(
+                div()
+                    .w(px(48.))
+                    .text_size(px(11.))
+                    .text_color(rgb(palette::text_dim()))
+                    .child(kind_label),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(12.))
+                    .text_color(rgb(palette::text_secondary()))
+                    .child(detail),
+            );
+        if row.kind != "builtin" {
+            let command_id = row.id.clone();
+            line = line.child(command_action(
+                "删除",
+                format!("server-command-delete-{index}"),
+                true,
+                Box::new(move |this, _, cx| this.delete_server_command(command_id.clone(), cx)),
+                cx,
+            ));
+        }
+        list = list.child(line);
+    }
+
+    page.child(form).child(list)
+}
+
+/// 小型动作按钮（创建 / 删除）。
+fn command_action(
+    label: &'static str,
+    id: String,
+    danger: bool,
+    handler: Box<dyn Fn(&mut DiscordApp, &mut Window, &mut Context<DiscordApp>)>,
+    cx: &mut Context<DiscordApp>,
+) -> impl IntoElement {
+    div()
+        .px_3()
+        .h(px(30.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(6.))
+        .bg(rgb(if danger {
+            palette::danger()
+        } else {
+            palette::accent()
+        }))
+        .text_color(rgb(palette::WHITE))
+        .text_size(px(12.))
+        .font_weight(FontWeight::SEMIBOLD)
+        .hover(|el| el.opacity(0.85))
+        .child(label)
+        .id(id)
+        .on_click(cx.listener(move |this, _, window, cx| handler(this, window, cx)))
+}
+
 fn action_button(
     title: &'static str,
     desc: &'static str,

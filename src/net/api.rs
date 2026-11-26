@@ -224,6 +224,24 @@ pub fn server_commands(server_id: &str) -> ApiRequest {
     )
 }
 
+pub fn create_server_command(server_id: &str, name: &str, response: &str) -> ApiRequest {
+    ApiRequest::new(Method::Post, format!("/api/v1/servers/{server_id}/commands")).with_body(
+        json!({
+            "name": name,
+            "description": "",
+            "kind": "custom",
+            "response": response,
+        }),
+    )
+}
+
+pub fn delete_server_command(server_id: &str, command_id: &str) -> ApiRequest {
+    ApiRequest::new(
+        Method::Delete,
+        format!("/api/v1/servers/{server_id}/commands/{command_id}"),
+    )
+}
+
 pub fn run_command(channel_id: &str, name: &str, args: &str) -> ApiRequest {
     ApiRequest::new(
         Method::Post,

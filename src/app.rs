@@ -369,6 +369,7 @@ pub(crate) enum ServerSettingsSection {
     Emoji,
     Invites,
     Members,
+    Commands,
     Audit,
     Boost,
 }
@@ -651,6 +652,10 @@ pub struct DiscordApp {
     pub(crate) server_settings_section: ServerSettingsSection,
     pub(crate) server_name_edit: Entity<InputState>,
     pub(crate) server_desc_edit: Entity<InputState>,
+    /// 服务器设置「斜杠命令」：名称/回复输入与操作提示。
+    pub(crate) command_name_edit: Entity<InputState>,
+    pub(crate) command_response_edit: Entity<InputState>,
+    pub(crate) commands_notice: Option<String>,
     /// 服务器自定义表情（Demo：可移除与恢复，不做上传）。
     pub(crate) server_emojis: Vec<&'static str>,
     pub(crate) removed_server_emojis: Vec<&'static str>,
@@ -806,6 +811,17 @@ pub struct DiscordApp {
     // 本地持久化：上次落盘的快照 JSON（内容不变就不重复写盘）+ 数据页提示。
     pub(crate) saved_json: String,
     pub(crate) persist_note: Option<&'static str>,
+}
+
+/// 自定义命令名规则：小写字母/数字/连字符，1–32 位。
+pub(crate) fn valid_command_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 32
+        && name
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
+        && !name.starts_with('-')
+        && !name.ends_with('-')
 }
 
 /// 平铺排序等级：发言者 > 屏幕共享 > 其它（数值越小越靠前）。
@@ -1109,6 +1125,10 @@ impl DiscordApp {
         let login_username = cx.new(|cx| InputState::new(window, cx).placeholder("用户名（注册时使用）"));
         let server_name_edit =
             cx.new(|cx| InputState::new(window, cx).placeholder("服务器名称"));
+        let command_name_edit =
+            cx.new(|cx| InputState::new(window, cx).placeholder("命令名（小写，如 deploy）"));
+        let command_response_edit =
+            cx.new(|cx| InputState::new(window, cx).placeholder("回复模板，可含 {args}"));
         let role_name_edit = cx.new(|cx| InputState::new(window, cx).placeholder("角色名称"));
         let automod_name_edit =
             cx.new(|cx| InputState::new(window, cx).placeholder("规则名称，例如 广告拦截"));
@@ -1622,6 +1642,9 @@ impl DiscordApp {
             server_settings_section: ServerSettingsSection::Overview,
             server_name_edit,
             server_desc_edit,
+            command_name_edit,
+            command_response_edit,
+            commands_notice: None,
             server_emojis: vec![
                 "🎨", "🚀", "🔥", "✅", "👀", "🦀", "🎧", "🎮", "🍜", "🌙", "💡", "🐧",
             ],
@@ -8997,6 +9020,10 @@ impl DiscordApp {
         {
             self.select_role(first, window, cx);
         }
+        self.commands_notice = None;
+        if section == ServerSettingsSection::Commands {
+            self.refresh_server_commands(cx);
+        }
         // 进自动审核页时默认选中第一条规则。
         if section == ServerSettingsSection::AutoMod
             && self.selected_automod.is_none()
@@ -9005,6 +9032,107 @@ impl DiscordApp {
             self.selected_automod = Some(first);
         }
         cx.notify();
+    }
+
+    /// 重新拉取当前服务器的斜杠命令（进入设置页/增删后调用）。
+    pub(crate) fn refresh_server_commands(&mut self, cx: &mut Context<Self>) {
+        let server = self.active_server_name();
+        self.commands_by_server.remove(&server);
+        self.ensure_commands(cx);
+        cx.notify();
+    }
+
+    /// 创建自定义斜杠命令。
+    pub(crate) fn create_server_command(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let name = self
+            .command_name_edit
+            .read(cx)
+            .value()
+            .trim()
+            .to_lowercase();
+        let response = self.command_response_edit.read(cx).value().trim().to_string();
+        if name.is_empty() || response.is_empty() {
+            self.commands_notice = Some("命令名和回复模板都要填写".into());
+            cx.notify();
+            return;
+        }
+        if !valid_command_name(&name) {
+            self.commands_notice = Some("命令名只能包含小写字母、数字与连字符".into());
+            cx.notify();
+            return;
+        }
+        let (Some(server_id), Some(net)) = (
+            self.remote
+                .servers
+                .get(&self.active_server_name())
+                .cloned(),
+            self.net.clone(),
+        ) else {
+            self.commands_notice = Some("当前离线，无法创建命令".into());
+            cx.notify();
+            return;
+        };
+        let display = name.clone();
+        self.command_name_edit
+            .update(cx, |input, cx| input.set_value(String::new(), window, cx));
+        self.command_response_edit
+            .update(cx, |input, cx| input.set_value(String::new(), window, cx));
+        cx.spawn(async move |this, cx| {
+            let result = net
+                .execute(api::create_server_command(&server_id, &name, &response), true)
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                match result {
+                    Ok(_) => {
+                        app.commands_notice = Some(format!("已创建 /{display}"));
+                        app.refresh_server_commands(cx);
+                    }
+                    Err(error) => {
+                        app.commands_notice =
+                            Some(format!("创建失败：{}", error.user_message()));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// 删除自定义命令。
+    pub(crate) fn delete_server_command(&mut self, command_id: String, cx: &mut Context<Self>) {
+        let (Some(server_id), Some(net)) = (
+            self.remote
+                .servers
+                .get(&self.active_server_name())
+                .cloned(),
+            self.net.clone(),
+        ) else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let result = net
+                .execute(api::delete_server_command(&server_id, &command_id), true)
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                match result {
+                    Ok(_) => {
+                        app.commands_notice = Some("命令已删除".into());
+                        app.refresh_server_commands(cx);
+                    }
+                    Err(error) => {
+                        app.commands_notice =
+                            Some(format!("删除失败：{}", error.user_message()));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// 保存「概览」：改名时同步迁移消息键与折叠键，保留分类展开状态。
@@ -12996,6 +13124,16 @@ mod tests {
         assert_eq!(DiscordApp::parse_slash_command("/"), None);
         assert_eq!(DiscordApp::parse_slash_command("hello"), None);
         assert_eq!(DiscordApp::parse_slash_command("/bad name!"), Some(("bad".into(), "name!".into())));
+    }
+
+    #[test]
+    fn validates_command_names() {
+        assert!(super::valid_command_name("deploy"));
+        assert!(super::valid_command_name("roll-dice2"));
+        assert!(!super::valid_command_name(""));
+        assert!(!super::valid_command_name("Deploy"));
+        assert!(!super::valid_command_name("-bad"));
+        assert!(!super::valid_command_name("has space"));
     }
 
     #[test]
