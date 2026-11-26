@@ -1,6 +1,7 @@
 use gpui_kit::*;
 
 use crate::app::DiscordApp;
+use super::command_picker;
 use crate::data::Attachment;
 use crate::ui::theme::palette;
 use crate::ui::{
@@ -95,6 +96,9 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
     // 输入框 placeholder 由 app.reset_session 在切换会话时统一更新。
     let mut wrapper = v_flex().mx_4().mb_6().gap_2().relative();
 
+    if app.command_query.is_some() {
+        wrapper = wrapper.child(command_picker::render(app, cx));
+    }
     if let Some(attachment) = &app.attachment_draft {
         wrapper = wrapper.child(attachment_chip(attachment, cx));
     }

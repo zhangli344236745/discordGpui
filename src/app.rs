@@ -724,6 +724,10 @@ pub struct DiscordApp {
     pub(crate) remote_video_status: Option<String>,
     /// 当前聚焦放大的画面键：(参与者标识, 来源)。
     pub(crate) video_focus: Option<(String, String)>,
+    /// 服务器斜杠命令缓存（服务器名 → 命令列表）。
+    pub(crate) commands_by_server: HashMap<String, Vec<crate::net::dto::SlashCommandDto>>,
+    /// 输入框里的斜杠命令前缀（不含 `/`）；None 表示不显示候选。
+    pub(crate) command_query: Option<String>,
     pub(crate) voice_handle: Option<crate::voice::VoiceHandle>,
 
     // 私信通话：Some 即显示悬浮通话面板，跨会话与设置页保持。
@@ -1144,6 +1148,7 @@ impl DiscordApp {
                 InputEvent::PressEnter { secondary: false, .. } => this.send_message(window, cx),
                 InputEvent::Change => {
                     this.refresh_mention(cx);
+                    this.refresh_command_query(cx);
                     this.maybe_send_typing(cx);
                 }
                 _ => {}
@@ -1657,6 +1662,8 @@ impl DiscordApp {
             video_frames: HashMap::new(),
             remote_video_status: None,
             video_focus: None,
+            commands_by_server: HashMap::new(),
+            command_query: None,
             voice_camera_on: false,
             voice_screen_on: false,
             screen_targets: Vec::new(),
@@ -3666,6 +3673,13 @@ impl DiscordApp {
     /// 发送当前草稿到当前会话。
     pub(crate) fn send_message(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let text = self.composer.read(cx).value().trim().to_string();
+        // 服务器频道里的 `/command` 由命令执行器处理，不走普通消息
+        if self.view_mode == ViewMode::Server
+            && text.starts_with('/')
+            && self.run_slash_command(&text, window, cx)
+        {
+            return;
+        }
         // 允许「只发附件不写字」，与 Discord 行为一致。
         if (text.is_empty() && self.attachment_draft.is_none())
             || self.view_mode == ViewMode::Friends
@@ -4459,6 +4473,155 @@ impl DiscordApp {
         }
         self.close_emoji_picker();
         cx.notify();
+    }
+
+    /// 输入框变化时更新斜杠命令候选。
+    pub(crate) fn refresh_command_query(&mut self, cx: &mut Context<Self>) {
+        let text = self.composer.read(cx).value();
+        let query = text.strip_prefix('/').filter(|rest| !rest.contains(char::is_whitespace));
+        self.command_query = query.map(str::to_string);
+        if self.command_query.is_some() && self.view_mode == ViewMode::Server {
+            self.ensure_commands(cx);
+        }
+        cx.notify();
+    }
+
+    /// 拉取当前服务器的命令列表（含内置 help/shrug）；已缓存则跳过。
+    pub(crate) fn ensure_commands(&mut self, cx: &mut Context<Self>) {
+        if self.view_mode != ViewMode::Server {
+            return;
+        }
+        let server = self.active_server_name();
+        if self.commands_by_server.contains_key(&server) {
+            return;
+        }
+        let (Some(server_id), Some(net)) = (self.remote.servers.get(&server).cloned(), self.net.clone()) else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let result = net
+                .execute_as::<Vec<crate::net::dto::SlashCommandDto>>(
+                    api::server_commands(&server_id),
+                    true,
+                )
+                .await;
+            if let Ok(rows) = result {
+                let _ = this.update(cx, |app, cx| {
+                    app.commands_by_server.insert(server, rows);
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// 当前输入前缀匹配到的命令（最多 6 条）。
+    pub(crate) fn command_suggestions(&self) -> Vec<crate::net::dto::SlashCommandDto> {
+        let Some(query) = &self.command_query else {
+            return Vec::new();
+        };
+        let server = self.active_server_name();
+        self.commands_by_server
+            .get(&server)
+            .map(|rows| {
+                rows.iter()
+                    .filter(|row| row.name.starts_with(query.as_str()))
+                    .take(6)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// 点击候选：补全为 `/name `。
+    pub(crate) fn apply_command_suggestion(
+        &mut self,
+        name: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.composer
+            .update(cx, |input, cx| input.set_value(format!("/{name} "), window, cx));
+        self.command_query = None;
+        self.mention_prefix = None;
+        self.mention_candidates.clear();
+        self.composer.update(cx, |input, cx| input.focus(window, cx));
+        cx.notify();
+    }
+
+    /// 解析 `/name args`；非命令返回 None。
+    fn parse_slash_command(text: &str) -> Option<(String, String)> {
+        let rest = text.strip_prefix('/')?;
+        let (name, args) = match rest.split_once(char::is_whitespace) {
+            Some((name, args)) => (name, args.trim()),
+            None => (rest, ""),
+        };
+        if name.is_empty() || !name.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-') {
+            return None;
+        }
+        Some((name.to_string(), args.to_string()))
+    }
+
+    /// 执行斜杠命令：客户端只负责发送与展示结果。
+    fn run_slash_command(
+        &mut self,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some((name, args)) = Self::parse_slash_command(text) else {
+            return false;
+        };
+        if self.view_mode != ViewMode::Server {
+            return false;
+        }
+        let server = self.active_server_name();
+        let known = self
+            .commands_by_server
+            .get(&server)
+            .is_some_and(|rows| rows.iter().any(|row| row.name == name));
+        // 缓存未加载时仍允许内置命令，其余按普通消息发送
+        if !known && !matches!(name.as_str(), "help" | "shrug") {
+            return false;
+        }
+        let Some(channel_id) = self.remote.channels.get(&self.session_key()).cloned() else {
+            return false;
+        };
+        let Some(net) = self.net.clone() else {
+            return false;
+        };
+        self.composer
+            .update(cx, |input, cx| input.set_value(String::new(), window, cx));
+        self.command_query = None;
+        self.mention_prefix = None;
+        self.mention_candidates.clear();
+        cx.spawn(async move |this, cx| {
+            let result = net
+                .execute_as::<crate::net::dto::CommandResultDto>(
+                    api::run_command(&channel_id, &name, &args),
+                    true,
+                )
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                match result {
+                    Ok(outcome) => {
+                        if outcome.message_id.is_some() {
+                            app.automod_notice = Some(format!("/{name} 已执行"));
+                        } else {
+                            let summary = outcome.response.replace('\n', "  ·  ");
+                            app.automod_notice = Some(format!("/{name}：{summary}"));
+                        }
+                    }
+                    Err(error) => {
+                        app.automod_notice = Some(format!("/{name} 执行失败：{}", error.user_message()));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+        true
     }
 
     /// 设置/取消对某条消息的回复：摘要取该消息正文前 60 字（贴纸/附件退化为文案）。
@@ -12756,6 +12919,22 @@ mod tests {
         );
         assert_eq!(resolve_focus_key(&Some(key("alice", "camera")), &keys), None);
         assert_eq!(resolve_focus_key(&None, &keys), None);
+    }
+
+    #[test]
+    fn parses_slash_commands() {
+        use super::DiscordApp;
+        assert_eq!(
+            DiscordApp::parse_slash_command("/help"),
+            Some(("help".into(), "".into()))
+        );
+        assert_eq!(
+            DiscordApp::parse_slash_command("/deploy prod now"),
+            Some(("deploy".into(), "prod now".into()))
+        );
+        assert_eq!(DiscordApp::parse_slash_command("/"), None);
+        assert_eq!(DiscordApp::parse_slash_command("hello"), None);
+        assert_eq!(DiscordApp::parse_slash_command("/bad name!"), Some(("bad".into(), "name!".into())));
     }
 
     #[test]

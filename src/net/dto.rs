@@ -461,6 +461,28 @@ pub struct VoiceJoinDto {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct SlashCommandDto {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub response: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct CommandResultDto {
+    #[serde(default)]
+    pub response: String,
+    #[serde(default)]
+    pub message_id: Option<String>,
+    #[serde(default)]
+    pub ephemeral: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct DraftDto {
     pub scope: String,
     #[serde(default)]

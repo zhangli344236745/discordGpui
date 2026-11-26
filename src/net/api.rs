@@ -217,6 +217,24 @@ pub fn voice_set_state(room: &str, mic: bool, camera: bool, screen: bool) -> Api
     .with_body(json!({ "mic": mic, "camera": camera, "screen": screen }))
 }
 
+pub fn server_commands(server_id: &str) -> ApiRequest {
+    ApiRequest::new(
+        Method::Get,
+        format!("/api/v1/servers/{server_id}/commands"),
+    )
+}
+
+pub fn run_command(channel_id: &str, name: &str, args: &str) -> ApiRequest {
+    ApiRequest::new(
+        Method::Post,
+        format!(
+            "/api/v1/channels/{channel_id}/commands/{}",
+            encode_component(name)
+        ),
+    )
+    .with_body(json!({ "args": args }))
+}
+
 pub fn drafts() -> ApiRequest {
     ApiRequest::new(Method::Get, "/api/v1/me/drafts")
 }
