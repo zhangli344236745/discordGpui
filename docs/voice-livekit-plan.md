@@ -65,19 +65,22 @@ scripts/voice-e2e.sh                  # 需要 docker + livekit/livekit-server �
   LiveKit webhook 分别上报 `source=CAMERA`（640x360 编码层）与 `source=SCREEN_SHARE`（1280x720）；
 - 服务端 webhook 按 `track.source`（而不是 `type`）更新 mic/camera/screen 投影。
 
-## 仍未实现：远端画面渲染（4.3 剩余）
+## 仍未实现：远端画面渲染与频道面板开关（4.3 剩余）
 
-LiveKit Rust SDK 只提供 `NativeVideoSource`（手动推帧），没有平台摄像头/屏幕采集封装，需要：
+采集与发布已经打通（见上），剩下的是**把远端视频画出来**以及**频道语音面板的摄像头/屏幕按钮**：
 
-1. **摄像头**：`AVCaptureSession` + `AVCaptureVideoDataOutput`（objc2-av-foundation），
-   将 `CVPixelBuffer` 转 I420 后 `NativeVideoSource::capture_frame`；
-2. **屏幕共享**：`ScreenCaptureKit`（macOS 13+）的 `SCStream`，同样转 I420 推帧；
-   需要「屏幕录制」权限引导；
-3. 发布/取消发布：`LocalVideoTrack::create_video_track` + `publish_track/unpublish_track`，
-   状态回写 `PUT /voice/{room}/me` 的 `camera/screen` 字段（后端与 webhook 已支持）。
+1. **拉流**：`RoomEvent::TrackSubscribed` 里对 `RemoteVideoTrack` 建
+   `NativeVideoStream::new(track.rtc_track(), Some(2))`，其内部 `VideoFrameQueue`
+   在解码线程产出 `I420Buffer`；
+2. **转格式**：`libwebrtc::native::yuv_helper::i420_to_bgra`（或 `i420_to_rgba`）；
+3. **上屏**：转成 `gpui::RenderImage`（`image::Frame` + `RenderImage::new`），
+   在 DM 通话面板/语音房间面板按参与者渲染成 tile；帧率按 15fps 节流，避免 UI 过载；
+4. **本地预览**：把 `NativeVideoSource` 的最近一帧同样送 UI（可复用同一条转换路径）；
+5. **频道面板**：`ui/voice_room.rs` 增加摄像头/屏幕按钮，复用 `SetCamera/SetScreen` 命令
+   与 `PUT /voice/{room}/me`（后端与引擎均已支持）。
 
-本机无摄像头硬件、且无法可视化验证画面，因此未提交未经运行验证的采集代码；
-该部分建议在具备 AVFoundation 调试环境的机器上作为独立增量实现。
+这部分主要风险在 GPUI 纹理/图像组件的接入与 UI 布局，建议作为独立 UI 增量实现；
+传输、采集、权限与服务端状态同步均已验证。
 
 ## 更早的「仅信令」部分（离线/未启用 feature 时仍生效）
 
