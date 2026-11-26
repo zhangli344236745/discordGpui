@@ -1637,12 +1637,14 @@ pub struct DmConversation {
 }
 
 /// 通知来源类型，决定图标与文案。
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum NotificationKind {
     Mention,
     UnreadChannel,
     Dm,
     FriendRequest,
+    /// 举报处理结果等系统通知。
+    System,
 }
 
 /// 通知跳转目标。
@@ -1653,14 +1655,18 @@ pub enum NotificationTarget {
     Friends,
 }
 
-/// 收件箱通知条目，由 app 层从未读数据聚合而来。
+/// 收件箱通知条目：来自服务端 `/notifications`，或由 app 层从未读数据聚合而来。
 #[derive(Clone)]
 pub struct Notification {
+    /// 服务端通知 ID；本地聚合的通知为空字符串。
+    pub id: String,
     pub kind: NotificationKind,
     pub title: String,
     pub body: String,
     pub time: &'static str,
     pub color: u32,
+    /// 服务端已读状态；本地聚合通知恒为 false，改由已读集合判定。
+    pub read: bool,
     pub target: NotificationTarget,
 }
 

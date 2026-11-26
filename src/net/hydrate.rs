@@ -792,6 +792,7 @@ pub fn hydrate(data: BootData) -> Hydrated {
             "mention" => NotificationKind::Mention,
             "dm" => NotificationKind::Dm,
             "friend_request" => NotificationKind::FriendRequest,
+            "report" | "system" => NotificationKind::System,
             _ => NotificationKind::UnreadChannel,
         };
         let target = if notification.target_kind == "dm"
@@ -825,11 +826,13 @@ pub fn hydrate(data: BootData) -> Hydrated {
             NotificationTarget::Friends
         };
         notifications.push(Notification {
+            id: notification.id.clone(),
             kind,
             title: notification.title.clone(),
             body: notification.body.clone(),
             time: short_time(&notification.created_at),
             color: 0x5865f2,
+            read: notification.read,
             target,
         });
     }

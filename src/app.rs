@@ -92,6 +92,54 @@ impl EventFilter {
     }
 }
 
+/// 收件箱筛选：全部 / 未读 / 按来源类型。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NotificationFilter {
+    All,
+    Unread,
+    Mention,
+    Dm,
+    UnreadChannel,
+    FriendRequest,
+    System,
+}
+
+impl NotificationFilter {
+    pub(crate) const ALL: [NotificationFilter; 7] = [
+        NotificationFilter::All,
+        NotificationFilter::Unread,
+        NotificationFilter::Mention,
+        NotificationFilter::Dm,
+        NotificationFilter::UnreadChannel,
+        NotificationFilter::FriendRequest,
+        NotificationFilter::System,
+    ];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            NotificationFilter::All => "全部",
+            NotificationFilter::Unread => "未读",
+            NotificationFilter::Mention => "提及",
+            NotificationFilter::Dm => "私信",
+            NotificationFilter::UnreadChannel => "频道",
+            NotificationFilter::FriendRequest => "好友请求",
+            NotificationFilter::System => "系统",
+        }
+    }
+
+    /// 该筛选是否接受这个来源类型；`Unread` 只按已读状态过滤。
+    pub(crate) fn matches_kind(self, kind: NotificationKind) -> bool {
+        match self {
+            NotificationFilter::All | NotificationFilter::Unread => true,
+            NotificationFilter::Mention => kind == NotificationKind::Mention,
+            NotificationFilter::Dm => kind == NotificationKind::Dm,
+            NotificationFilter::UnreadChannel => kind == NotificationKind::UnreadChannel,
+            NotificationFilter::FriendRequest => kind == NotificationKind::FriendRequest,
+            NotificationFilter::System => kind == NotificationKind::System,
+        }
+    }
+}
+
 /// 消息请求面板的处理状态筛选。
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MessageRequestFilter {
@@ -432,6 +480,10 @@ pub struct DiscordApp {
     /// 收件箱面板显隐与已读通知的 title 集合（纯 Demo，不持久化）。
     pub(crate) show_inbox: bool,
     pub(crate) read_notifications: Vec<String>,
+    /// 当前收件箱筛选。
+    pub(crate) inbox_filter: NotificationFilter,
+    /// 「清除已读」移除的通知 key，仅本次会话生效。
+    pub(crate) cleared_notifications: Vec<String>,
     pub(crate) mic_on: bool,
     pub(crate) headphones_on: bool,
     pub(crate) notifications_on: bool,
@@ -1516,6 +1568,8 @@ impl DiscordApp {
             show_members: true,
             show_inbox: false,
             read_notifications: Vec::new(),
+            inbox_filter: NotificationFilter::All,
+            cleared_notifications: Vec::new(),
             mic_on: true,
             headphones_on: true,
             notifications_on: true,
@@ -2145,8 +2199,11 @@ impl DiscordApp {
     // 收件箱 / 通知中心
     // -----------------------------------------------------------------------
 
-    /// 通知的唯一 key（用于已读判定），由类型 + 目标标识组成。
+    /// 通知的唯一 key（用于已读/清除判定）：优先用服务端 ID，本地聚合用目标标识。
     fn notification_key(notification: &Notification) -> String {
+        if !notification.id.is_empty() {
+            return format!("id:{}", notification.id);
+        }
         match &notification.target {
             NotificationTarget::Channel { server, channel } => {
                 format!("channel:{server}:{channel}")
@@ -2156,11 +2213,86 @@ impl DiscordApp {
         }
     }
 
+    /// 服务端通知类型字符串 → 本地来源类型。
+    fn backend_notification_kind(kind: &str) -> NotificationKind {
+        match kind {
+            "mention" => NotificationKind::Mention,
+            "dm" => NotificationKind::Dm,
+            "friend_request" => NotificationKind::FriendRequest,
+            "report" | "system" => NotificationKind::System,
+            _ => NotificationKind::UnreadChannel,
+        }
+    }
+
+    /// 把服务端通知的目标 ID 解析成本地可跳转的目标。
+    fn backend_notification_target(
+        &self,
+        target_kind: &str,
+        target_id: &str,
+        title: &str,
+    ) -> NotificationTarget {
+        match target_kind {
+            "channel" => self
+                .remote
+                .channels
+                .iter()
+                .find(|(_, id)| id.as_str() == target_id)
+                .and_then(|(key, _)| key.split_once('/'))
+                .and_then(|(server, channel)| {
+                    self.servers
+                        .iter()
+                        .position(|candidate| candidate.name == server)
+                        .map(|server| NotificationTarget::Channel {
+                            server,
+                            channel: channel.to_string(),
+                        })
+                })
+                .unwrap_or(NotificationTarget::Friends),
+            // 私信通知的 title 是发送者显示名，直接用于打开会话。
+            "dm" => NotificationTarget::Dm(title.to_string()),
+            _ => NotificationTarget::Friends,
+        }
+    }
+
+    /// 用服务端返回的通知重建收件箱（启动同步与实时刷新共用）。
+    pub(crate) fn ingest_backend_notifications(
+        &mut self,
+        items: Vec<crate::net::dto::NotificationDto>,
+    ) {
+        self.backend_notifications = items
+            .into_iter()
+            .map(|item| {
+                let target =
+                    self.backend_notification_target(&item.target_kind, &item.target_id, &item.title);
+                Notification {
+                    id: item.id,
+                    kind: Self::backend_notification_kind(&item.kind),
+                    title: item.title,
+                    body: item.body,
+                    time: hydrate::short_time(&item.created_at),
+                    color: 0x5865f2,
+                    read: item.read,
+                    target,
+                }
+            })
+            .collect();
+    }
+
     /// 从未读频道、未读私信、收到的好友请求与 @提及 聚合通知列表。
     pub(crate) fn notifications(&self) -> Vec<Notification> {
-        if !self.backend_notifications.is_empty() {
-            return self.backend_notifications.clone();
-        }
+        let items = if !self.backend_notifications.is_empty() {
+            self.backend_notifications.clone()
+        } else {
+            self.aggregated_notifications()
+        };
+        items
+            .into_iter()
+            .filter(|n| !self.cleared_notifications.contains(&Self::notification_key(n)))
+            .collect()
+    }
+
+    /// 本地演示数据聚合出的通知（无后端或后端为空时回退）。
+    fn aggregated_notifications(&self) -> Vec<Notification> {
         let mut items: Vec<Notification> = Vec::new();
 
         // @提及：扫描所有会话消息中含 @已知好友 的文本。
@@ -2171,11 +2303,13 @@ impl DiscordApp {
                     if let Some(mention) = token.strip_prefix('@') {
                         if self.resolve_mention(mention).is_some() {
                             found.push(Notification {
+                                id: String::new(),
                                 kind: NotificationKind::Mention,
                                 title: format!("{} 在消息中提到了你", message.author),
                                 body: message.text.clone(),
                                 time: message.time,
                                 color: fallback_color,
+                                read: false,
                                 target: target.clone(),
                             });
                             break;
@@ -2200,11 +2334,13 @@ impl DiscordApp {
                     }
                     if channel.unread > 0 && channel.kind == ChannelKind::Text {
                         items.push(Notification {
+                            id: String::new(),
                             kind: NotificationKind::UnreadChannel,
                             title: format!("#{} 有 {} 条未读消息", channel.name, channel.unread),
                             body: channel.topic.clone(),
                             time: "最近",
                             color: server.color,
+                            read: false,
                             target: NotificationTarget::Channel {
                                 server: server_index,
                                 channel: channel.name.clone(),
@@ -2224,11 +2360,13 @@ impl DiscordApp {
         for conversation in &self.dm_conversations {
             if conversation.unread > 0 {
                 items.push(Notification {
+                    id: String::new(),
                     kind: NotificationKind::Dm,
                     title: format!("{} 发来 {} 条私信", conversation.friend, conversation.unread),
                     body: conversation.preview.to_string(),
                     time: "最近",
                     color: conversation.color,
+                    read: false,
                     target: NotificationTarget::Dm(conversation.friend.to_string()),
                 });
             }
@@ -2236,11 +2374,13 @@ impl DiscordApp {
 
         for request in self.friend_requests.iter().filter(|r| r.incoming) {
             items.push(Notification {
+                id: String::new(),
                 kind: NotificationKind::FriendRequest,
                 title: format!("{} 想添加你为好友", request.name),
                 body: "前往好友页处理请求".into(),
                 time: "最近",
                 color: request.color,
+                read: false,
                 target: NotificationTarget::Friends,
             });
         }
@@ -2248,20 +2388,30 @@ impl DiscordApp {
         items
     }
 
-    /// 未读通知数量：通知 key 不在已读集合中的条目数。
+    /// 通知是否已读：服务端已读状态或本地已读集合任一命中。
+    pub(crate) fn notification_is_read(&self, notification: &Notification) -> bool {
+        notification.read
+            || self
+                .read_notifications
+                .contains(&Self::notification_key(notification))
+    }
+
+    /// 未读通知数量：服务端未读 + 本地未读集合。
     pub(crate) fn unread_notification_count(&self) -> usize {
         self.notifications()
             .iter()
-            .filter(|n| !self.read_notifications.contains(&Self::notification_key(n)))
+            .filter(|n| !self.notification_is_read(n))
             .count()
     }
 
-    /// 指定索引的通知是否未读。
-    pub(crate) fn is_notification_unread(&self, index: usize) -> bool {
-        self.notifications()
-            .get(index)
-            .map(|n| !self.read_notifications.contains(&Self::notification_key(n)))
-            .unwrap_or(false)
+    /// 切换收件箱筛选。
+    pub(crate) fn set_inbox_filter(
+        &mut self,
+        filter: NotificationFilter,
+        cx: &mut Context<Self>,
+    ) {
+        self.inbox_filter = filter;
+        cx.notify();
     }
 
     /// 打开/关闭收件箱面板。
@@ -2278,12 +2428,36 @@ impl DiscordApp {
         cx.notify();
     }
 
-    /// 标记某条通知为已读。
+    /// 标记某条通知为已读（本地状态；服务端同步由 `sync_notification_read` 负责）。
     fn mark_notification_read(&mut self, notification: &Notification) {
+        if !notification.id.is_empty()
+            && let Some(item) = self
+                .backend_notifications
+                .iter_mut()
+                .find(|item| item.id == notification.id)
+        {
+            item.read = true;
+        }
         let key = Self::notification_key(notification);
         if !self.read_notifications.contains(&key) {
             self.read_notifications.push(key);
         }
+    }
+
+    /// 通知来自服务端时，把已读状态写回服务端，实现跨设备同步。
+    fn sync_notification_read(&self, notification: &Notification, cx: &mut Context<Self>) {
+        if notification.id.is_empty() {
+            return;
+        }
+        let (Some(net), id) = (self.net.clone(), notification.id.clone()) else {
+            return;
+        };
+        let ids = vec![id];
+        cx.spawn(async move |this, cx| {
+            let _ = net.execute(api::mark_notifications(&ids), true).await;
+            let _ = this.update(cx, |_, cx| cx.notify());
+        })
+        .detach();
     }
 
     /// 点击通知：按目标跳转会话并标记已读。
@@ -2297,6 +2471,7 @@ impl DiscordApp {
             return;
         };
         self.mark_notification_read(&notification);
+        self.sync_notification_read(&notification, cx);
         self.show_inbox = false;
         match notification.target {
             NotificationTarget::Channel { server, channel } => {
@@ -2315,10 +2490,36 @@ impl DiscordApp {
         cx.notify();
     }
 
-    /// 将全部当前通知标记为已读。
+    /// 将全部当前通知标记为已读，并同步到服务端。
     pub(crate) fn mark_all_notifications_read(&mut self, cx: &mut Context<Self>) {
-        for notification in self.notifications() {
-            self.mark_notification_read(&notification);
+        let items = self.notifications();
+        for notification in &items {
+            self.mark_notification_read(notification);
+        }
+        if !self.backend_notifications.is_empty()
+            && let Some(net) = self.net.clone()
+        {
+            cx.spawn(async move |this, cx| {
+                let _ = net.execute(api::mark_all_notifications(), true).await;
+                let _ = this.update(cx, |_, cx| cx.notify());
+            })
+            .detach();
+        }
+        cx.notify();
+    }
+
+    /// 清除已读通知（仅隐藏，不删除服务端记录；重新点开收件箱也不会立刻复活）。
+    pub(crate) fn clear_read_notifications(&mut self, cx: &mut Context<Self>) {
+        let items = self.notifications();
+        let read_keys: Vec<String> = items
+            .iter()
+            .filter(|n| self.notification_is_read(n))
+            .map(Self::notification_key)
+            .collect();
+        for key in read_keys {
+            if !self.cleared_notifications.contains(&key) {
+                self.cleared_notifications.push(key);
+            }
         }
         cx.notify();
     }
@@ -11812,17 +12013,7 @@ impl DiscordApp {
                             .await;
                         let _ = this.update(cx, |app, cx| {
                             if let Ok(page) = result {
-                                app.backend_notifications.clear();
-                                for notification in page.items {
-                                    app.backend_notifications.push(Notification {
-                                        kind: NotificationKind::UnreadChannel,
-                                        title: notification.title.clone(),
-                                        body: notification.body.clone(),
-                                        time: "最近",
-                                        color: 0x5865f2,
-                                        target: NotificationTarget::Friends,
-                                    });
-                                }
+                                app.ingest_backend_notifications(page.items);
                                 cx.notify();
                             }
                         });
@@ -13880,6 +14071,34 @@ mod tests {
         assert_eq!(
             resolve_focus_key(&Some(key("bob", "camera")), &keys),
             None
+        );
+    }
+
+    #[test]
+    fn notification_filters_match_kinds() {
+        use super::DiscordApp;
+        use super::NotificationFilter;
+        use super::NotificationKind;
+
+        assert!(NotificationFilter::All.matches_kind(NotificationKind::System));
+        assert!(NotificationFilter::Unread.matches_kind(NotificationKind::Dm));
+        assert!(NotificationFilter::Dm.matches_kind(NotificationKind::Dm));
+        assert!(!NotificationFilter::Dm.matches_kind(NotificationKind::UnreadChannel));
+        assert!(NotificationFilter::UnreadChannel.matches_kind(NotificationKind::UnreadChannel));
+        assert!(NotificationFilter::System.matches_kind(NotificationKind::System));
+        assert!(!NotificationFilter::Mention.matches_kind(NotificationKind::FriendRequest));
+
+        assert_eq!(
+            DiscordApp::backend_notification_kind("mention"),
+            NotificationKind::Mention
+        );
+        assert_eq!(
+            DiscordApp::backend_notification_kind("report"),
+            NotificationKind::System
+        );
+        assert_eq!(
+            DiscordApp::backend_notification_kind("unknown"),
+            NotificationKind::UnreadChannel
         );
     }
 }

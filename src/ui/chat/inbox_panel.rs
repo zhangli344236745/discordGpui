@@ -1,9 +1,9 @@
 use gpui_kit::*;
 
-use crate::app::DiscordApp;
+use crate::app::{DiscordApp, NotificationFilter};
 use crate::data::{Notification, NotificationKind};
 use crate::ui::theme::palette;
-use crate::ui::{avatar, ico};
+use crate::ui::{avatar, filter_chip, ico};
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{h_flex, v_flex, Size};
@@ -16,6 +16,7 @@ fn kind_meta(kind: NotificationKind) -> (IconName, &'static str) {
         NotificationKind::UnreadChannel => (IconName::Hash, "未读"),
         NotificationKind::Dm => (IconName::MessageSquare, "私信"),
         NotificationKind::FriendRequest => (IconName::UserPlus, "好友请求"),
+        NotificationKind::System => (IconName::Bell, "系统"),
     }
 }
 
@@ -119,10 +120,58 @@ fn notification_row(
         })
 }
 
+/// 分组顺序：提及 → 私信 → 频道 → 好友请求 → 系统。
+fn kind_rank(kind: NotificationKind) -> usize {
+    match kind {
+        NotificationKind::Mention => 0,
+        NotificationKind::Dm => 1,
+        NotificationKind::UnreadChannel => 2,
+        NotificationKind::FriendRequest => 3,
+        NotificationKind::System => 4,
+    }
+}
+
+/// 分组标题：类型图标 + 名称 + 条数。
+fn group_header(kind: NotificationKind, count: usize) -> impl IntoElement {
+    let (icon, label) = kind_meta(kind);
+    h_flex()
+        .w_full()
+        .px_2()
+        .pt_2()
+        .pb_1()
+        .gap_2()
+        .items_center()
+        .child(ico(icon, Size::XSmall).text_color(rgb(palette::text_dim())))
+        .child(
+            div()
+                .text_size(px(10.))
+                .font_weight(FontWeight::BOLD)
+                .text_color(rgb(palette::text_dim()))
+                .child(label),
+        )
+        .child(
+            div()
+                .text_size(px(10.))
+                .text_color(rgb(palette::text_muted()))
+                .child(format!("{count}")),
+        )
+        .child(
+            div()
+                .flex_1()
+                .h(px(1.))
+                .bg(rgb(palette::bg_divider())),
+        )
+}
+
 /// 收件箱面板：覆盖聊天区右侧，聚合提及/未读/私信/好友请求，点击跳转。
 pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElement {
     let notifications = app.notifications();
-    let unread_count = app.unread_notification_count();
+    let unread_count = notifications
+        .iter()
+        .filter(|n| !app.notification_is_read(n))
+        .count();
+    let read_count = notifications.len().saturating_sub(unread_count);
+    let active = app.inbox_filter;
 
     let header = h_flex()
         .h(px(48.))
@@ -146,7 +195,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                     div()
                         .text_size(px(10.))
                         .text_color(rgb(palette::text_dim()))
-                        .child(format!("{} 未读", unread_count)),
+                        .child(format!("{} 未读 · 共 {} 条", unread_count, notifications.len())),
                 ),
         )
         .child(
@@ -160,6 +209,9 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                         .rounded(px(4.))
                         .text_size(px(11.))
                         .text_color(rgb(palette::text_secondary()))
+                        .when(unread_count == 0, |el| {
+                            el.text_color(rgb(palette::text_muted()))
+                        })
                         .hover(|el| {
                             el.bg(rgb(palette::bg_channel_hover()))
                                 .text_color(rgb(palette::text_primary()))
@@ -170,6 +222,25 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                             this.mark_all_notifications_read(cx);
                         })),
                 )
+                .when(read_count > 0, |el| {
+                    el.child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .rounded(px(4.))
+                            .text_size(px(11.))
+                            .text_color(rgb(palette::text_secondary()))
+                            .hover(|el| {
+                                el.bg(rgb(palette::bg_channel_hover()))
+                                    .text_color(rgb(palette::text_primary()))
+                            })
+                            .child(format!("清除已读 {read_count}"))
+                            .id("inbox-clear-read")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.clear_read_notifications(cx);
+                            })),
+                    )
+                })
                 .child(
                     div()
                         .w(px(28.))
@@ -191,15 +262,60 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                 ),
         );
 
+    // 筛选标签：全部 / 未读 / 各来源类型，带条数。
+    let mut filters = h_flex()
+        .flex_shrink_0()
+        .px_3()
+        .py_2()
+        .gap_1()
+        .flex_wrap()
+        .border_b_1()
+        .border_color(rgb(palette::bg_header_border()));
+    for filter in NotificationFilter::ALL {
+        let count = match filter {
+            NotificationFilter::All => notifications.len(),
+            NotificationFilter::Unread => unread_count,
+            filter => notifications
+                .iter()
+                .filter(|n| filter.matches_kind(n.kind))
+                .count(),
+        };
+        filters = filters.child(filter_chip(
+            format!("{} {count}", filter.label()),
+            active == filter,
+            format!("inbox-filter-{}", filter.label()),
+            Box::new(move |this, _, cx| {
+                this.set_inbox_filter(filter, cx);
+            }),
+            cx,
+        ));
+    }
+
+    // 应用筛选；「全部」按来源分组展示。
+    let mut visible: Vec<(usize, &Notification)> = notifications
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| active.matches_kind(n.kind))
+        .filter(|(_, n)| active != NotificationFilter::Unread || !app.notification_is_read(n))
+        .collect();
+    if active == NotificationFilter::All {
+        visible.sort_by_key(|(_, n)| kind_rank(n.kind));
+    }
+
     let mut body = v_flex()
         .flex_1()
         .min_h_0()
         .p_2()
-        .gap_2()
+        .gap_1()
         .id("inbox-scroll")
         .overflow_y_scroll();
 
-    if notifications.is_empty() {
+    if visible.is_empty() {
+        let (title, hint) = if notifications.is_empty() {
+            ("收件箱空空如也", "有新的提及或未读消息时会显示在这里")
+        } else {
+            ("没有符合条件的通知", "换个筛选条件，或点「全部已读」后再清除")
+        };
         body = body.child(
             v_flex()
                 .h_full()
@@ -208,22 +324,24 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                 .gap_3()
                 .text_color(rgb(palette::text_muted()))
                 .child(ico(IconName::Inbox, Size::Large))
-                .child(
-                    div()
-                        .text_size(px(13.))
-                        .child("收件箱空空如也"),
-                )
-                .child(
-                    div()
-                        .text_size(px(11.))
-                        .child("有新的提及或未读消息时会显示在这里"),
-                ),
+                .child(div().text_size(px(13.)).child(title))
+                .child(div().text_size(px(11.)).child(hint)),
         );
-    }
-
-    for (index, notification) in notifications.iter().enumerate() {
-        let unread = app.is_notification_unread(index);
-        body = body.child(notification_row(notification, unread, index, cx));
+    } else {
+        let grouped = active == NotificationFilter::All;
+        let mut last_group: Option<NotificationKind> = None;
+        for (index, notification) in visible {
+            if grouped && last_group != Some(notification.kind) {
+                let count = notifications
+                    .iter()
+                    .filter(|n| n.kind == notification.kind)
+                    .count();
+                body = body.child(group_header(notification.kind, count));
+                last_group = Some(notification.kind);
+            }
+            let unread = !app.notification_is_read(notification);
+            body = body.child(notification_row(notification, unread, index, cx));
+        }
     }
 
     div()
@@ -239,5 +357,6 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
         .border_color(rgb(palette::border_default()))
         .shadow_lg()
         .child(header)
+        .child(filters)
         .child(body)
 }
