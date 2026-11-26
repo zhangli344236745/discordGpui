@@ -275,12 +275,11 @@ uv run python scripts/smoke.py http://127.0.0.1:8080
 
 ```bash
 scripts/build-voice.sh            # 带语音/摄像头/屏幕的客户端（首次会下载 libwebrtc）
-scripts/dev-voice.sh --client     # LiveKit(7880) + 后端(8090) + 客户端
+scripts/dev-voice.sh --client     # LiveKit(7880) + 后端(8080) + 客户端
 ```
 
-> 8080 可能被其他项目占用（本项目开发机上是一个 `hbase-rest-shim` 容器）。
-> `dev-voice.sh` 默认用 8090，也可 `PORT=8091` 指定；客户端需带
-> `DISCORD_API_BASE=http://127.0.0.1:8090` 启动，否则会连到占用 8080 的其他服务。
+> 08-80 被其他项目占用时（例如 `hbase-rest-shim`），`PORT=8090 scripts/dev-voice.sh --client`
+> 换端口即可；客户端需带同样的 `DISCORD_API_BASE`，否则会连到占用 8080 的其他服务。
 > LiveKit 的 webhook 必须指回后端端口，否则参与者状态不会同步。
 
 ### 客户端接后端（进行中）

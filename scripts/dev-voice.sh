@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 本地语音联调一键启动：LiveKit + 后端 + 客户端。
 #
-# 背景：8080 常被其他项目占用（例如 hbase-rest-shim），这里默认用 8090。
+# 默认端口 8080；被占用时可用 PORT=8090 等指定，客户端需带同样的 DISCORD_API_BASE。
 # 用法：
 #   scripts/dev-voice.sh                 # 启动 LiveKit + 后端，打印客户端启动命令
 #   scripts/dev-voice.sh --client        # 额外拉起客户端（带语音 feature 的构建）
@@ -9,7 +9,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PORT="${PORT:-8090}"
+PORT="${PORT:-8080}"
 LK_NAME="${LK_NAME:-dgpui-livekit-dev}"
 WEBHOOK="http://host.docker.internal:$PORT/api/v1/livekit/webhook"
 WITH_CLIENT=0

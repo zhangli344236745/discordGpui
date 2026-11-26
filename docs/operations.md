@@ -71,9 +71,9 @@ scripts/dev-voice.sh --client     # LiveKit + 后端 + 客户端
 ```
 
 - LiveKit 以 `--dev` 启动，密钥与 `server/app/config.py` 默认值一致；
-- webhook 地址必须指向后端端口（默认 8090），否则参与者投影不会更新；
+- webhook 地址必须指向后端端口（默认 8080），否则参与者投影不会更新；
 - 后端通过 `LIVEKIT_URL=ws://127.0.0.1:7880` 指向本机 LiveKit（生产用 wss）；
-- 若宿主机端口被占用，`PORT=8091 scripts/dev-voice.sh` 并给客户端设置对应的 `DISCORD_API_BASE`。
+- 若宿主机端口被占用，`PORT=8090 scripts/dev-voice.sh` 并给客户端设置对应的 `DISCORD_API_BASE`。
 
 ## 4. 观测
 
