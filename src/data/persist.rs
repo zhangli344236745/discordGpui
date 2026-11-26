@@ -321,6 +321,8 @@ pub struct ReplyRefOwned {
     pub author: String,
     #[serde(default)]
     pub excerpt: String,
+    #[serde(default)]
+    pub message_id: Option<String>,
 }
 
 impl From<ReplyRefOwned> for super::models::ReplyRef {
@@ -328,6 +330,7 @@ impl From<ReplyRefOwned> for super::models::ReplyRef {
         Self {
             author: leak(value.author),
             excerpt: value.excerpt,
+            message_id: value.message_id,
         }
     }
 }

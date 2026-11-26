@@ -736,8 +736,18 @@ pub fn dm_messages(dm_id: &str, before: Option<&str>, limit: u32) -> ApiRequest 
 }
 
 pub fn send_dm_message(dm_id: &str, content: &str, client_nonce: Option<&str>) -> ApiRequest {
+    send_dm_message_with_reply(dm_id, content, None, client_nonce)
+}
+
+pub fn send_dm_message_with_reply(
+    dm_id: &str,
+    content: &str,
+    reply_to: Option<&str>,
+    client_nonce: Option<&str>,
+) -> ApiRequest {
     ApiRequest::new(Method::Post, format!("/api/v1/dms/{dm_id}/messages")).with_body(json!({
         "content": content,
+        "reply_to": reply_to,
         "client_nonce": client_nonce,
     }))
 }
@@ -823,6 +833,22 @@ mod tests {
 
         let reaction = remove_reaction("m1", "👍");
         assert_eq!(reaction.path, "/api/v1/messages/m1/reactions/👍");
+    }
+
+    #[test]
+    fn sends_reply_ids() {
+        let channel = send_message("ch1", "hi", Some("m1"), Some("n1"));
+        assert_eq!(channel.body.unwrap()["reply_to"], "m1");
+
+        let with_attachment = send_message_with_attachments("ch1", "", Some("m1"), None, &["f1".into()]);
+        let body = with_attachment.body.unwrap();
+        assert_eq!(body["reply_to"], "m1");
+        assert_eq!(body["attachment_ids"][0], "f1");
+
+        let dm = send_dm_message_with_reply("d1", "hi", Some("m2"), Some("n2"));
+        let body = dm.body.unwrap();
+        assert_eq!(body["reply_to"], "m2");
+        assert_eq!(body["client_nonce"], "n2");
     }
 
     #[test]

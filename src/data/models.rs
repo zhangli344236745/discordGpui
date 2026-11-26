@@ -203,6 +203,9 @@ pub struct ReplyRef {
     #[serde(with = "crate::data::persist::leaked_str")]
     pub author: &'static str,
     pub excerpt: String,
+    /// 被回复消息的 id（在线发送时回传给后端；旧快照可为空）。
+    #[serde(default)]
+    pub message_id: Option<String>,
 }
 
 /// 自己发出的消息的送达状态：已发送 → 已送达 → 已读。
@@ -416,6 +419,7 @@ impl Message {
         self.reply_to = Some(ReplyRef {
             author,
             excerpt: excerpt.into(),
+            message_id: None,
         });
         self
     }

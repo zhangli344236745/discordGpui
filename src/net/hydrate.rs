@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use crate::data::{
     Attachment, AttachmentKind, Category, Channel, ChannelKind, DmConversation, Friend,
     FriendRequest, Member, Message, MessageRequest, MyProfile, Notification, NotificationKind,
-    NotificationTarget, NotifyLevel, PermissionGrant, PermissionState, Role, Server,
+    NotificationTarget, NotifyLevel, PermissionGrant, PermissionState, ReplyRef, Role, Server,
 };
 
 use super::dto::{
@@ -156,6 +156,11 @@ pub(crate) fn message_from(dto: &MessageDto) -> Message {
     );
     message.id = dto.id.clone();
     message.pinned = dto.pinned;
+    message.reply_to = dto.reply_to.as_ref().map(|id| ReplyRef {
+        author: "某条消息",
+        excerpt: String::new(),
+        message_id: Some(id.clone()),
+    });
     if let Some(poll) = dto.poll.as_ref()
         && let (Some(question), Some(options)) = (
             poll.get("question").and_then(|value| value.as_str()),
@@ -243,7 +248,40 @@ pub(crate) fn dm_message_from(dto: &DmMessageDto) -> Message {
         dto.author.color,
     );
     message.id = dto.id.clone();
+    message.reply_to = dto.reply_to.as_ref().map(|id| ReplyRef {
+        author: "某条消息",
+        excerpt: String::new(),
+        message_id: Some(id.clone()),
+    });
     message
+}
+
+/// 把消息列表里的回复占位补成「作者 + 摘要」（目标在同一列表内时）。
+pub(crate) fn resolve_reply_refs(messages: &mut [Message]) {
+    use std::collections::HashMap;
+    let mut map: HashMap<String, (&'static str, String)> = HashMap::new();
+    for message in messages.iter() {
+        let text = message.text.trim();
+        let excerpt: String = if text.is_empty() {
+            "[空消息]".to_string()
+        } else {
+            let short: String = text.chars().take(60).collect();
+            if text.chars().count() > 60 { format!("{short}…") } else { short }
+        };
+        map.insert(message.id.clone(), (message.author, excerpt));
+    }
+    for message in messages.iter_mut() {
+        let Some(reply) = message.reply_to.as_mut() else {
+            continue;
+        };
+        let Some(id) = reply.message_id.clone() else {
+            continue;
+        };
+        if let Some((author, excerpt)) = map.get(&id) {
+            reply.author = *author;
+            reply.excerpt = excerpt.clone();
+        }
+    }
 }
 
 fn channel_from(dto: &ChannelDto, unread: u32) -> Channel {
@@ -884,11 +922,13 @@ pub fn hydrate(data: BootData) -> Hydrated {
         });
     }
 
-    let messages = data
+    let mut messages = data
         .active_messages
         .iter()
         .map(message_from)
         .collect::<Vec<_>>();
+
+    resolve_reply_refs(&mut messages);
 
     Hydrated {
         me,
@@ -1072,6 +1112,25 @@ mod tests {
             elapsed.as_millis() < 300,
             "1000 条消息 JSON 解析耗时 {elapsed:?}，超出 300ms 预算"
         );
+    }
+
+    #[test]
+    fn reply_refs_resolve_author_and_excerpt() {
+        let mut first = super::Message::new("阿岚", "10:00", "原始消息正文", 0x5866f2);
+        first.id = "m1".into();
+        let mut reply = super::Message::new("小明", "10:01", "回复内容", 0x57f287);
+        reply.id = "m2".into();
+        reply.reply_to = Some(super::ReplyRef {
+            author: "某条消息",
+            excerpt: String::new(),
+            message_id: Some("m1".into()),
+        });
+        let mut list = vec![first, reply];
+        super::resolve_reply_refs(&mut list);
+        let resolved = list[1].reply_to.as_ref().unwrap();
+        assert_eq!(resolved.author, "阿岚");
+        assert_eq!(resolved.excerpt, "原始消息正文");
+        assert_eq!(resolved.message_id.as_deref(), Some("m1"));
     }
 
     #[test]

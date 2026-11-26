@@ -3701,8 +3701,12 @@ impl DiscordApp {
             message = message.attachment(attachment);
         }
         // 把回复引用写进新消息，再清空草稿状态。
-        if let Some(reply) = self.reply_to.take() {
-            message = message.replying_to(reply.author, reply.excerpt);
+        let reply_target = self.reply_to.take();
+        let reply_id = reply_target
+            .as_ref()
+            .and_then(|reply| reply.message_id.clone());
+        if let Some(reply) = reply_target {
+            message.reply_to = Some(reply);
         }
 
         let key = self.session_key();
@@ -3733,6 +3737,7 @@ impl DiscordApp {
             self.net.clone(),
         ) {
             let key_for_send = key.clone();
+            let reply_for_send = reply_id.clone();
             if let Some(upload) = &pending {
                 self.failed_uploads.insert(nonce.clone(), upload.clone());
             }
@@ -3748,7 +3753,7 @@ impl DiscordApp {
                                 api::send_message_with_attachments(
                                     &channel_id,
                                     &text,
-                                    None,
+                                    reply_for_send.as_deref(),
                                     Some(&nonce),
                                     &[file_id],
                                 ),
@@ -3759,8 +3764,16 @@ impl DiscordApp {
                         Err(error) => Err(error),
                     },
                     None => {
-                        net.execute(api::send_message(&channel_id, &text, None, Some(&nonce)), true)
-                            .await
+                        net.execute(
+                            api::send_message(
+                                &channel_id,
+                                &text,
+                                reply_for_send.as_deref(),
+                                Some(&nonce),
+                            ),
+                            true,
+                        )
+                        .await
                     }
                 };
                 let _ = this.update(cx, |app, cx| {
@@ -3793,9 +3806,18 @@ impl DiscordApp {
                 message.delivery = DeliveryStatus::Sending;
             }
             let friend_for_send = friend.clone();
+            let reply_for_dm = reply_id.clone();
             cx.spawn(async move |this, cx| {
                 let result = net
-                    .execute(api::send_dm_message(&dm_id, &text, Some(&nonce)), true)
+                    .execute(
+                        api::send_dm_message_with_reply(
+                            &dm_id,
+                            &text,
+                            reply_for_dm.as_deref(),
+                            Some(&nonce),
+                        ),
+                        true,
+                    )
                     .await;
                 let _ = this.update(cx, |app, cx| {
                     app.finish_dm_send(&friend_for_send, &nonce, result);
@@ -4453,10 +4475,16 @@ impl DiscordApp {
             } else {
                 "[空消息]".to_string()
             };
-            ReplyRef { author: m.author, excerpt }
+            ReplyRef {
+                author: m.author,
+                excerpt,
+                message_id: Some(m.id.clone()),
+            }
         });
         let is_same = target.as_ref().is_some_and(|t| {
-            self.reply_to.as_ref().is_some_and(|cur| cur.author == t.author && cur.excerpt == t.excerpt)
+            self.reply_to.as_ref().is_some_and(|cur| {
+                cur.message_id == t.message_id && cur.author == t.author && cur.excerpt == t.excerpt
+            })
         });
         self.reply_to = if is_same { None } else { target };
         cx.notify();
@@ -11008,6 +11036,7 @@ impl DiscordApp {
         } else {
             list.push(message);
         }
+        hydrate::resolve_reply_refs(list);
         if let Some(conversation) = self
             .dm_conversations
             .iter_mut()
@@ -11057,6 +11086,7 @@ impl DiscordApp {
                         })
                         .collect();
                     messages.sort_by(|a, b| a.id.cmp(&b.id));
+                    hydrate::resolve_reply_refs(&mut messages);
                     app.dm_messages.insert(friend.clone(), messages);
                 }
                 Err(error) => {
