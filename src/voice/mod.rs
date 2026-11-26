@@ -42,6 +42,8 @@ pub enum VoiceEvent {
     ScreenUnavailable(String),
     /// 码率档位因网络质量变化：low=true 表示已降档。
     QualityChanged { low: bool },
+    /// 当前正在发言的参与者显示名。
+    ActiveSpeakers(Vec<String>),
     Failed(String),
 }
 
@@ -123,6 +125,19 @@ pub fn quality_transition(
     }
 }
 
+/// 屏幕共享的目标码率：按缩放后的像素量、帧率与画质档位计算，并夹在合理区间。
+#[allow(dead_code)]
+pub fn screen_bitrate(width: u32, height: u32, quality: VideoQuality) -> u64 {
+    let (w, h) = (width.max(2) as f64, height.max(2) as f64);
+    let scale = (1280.0 / w).min(720.0 / h).min(1.0);
+    let (scaled_w, scaled_h) = (w * scale, h * scale);
+    let (fps, bpp, floor, ceiling) = match quality {
+        VideoQuality::High => (10.0, 0.12, 600_000u64, 4_000_000u64),
+        VideoQuality::Low => (8.0, 0.07, 300_000u64, 2_000_000u64),
+    };
+    ((scaled_w * scaled_h * fps * bpp) as u64).clamp(floor, ceiling)
+}
+
 /// 当前构建是否包含真实音视频能力。
 pub const fn supported() -> bool {
     cfg!(feature = "voice-livekit")
@@ -165,21 +180,25 @@ pub fn start(url: String, token: String) -> Option<VoiceHandle> {
 }
 
 #[cfg(feature = "voice-livekit")]
-fn video_encoding(kind: &str, quality: VideoQuality) -> livekit::options::VideoEncoding {
-    let (high_bitrate, high_fps, low_bitrate, low_fps) = if kind == "screen" {
-        (1_500_000, 10.0, 600_000, 8.0)
-    } else {
-        (900_000, 24.0, 400_000, 15.0)
+fn video_encoding(
+    kind: &str,
+    quality: VideoQuality,
+    dims: Option<(u32, u32)>,
+) -> livekit::options::VideoEncoding {
+    if kind == "screen" {
+        let (width, height) = dims.unwrap_or((1280, 720));
+        return livekit::options::VideoEncoding {
+            max_bitrate: screen_bitrate(width, height, quality),
+            max_framerate: if quality == VideoQuality::High { 10.0 } else { 8.0 },
+        };
+    }
+    let (bitrate, fps) = match quality {
+        VideoQuality::High => (900_000, 24.0),
+        VideoQuality::Low => (400_000, 15.0),
     };
-    match quality {
-        VideoQuality::High => livekit::options::VideoEncoding {
-            max_bitrate: high_bitrate,
-            max_framerate: high_fps,
-        },
-        VideoQuality::Low => livekit::options::VideoEncoding {
-            max_bitrate: low_bitrate,
-            max_framerate: low_fps,
-        },
+    livekit::options::VideoEncoding {
+        max_bitrate: bitrate,
+        max_framerate: fps,
     }
 }
 
@@ -189,6 +208,7 @@ async fn publish_video(
     kind: &str,
     source: &livekit::webrtc::video_source::native::NativeVideoSource,
     quality: VideoQuality,
+    dims: Option<(u32, u32)>,
 ) -> Result<(livekit::prelude::LocalVideoTrack, livekit::prelude::TrackSid), String> {
     use livekit::prelude::*;
     use livekit::webrtc::prelude::RtcVideoSource;
@@ -200,7 +220,7 @@ async fn publish_video(
         } else {
             TrackSource::Camera
         },
-        video_encoding: Some(video_encoding(kind, quality)),
+        video_encoding: Some(video_encoding(kind, quality, dims)),
         // 屏幕共享单层直出高码率，避免订阅端先拿到模糊低层；摄像头保留 simulcast
         simulcast: kind != "screen",
         ..Default::default()
@@ -293,7 +313,7 @@ async fn republish_videos(
             continue;
         }
         let _ = room.local_participant().unpublish_track(&video.sid).await;
-        match publish_video(room, video.kind, &video.source, quality).await {
+        match publish_video(room, video.kind, &video.source, quality, video.dims).await {
             Ok((track, sid)) => {
                 spawn_video_pump(
                     track.rtc_track(),
@@ -311,6 +331,15 @@ async fn republish_videos(
             }
         }
     }
+}
+
+#[cfg(all(feature = "voice-livekit", target_os = "macos"))]
+fn fit_screen(width: u32, height: u32) -> (u32, u32) {
+    let (w, h) = (width.max(2) as f64, height.max(2) as f64);
+    let scale = (1280.0 / w).min(720.0 / h).min(1.0);
+    let out_w = ((w * scale) as u32).max(2) & !1;
+    let out_h = ((h * scale) as u32).max(2) & !1;
+    (out_w, out_h)
 }
 
 #[cfg(all(feature = "voice-livekit", target_os = "macos"))]
@@ -334,7 +363,17 @@ async fn begin_screen(
         Some(target) => screen::start_target(target)?,
         None => screen::start()?,
     };
-    let (track, sid) = publish_video(room, "screen", &source, quality).await?;
+    let dims = match &target {
+        Some(target) => fit_screen(target.width, target.height),
+        None => (1280, 720),
+    };
+    eprintln!(
+        "[voice] screen bitrate={}kbps dims={}x{}",
+        screen_bitrate(dims.0, dims.1, quality) / 1000,
+        dims.0,
+        dims.1
+    );
+    let (track, sid) = publish_video(room, "screen", &source, quality, Some(dims)).await?;
     eprintln!("[voice] screen published sid={sid}");
     spawn_video_pump(
         track.rtc_track(),
@@ -349,6 +388,7 @@ async fn begin_screen(
         track,
         sid,
         quality,
+        dims: Some(dims),
         _capture: CaptureSession::Screen(session),
     });
     Ok(())
@@ -361,6 +401,8 @@ struct LocalVideo {
     track: livekit::prelude::LocalVideoTrack,
     sid: livekit::prelude::TrackSid,
     quality: VideoQuality,
+    /// 屏幕共享目标尺寸（用于码率计算）；摄像头为 None。
+    dims: Option<(u32, u32)>,
     _capture: CaptureSession,
 }
 
@@ -473,7 +515,7 @@ async fn run(
                         if on && camera.is_none() {
                             match camera::start() {
                                 Ok((session, source)) => {
-                                    match publish_video(&room, "camera", &source, quality).await {
+                                    match publish_video(&room, "camera", &source, quality, None).await {
                                         Ok((track, sid)) => {
                                             eprintln!("[voice] camera published sid={sid}");
                                             spawn_video_pump(
@@ -489,6 +531,7 @@ async fn run(
                                                 track,
                                                 sid,
                                                 quality,
+                                                dims: None,
                                                 _capture: CaptureSession::Camera(session),
                                             });
                                         }
@@ -606,6 +649,20 @@ async fn run(
                             );
                         }
                     }
+                    RoomEvent::ActiveSpeakersChanged { speakers } => {
+                        let names: Vec<String> = speakers
+                            .iter()
+                            .map(|participant| {
+                                let name = participant.name();
+                                if name.is_empty() {
+                                    participant.identity().to_string()
+                                } else {
+                                    name
+                                }
+                            })
+                            .collect();
+                        let _ = events.send(VoiceEvent::ActiveSpeakers(names)).await;
+                    }
                     RoomEvent::ParticipantConnected(participant) => {
                         let name = display_name(&participant);
                         let _ = events.send(VoiceEvent::ParticipantJoined(name)).await;
@@ -715,6 +772,18 @@ mod tests {
             quality_transition(VideoQuality::Low, 0, 2, Duration::from_secs(30)),
             None
         );
+    }
+
+    #[test]
+    fn screen_bitrate_scales_with_size_and_quality() {
+        let small = super::screen_bitrate(640, 360, VideoQuality::High);
+        let large = super::screen_bitrate(1920, 1080, VideoQuality::High);
+        assert!(large > small, "large={large} small={small}");
+        assert!(small >= 600_000 && large <= 4_000_000);
+        let low = super::screen_bitrate(1920, 1080, VideoQuality::Low);
+        assert!(low < large, "low={low} high={large}");
+        // 极小窗口也夹在下限
+        assert_eq!(super::screen_bitrate(16, 16, VideoQuality::Low), 300_000);
     }
 
     #[test]

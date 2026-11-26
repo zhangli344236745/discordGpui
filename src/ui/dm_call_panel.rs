@@ -46,6 +46,27 @@ fn control(
         )
 }
 
+/// 本地预览小窗的拖拽载荷。
+struct PipDrag;
+
+struct PipGhost;
+
+impl Render for PipGhost {
+    fn render(
+        &mut self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        div()
+            .w(px(96.))
+            .h(px(54.))
+            .rounded(px(4.))
+            .bg(rgba(0x00000066))
+            .border_1()
+            .border_color(rgb(palette::text_primary()))
+    }
+}
+
 /// 视频/屏幕分享预览区：只画占位块，明确标注 Demo 语义。
 fn preview(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElement {
     let Some(call) = app.dm_call.as_ref() else {
@@ -113,24 +134,43 @@ fn preview(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElement {
                     .child(if focused { "点击还原" } else { "点击放大" }),
             );
         if let Some(local) = local {
-            stage = stage.child(
-                div()
-                    .absolute()
-                    .right(px(8.))
-                    .bottom(px(8.))
-                    .w(px(96.))
-                    .h(px(54.))
-                    .rounded(px(4.))
-                    .overflow_hidden()
-                    .border_1()
-                    .border_color(rgb(palette::text_primary()))
-                    .child(
-                        img(ImageSource::Render(local.frame.clone()))
-                            .w_full()
-                            .h_full()
-                            .object_fit(ObjectFit::Cover),
-                    ),
-            );
+            let (pip_x, pip_y) = app.pip_position;
+            stage = stage
+                .on_drag_move::<PipDrag>(cx.listener(
+                    |this, event: &DragMoveEvent<PipDrag>, _window, cx| {
+                    let size = event.bounds.size;
+                    if size.width > px(0.) && size.height > px(0.) {
+                        let offset = event.event.position - event.bounds.origin;
+                        this.set_pip_position(offset.x / size.width, offset.y / size.height, cx);
+                    }
+                },
+                ))
+                .child(
+                    div()
+                        .id("dm-call-pip")
+                        .absolute()
+                        .left(relative(pip_x))
+                        .top(relative(pip_y))
+                        .ml(px(-48.))
+                        .mt(px(-27.))
+                        .w(px(96.))
+                        .h(px(54.))
+                        .rounded(px(4.))
+                        .overflow_hidden()
+                        .border_1()
+                        .border_color(rgb(palette::text_primary()))
+                        .on_drag(PipDrag, |_drag, _offset, _window, cx| {
+                            cx.new(|_| PipGhost)
+                        })
+                        // 吞掉点击，避免拖拽小窗时触发舞台的放大/还原
+                        .on_click(cx.listener(|_, _, _, _| {}))
+                        .child(
+                            img(ImageSource::Render(local.frame.clone()))
+                                .w_full()
+                                .h_full()
+                                .object_fit(ObjectFit::Cover),
+                        ),
+                );
         }
         return stage.into_any_element();
     }

@@ -713,6 +713,10 @@ pub struct DiscordApp {
     pub(crate) screen_targets: Vec<crate::voice::ScreenTarget>,
     pub(crate) screen_picker_open: bool,
     pub(crate) screen_picker_note: Option<String>,
+    /// 正在发言的参与者显示名（SDK ActiveSpeakers）。
+    pub(crate) active_speakers: Vec<String>,
+    /// 本地预览小窗中心点在舞台内的归一化位置。
+    pub(crate) pip_position: (f32, f32),
     /// 视频帧：key = (参与者标识, "camera"|"screen")，值 = 最近一帧 + 接收序号。
     pub(crate) video_frames: HashMap<(String, String), (std::sync::Arc<gpui_kit::RenderImage>, u64)>,
     pub(crate) remote_video_status: Option<String>,
@@ -796,6 +800,22 @@ pub struct DiscordApp {
     pub(crate) persist_note: Option<&'static str>,
 }
 
+/// 平铺排序等级：发言者 > 屏幕共享 > 其它（数值越小越靠前）。
+pub(crate) fn tile_rank(speaking: bool, kind: &str) -> u8 {
+    if speaking {
+        0
+    } else if kind == "screen" {
+        1
+    } else {
+        2
+    }
+}
+
+/// 预览小窗归一化位置：限制在可见区域内。
+pub(crate) fn clamp_pip_position(x: f32, y: f32) -> (f32, f32) {
+    (x.clamp(0.08, 0.92), y.clamp(0.10, 0.90))
+}
+
 /// 校验聚焦键是否仍然存在；不存在时返回 None。
 pub(crate) fn resolve_focus_key(
     focus: &Option<(String, String)>,
@@ -857,6 +877,7 @@ pub(crate) struct VideoTile {
     pub identity: String,
     pub kind: String,
     pub local: bool,
+    pub speaking: bool,
     pub frame: std::sync::Arc<gpui_kit::RenderImage>,
     pub seq: u64,
 }
@@ -1639,6 +1660,8 @@ impl DiscordApp {
             screen_targets: Vec::new(),
             screen_picker_open: false,
             screen_picker_note: None,
+            active_speakers: Vec::new(),
+            pip_position: (0.82, 0.76),
             voice_handle: None,
             dm_call: None,
             discover_servers: seed_discover_servers(),
@@ -7716,6 +7739,7 @@ impl DiscordApp {
                         }
                         crate::voice::VoiceEvent::ParticipantLeft(name) => {
                             app.voice_notice = Some(format!("{name} 离开了语音"));
+                            app.active_speakers.retain(|speaker| speaker != name);
                             app.drop_video_frames(name);
                         }
                         crate::voice::VoiceEvent::MicUnavailable(reason) => {
@@ -7727,6 +7751,12 @@ impl DiscordApp {
                         }
                         crate::voice::VoiceEvent::ScreenUnavailable(reason) => {
                             app.voice_notice = Some(reason.clone());
+                        }
+                        crate::voice::VoiceEvent::ActiveSpeakers(names) => {
+                            if !names.is_empty() && names != &app.active_speakers {
+                                eprintln!("[voice] active speakers={names:?}");
+                            }
+                            app.active_speakers = names.clone();
                         }
                         crate::voice::VoiceEvent::QualityChanged { low } => {
                             app.voice_notice = Some(if *low {
@@ -7746,6 +7776,7 @@ impl DiscordApp {
                         app.voice_handle = None;
                         app.video_frames.clear();
                         app.video_focus = None;
+                        app.active_speakers.clear();
                         app.remote_video_status = None;
                         app.voice_devices = None;
                         app.voice_input_device = None;
@@ -12020,14 +12051,14 @@ impl DiscordApp {
                 identity: identity.clone(),
                 kind: kind.clone(),
                 local: identity == "你",
+                speaking: self.active_speakers.contains(identity),
                 frame: frame.clone(),
                 seq: *seq,
             })
             .collect();
         items.sort_by(|a, b| {
-            let screen_rank = |tile: &VideoTile| usize::from(tile.kind != "screen");
-            screen_rank(a)
-                .cmp(&screen_rank(b))
+            tile_rank(a.speaking, &a.kind)
+                .cmp(&tile_rank(b.speaking, &b.kind))
                 .then_with(|| b.seq.cmp(&a.seq))
         });
         let remaining = items.len().saturating_sub(limit);
@@ -12043,6 +12074,12 @@ impl DiscordApp {
         {
             self.video_focus = None;
         }
+    }
+
+    /// 拖动后更新预览小窗位置（归一化并 clamp）。
+    pub(crate) fn set_pip_position(&mut self, x: f32, y: f32, cx: &mut Context<Self>) {
+        self.pip_position = clamp_pip_position(x, y);
+        cx.notify();
     }
 
     /// 聚焦/还原某一路画面。
@@ -12065,10 +12102,12 @@ impl DiscordApp {
             .get(&(identity.clone(), kind.clone()))
             .map(|(frame, seq)| {
                 let local = identity == "你";
+                let speaking = self.active_speakers.contains(&identity);
                 VideoTile {
                     identity,
                     kind,
                     local,
+                    speaking,
                     frame: frame.clone(),
                     seq: *seq,
                 }
@@ -12598,6 +12637,18 @@ mod tests {
         );
         assert_eq!(resolve_focus_key(&Some(key("alice", "camera")), &keys), None);
         assert_eq!(resolve_focus_key(&None, &keys), None);
+    }
+
+    #[test]
+    fn tile_rank_prefers_speaker_then_screen() {
+        assert!(super::tile_rank(true, "camera") < super::tile_rank(false, "screen"));
+        assert!(super::tile_rank(false, "screen") < super::tile_rank(false, "camera"));
+    }
+
+    #[test]
+    fn pip_position_is_clamped() {
+        assert_eq!(super::clamp_pip_position(-1.0, 2.0), (0.08, 0.90));
+        assert_eq!(super::clamp_pip_position(0.5, 0.5), (0.5, 0.5));
     }
 
     #[test]

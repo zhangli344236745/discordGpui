@@ -160,6 +160,8 @@ wait_until 25 grep -q "screen published" "$TMP/a.log" || fail "屏幕共享未�
 wait_until 20 grep -q "event=track_published .*SCREEN_SHARE" "$TMP/server.log" ||
   fail "缺少 SCREEN_SHARE track_published webhook"
 echo "PASS dm-call: 屏幕共享轨道已发布"
+wait_until 15 grep -qE "screen bitrate=[0-9]+kbps" "$TMP/a.log" || fail "缺少屏享码率日志"
+echo "PASS dm-call: 整屏共享按尺寸计算码率"
 
 # 本地预览：A 端应把自己的摄像头/屏幕回灌到 UI 管线
 wait_until 25 grep -q "first local camera frame" "$TMP/a.log" || fail "A 端无本地摄像头预览"

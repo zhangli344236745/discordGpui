@@ -92,6 +92,9 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                     .h(px(84.))
                     .rounded(px(4.))
                     .overflow_hidden()
+                    .when(tile.speaking, |el| {
+                        el.border_2().border_color(rgb(palette::accent()))
+                    })
                     .id(format!("voice-tile-{index}-{offset}"))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.toggle_video_focus(&identity, &kind, cx)

@@ -129,6 +129,10 @@ wait_until 20 grep -q "camera published" "$TMP/client.log" || { echo "FAIL voice
 wait_until 20 grep -q "screen published" "$TMP/client.log" || { echo "FAIL voice: 屏幕共享未发布"; exit 1; }
 echo "PASS voice: 摄像头与屏幕共享已发布"
 
+wait_until 20 grep -qE "screen bitrate=[0-9]+kbps dims=[0-9]+x[0-9]+" "$TMP/client.log" ||
+  { echo "FAIL voice: 未输出屏享码率"; exit 1; }
+echo "PASS voice: 屏享码率按尺寸计算"
+
 wait_until 20 grep -q "first local camera frame" "$TMP/client.log" || { echo "FAIL voice: 无本地摄像头预览"; exit 1; }
 wait_until 20 grep -q "first local screen frame" "$TMP/client.log" || { echo "FAIL voice: 无本地屏幕预览"; exit 1; }
 echo "PASS voice: 本地预览已生成"
