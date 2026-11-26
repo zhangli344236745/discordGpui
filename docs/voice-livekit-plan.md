@@ -47,6 +47,12 @@ scripts/voice-e2e.sh                  # 需要 docker + livekit/livekit-server �
   `set_recording_device/set_playout_device`；
 - 麦克风权限被拒时提示（语音面板状态条 + 设置页说明），不崩溃。
 
+## 4.3 状态同步（已完成部分）
+
+- 私信通话内切换麦克风/摄像头/屏幕，都会 `PUT /voice/dm:{call_id}/me` 写回服务端，
+  其他端通过 `VOICE_STATE_UPDATE` 收到 camera/screen 标记；
+- 麦克风同时驱动引擎真实静音；摄像头/屏幕目前只同步状态，没有视频流。
+
 ## 仍未实现：摄像头与屏幕共享（4.3 剩余）
 
 LiveKit Rust SDK 只提供 `NativeVideoSource`（手动推帧），没有平台摄像头/屏幕采集封装，需要：

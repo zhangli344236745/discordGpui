@@ -7879,7 +7879,32 @@ impl DiscordApp {
                     .send_blocking(crate::voice::VoiceCommand::SetMic(mic_on));
             }
         }
+        self.sync_dm_call_state(cx);
         cx.notify();
+    }
+
+    /// 把私信通话的麦克风/摄像头/共享状态写回服务端（房间名 dm:{call_id}）。
+    fn sync_dm_call_state(&mut self, cx: &mut Context<Self>) {
+        let (Some(call_id), Some(call), Some(net)) = (
+            self.dm_call.as_ref().and_then(|call| call.call_id.clone()),
+            self.dm_call.as_ref(),
+            self.net.clone(),
+        ) else {
+            return;
+        };
+        if !self.is_online() {
+            return;
+        }
+        let mic = call.mic_on;
+        let camera = call.camera_on;
+        let screen = call.screen_sharing;
+        let room = format!("dm:{call_id}");
+        cx.spawn(async move |_, _| {
+            let _ = net
+                .execute(api::voice_set_state(&room, mic, camera, screen), true)
+                .await;
+        })
+        .detach();
     }
 
     /// 通话内摄像头开关；关摄像头时同时停止屏幕分享，避免两个画面同时开着。
@@ -7890,6 +7915,7 @@ impl DiscordApp {
                 call.screen_sharing = false;
             }
         }
+        self.sync_dm_call_state(cx);
         cx.notify();
     }
 
@@ -7901,6 +7927,7 @@ impl DiscordApp {
                 call.camera_on = true;
             }
         }
+        self.sync_dm_call_state(cx);
         cx.notify();
     }
 
