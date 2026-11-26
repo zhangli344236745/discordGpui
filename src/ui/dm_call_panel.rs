@@ -80,16 +80,37 @@ fn preview(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElement {
     let local = tiles.iter().find(|tile| tile.local).cloned();
 
     if let Some(remote) = remote {
+        let remote_key = (remote.identity.clone(), remote.kind.clone());
+        let focused = app.video_focus.as_ref() == Some(&remote_key);
+        let stage_height = if focused { 260.0 } else { 180.0 };
+        let key_for_click = remote_key.clone();
         let mut stage = div()
             .relative()
             .w_full()
-            .h(px(180.))
+            .h(px(stage_height))
             .overflow_hidden()
+            .id("dm-video-stage")
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.toggle_video_focus(&key_for_click.0, &key_for_click.1, cx)
+            }))
             .child(
                 img(ImageSource::Render(remote.frame.clone()))
                     .w_full()
-                    .h(px(180.))
+                    .h(px(stage_height))
                     .object_fit(ObjectFit::Cover),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .left(px(8.))
+                    .top(px(8.))
+                    .px(px(6.))
+                    .py(px(2.))
+                    .rounded(px(3.))
+                    .bg(rgb(palette::bg_rail()))
+                    .text_size(px(10.))
+                    .text_color(rgb(palette::text_primary()))
+                    .child(if focused { "点击还原" } else { "点击放大" }),
             );
         if let Some(local) = local {
             stage = stage.child(

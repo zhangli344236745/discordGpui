@@ -17,12 +17,74 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
         None => return div().into_any_element(),
     };
 
-    // 视频平铺：屏幕共享优先、最近更新在前，最多 6 路
+    // 视频平铺：屏幕共享优先、最近更新在前，最多 6 路；支持点击聚焦
     let mut panel = v_flex().gap_1();
     let (tiles, remaining) = app.video_tiles(6);
-    for chunk in tiles.chunks(2) {
+    let focused_tile = app.focused_video_tile();
+
+    if let Some(focused) = focused_tile.clone() {
+        let tile_label = format!(
+            "{} · {}",
+            if focused.local { "你".to_string() } else { focused.identity.clone() },
+            if focused.kind == "screen" { "屏幕" } else { "摄像头" }
+        );
+        let identity = focused.identity.clone();
+        let kind = focused.kind.clone();
+        panel = panel.child(
+            div()
+                .relative()
+                .h(px(220.))
+                .rounded(px(6.))
+                .overflow_hidden()
+                .child(
+                    img(ImageSource::Render(focused.frame.clone()))
+                        .w_full()
+                        .h_full()
+                        .object_fit(ObjectFit::Cover),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(6.))
+                        .bottom(px(6.))
+                        .px(px(5.))
+                        .py(px(1.))
+                        .rounded(px(2.))
+                        .bg(rgb(palette::bg_rail()))
+                        .text_size(px(10.))
+                        .text_color(rgb(palette::text_primary()))
+                        .child(tile_label),
+                )
+                .child(
+                    div()
+                        .id("voice-tile-unfocus")
+                        .absolute()
+                        .right(px(6.))
+                        .top(px(6.))
+                        .px(px(6.))
+                        .py(px(2.))
+                        .rounded(px(3.))
+                        .bg(rgb(palette::bg_rail()))
+                        .text_size(px(10.))
+                        .text_color(rgb(palette::text_primary()))
+                        .hover(|el| el.bg(rgb(palette::bg_toolbar_hover())))
+                        .child("还原")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.toggle_video_focus(&identity, &kind, cx)
+                        })),
+                ),
+        );
+    }
+
+    for (index, chunk) in tiles.chunks(2).enumerate() {
+        // 聚焦时下方平铺隐藏，避免重复画面
+        if focused_tile.is_some() {
+            break;
+        }
         let mut row = h_flex().gap_1();
-        for tile in chunk {
+        for (offset, tile) in chunk.iter().enumerate() {
+            let identity = tile.identity.clone();
+            let kind = tile.kind.clone();
             row = row.child(
                 div()
                     .flex_1()
@@ -30,6 +92,10 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                     .h(px(84.))
                     .rounded(px(4.))
                     .overflow_hidden()
+                    .id(format!("voice-tile-{index}-{offset}"))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.toggle_video_focus(&identity, &kind, cx)
+                    }))
                     .child(
                         img(ImageSource::Render(tile.frame.clone()))
                             .w_full()
@@ -47,11 +113,11 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                             .bg(rgb(palette::bg_rail()))
                             .text_size(px(9.))
                             .text_color(rgb(palette::text_primary()))
-                            .child(if tile.local {
-                                format!("你 · {}", if tile.kind == "screen" { "屏幕" } else { "摄像头" })
-                            } else {
-                                format!("{} · {}", tile.identity, if tile.kind == "screen" { "屏幕" } else { "摄像头" })
-                            }),
+                            .child(format!(
+                                "{} · {}",
+                                if tile.local { "你".to_string() } else { tile.identity.clone() },
+                                if tile.kind == "screen" { "屏幕" } else { "摄像头" }
+                            )),
                     ),
             );
         }

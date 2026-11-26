@@ -36,9 +36,10 @@ docker image inspect livekit/livekit-server:latest >/dev/null 2>&1 || {
 
 docker rm -f "$LK_NAME" >/dev/null 2>&1 || true
 docker run -d --name "$LK_NAME" \
-  -p 7880:7880 -p 7881:7881 -p 7882:7882/udp \
+  -p 7883:7883 -p 7884:7884 -p 7885:7885/udp \
   --add-host host.docker.internal:host-gateway \
   livekit/livekit-server --dev --bind 0.0.0.0 --node-ip 127.0.0.1 \
+  --port 7883 --rtc.tcp_port 7884 --rtc.udp_port.start 7885 --rtc.udp_port.end 7885 \
   --config-body "keys:
   devkey: devsecret-devsecret-devsecret-1234
 webhook:
@@ -54,14 +55,14 @@ if [ "$(docker inspect -f '{{.State.Running}}' "$LK_NAME" 2>/dev/null)" != "true
 fi
 
 for _ in $(seq 1 40); do
-  curl -sf --noproxy '*' http://127.0.0.1:7880 >/dev/null 2>&1 && break
+  curl -sf --noproxy '*' http://127.0.0.1:7883 >/dev/null 2>&1 && break
   sleep 0.25
 done
 
 cd "$ROOT/server"
 DATABASE_URL="sqlite+aiosqlite:///$TMP/app.db" \
 UPLOAD_DIR="$TMP/uploads" \
-LIVEKIT_URL="ws://127.0.0.1:7880" \
+LIVEKIT_URL="ws://127.0.0.1:7883" \
 uv run uvicorn app.main:app --port "$PORT" >"$TMP/server.log" 2>&1 &
 SERVER_PID=$!
 for _ in $(seq 1 80); do

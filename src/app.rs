@@ -712,6 +712,8 @@ pub struct DiscordApp {
     /// 视频帧：key = (参与者标识, "camera"|"screen")，值 = 最近一帧 + 接收序号。
     pub(crate) video_frames: HashMap<(String, String), (std::sync::Arc<gpui_kit::RenderImage>, u64)>,
     pub(crate) remote_video_status: Option<String>,
+    /// 当前聚焦放大的画面键：(参与者标识, 来源)。
+    pub(crate) video_focus: Option<(String, String)>,
     pub(crate) voice_handle: Option<crate::voice::VoiceHandle>,
 
     // 私信通话：Some 即显示悬浮通话面板，跨会话与设置页保持。
@@ -788,6 +790,15 @@ pub struct DiscordApp {
     // 本地持久化：上次落盘的快照 JSON（内容不变就不重复写盘）+ 数据页提示。
     pub(crate) saved_json: String,
     pub(crate) persist_note: Option<&'static str>,
+}
+
+/// 校验聚焦键是否仍然存在；不存在时返回 None。
+pub(crate) fn resolve_focus_key(
+    focus: &Option<(String, String)>,
+    keys: &[(String, String)],
+) -> Option<(String, String)> {
+    let key = focus.as_ref()?;
+    keys.iter().find(|candidate| *candidate == key).cloned()
 }
 
 /// 在设备列表里取当前项的下一个（循环）。
@@ -1618,6 +1629,7 @@ impl DiscordApp {
             voice_device_note: None,
             video_frames: HashMap::new(),
             remote_video_status: None,
+            video_focus: None,
             voice_camera_on: false,
             voice_screen_on: false,
             voice_handle: None,
@@ -7728,6 +7740,7 @@ impl DiscordApp {
                     if close {
                         app.voice_handle = None;
                         app.video_frames.clear();
+                        app.video_focus = None;
                         app.remote_video_status = None;
                         app.voice_devices = None;
                         app.voice_input_device = None;
@@ -8030,6 +8043,9 @@ impl DiscordApp {
         if !camera_on {
             self.video_frames
                 .remove(&("你".to_string(), "camera".to_string()));
+            if self.video_focus.as_ref() == Some(&("你".to_string(), "camera".to_string())) {
+                self.video_focus = None;
+            }
         }
         self.sync_dm_call_state(cx);
         cx.notify();
@@ -12032,6 +12048,41 @@ impl DiscordApp {
     /// 清掉某参与者的所有视频帧（离开/关闭摄像头）。
     pub(crate) fn drop_video_frames(&mut self, identity: &str) {
         self.video_frames.retain(|(who, _), _| who != identity);
+        if let Some((focused, _)) = &self.video_focus
+            && focused == identity
+        {
+            self.video_focus = None;
+        }
+    }
+
+    /// 聚焦/还原某一路画面。
+    pub(crate) fn toggle_video_focus(&mut self, identity: &str, kind: &str, cx: &mut Context<Self>) {
+        let key = (identity.to_string(), kind.to_string());
+        if self.video_focus.as_ref() == Some(&key) {
+            self.video_focus = None;
+        } else {
+            self.video_focus = Some(key);
+        }
+        cx.notify();
+    }
+
+    /// 聚焦的平铺项；目标已不存在时返回 None。
+    pub(crate) fn focused_video_tile(&self) -> Option<VideoTile> {
+        let focus = self.video_focus.clone()?;
+        let keys: Vec<(String, String)> = self.video_frames.keys().cloned().collect();
+        let (identity, kind) = resolve_focus_key(&Some(focus), &keys)?;
+        self.video_frames
+            .get(&(identity.clone(), kind.clone()))
+            .map(|(frame, seq)| {
+                let local = identity == "你";
+                VideoTile {
+                    identity,
+                    kind,
+                    local,
+                    frame: frame.clone(),
+                    seq: *seq,
+                }
+            })
     }
 
     /// 拉取当前引擎的输入/输出设备列表（仅连接语音后可用）。
@@ -12120,6 +12171,9 @@ impl DiscordApp {
         if !self.voice_camera_on {
             self.video_frames
                 .remove(&("你".to_string(), "camera".to_string()));
+            if self.video_focus.as_ref() == Some(&("你".to_string(), "camera".to_string())) {
+                self.video_focus = None;
+            }
         }
         self.sync_voice_state(cx);
         cx.notify();
@@ -12136,6 +12190,9 @@ impl DiscordApp {
         if !self.voice_screen_on {
             self.video_frames
                 .remove(&("你".to_string(), "screen".to_string()));
+            if self.video_focus.as_ref() == Some(&("你".to_string(), "screen".to_string())) {
+                self.video_focus = None;
+            }
         }
         self.sync_voice_state(cx);
         cx.notify();
@@ -12396,3 +12453,32 @@ impl Render for DiscordApp {
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_focus_key;
+
+    fn key(identity: &str, kind: &str) -> (String, String) {
+        (identity.to_string(), kind.to_string())
+    }
+
+    #[test]
+    fn focus_resolves_only_when_target_present() {
+        let keys = vec![key("你", "camera"), key("alice", "screen")];
+        assert_eq!(
+            resolve_focus_key(&Some(key("alice", "screen")), &keys),
+            Some(key("alice", "screen"))
+        );
+        assert_eq!(resolve_focus_key(&Some(key("alice", "camera")), &keys), None);
+        assert_eq!(resolve_focus_key(&None, &keys), None);
+    }
+
+    #[test]
+    fn focus_falls_back_when_participant_leaves() {
+        let keys = vec![key("alice", "camera")];
+        assert_eq!(
+            resolve_focus_key(&Some(key("bob", "camera")), &keys),
+            None
+        );
+    }
+}
