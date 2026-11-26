@@ -91,6 +91,8 @@ pub struct Snapshot {
     #[serde(default)]
     pub blocked_users: Vec<String>,
     #[serde(default)]
+    pub call_history: Vec<super::models::CallRecord>,
+    #[serde(default)]
     pub me: MyProfile,
     #[serde(default)]
     pub active_server: usize,

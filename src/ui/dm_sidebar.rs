@@ -131,6 +131,15 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
         .gap_2()
         .border_b_1()
         .border_color(rgb(palette::bg_sidebar_border()))
+        .child(crate::ui::icon_button(
+            IconName::Phone,
+            Size::Small,
+            px(24.),
+            "dm-call-history",
+            app.show_call_history,
+            Box::new(|this, _, cx| this.toggle_call_history(cx)),
+            cx,
+        ))
         .child(search_row);
 
     let mut list = v_flex()

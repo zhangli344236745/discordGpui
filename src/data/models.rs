@@ -208,6 +208,31 @@ pub struct ReplyRef {
     pub message_id: Option<String>,
 }
 
+/// 通话记录：本地保存最近若干条，随快照持久化。
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CallRecord {
+    pub friend: String,
+    pub color: u32,
+    pub video: bool,
+    pub incoming: bool,
+    /// connected / missed / cancelled / declined
+    pub outcome: String,
+    /// 发起时间（Unix 秒），用于展示相对时间。
+    pub at: u64,
+}
+
+impl CallRecord {
+    pub fn outcome_label(&self) -> &'static str {
+        match self.outcome.as_str() {
+            "connected" => "已接通",
+            "missed" => "未接来电",
+            "declined" => "已拒绝",
+            "cancelled" => "已取消",
+            _ => "通话",
+        }
+    }
+}
+
 /// 自己发出的消息的送达状态：已发送 → 已送达 → 已读。
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DeliveryStatus {

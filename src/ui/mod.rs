@@ -1,3 +1,4 @@
+pub mod call_history_panel;
 pub mod category_dialog;
 pub mod category_menu;
 pub mod channel_menu;

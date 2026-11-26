@@ -37,7 +37,8 @@ use crate::net::ws::{NetEvent, WsClient};
 use crate::net::{api, NetClient, NetConfig, NetError};
 use crate::ui::theme::palette;
 use crate::ui::{
-    category_dialog, category_menu, channel_menu, channel_sidebar, chat, create_dialog, dm_call_panel,
+    call_history_panel, category_dialog, category_menu, channel_menu, channel_sidebar, chat,
+    create_dialog, dm_call_panel,
     dm_sidebar, discover, events_panel, friend_group_dialog, friend_group_menu, forum, friends,
     help_center, invite_dialog, member_list, member_nick_dialog, message_requests_panel, profile_card,
     server_menu, server_rail,
@@ -739,6 +740,9 @@ pub struct DiscordApp {
     pub(crate) remote_video_status: Option<String>,
     /// 当前聚焦放大的画面键：(参与者标识, 来源)。
     pub(crate) video_focus: Option<(String, String)>,
+    /// 本地通话记录（最新在前，最多 30 条）与面板显隐。
+    pub(crate) call_history: Vec<crate::data::CallRecord>,
+    pub(crate) show_call_history: bool,
     /// 服务器斜杠命令缓存（服务器名 → 命令列表）。
     pub(crate) commands_by_server: HashMap<String, Vec<crate::net::dto::SlashCommandDto>>,
     /// 输入框里的斜杠命令前缀（不含 `/`）；None 表示不显示候选。
@@ -1708,6 +1712,8 @@ impl DiscordApp {
             video_frames: HashMap::new(),
             remote_video_status: None,
             video_focus: None,
+            call_history: Vec::new(),
+            show_call_history: false,
             commands_by_server: HashMap::new(),
             command_query: None,
             call_ring: None,
@@ -8313,9 +8319,51 @@ impl DiscordApp {
         cx.notify();
     }
 
+    /// 追加一条通话记录（最新在前）。
+    fn record_call(&mut self, outcome: &str) {
+        let Some(call) = &self.dm_call else {
+            return;
+        };
+        let at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or_default();
+        self.call_history.insert(
+            0,
+            crate::data::CallRecord {
+                friend: call.friend.clone(),
+                color: call.color,
+                video: call.mode == CallMode::Video,
+                incoming: call.incoming,
+                outcome: outcome.to_string(),
+                at,
+            },
+        );
+        self.call_history.truncate(30);
+    }
+
+    pub(crate) fn toggle_call_history(&mut self, cx: &mut Context<Self>) {
+        self.show_call_history = !self.show_call_history;
+        if self.show_call_history {
+            self.show_inbox = false;
+            self.show_pins = false;
+            self.show_events = false;
+            self.show_message_requests = false;
+            self.show_bookmarks = false;
+            self.show_search_center = false;
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn clear_call_history(&mut self, cx: &mut Context<Self>) {
+        self.call_history.clear();
+        cx.notify();
+    }
+
     /// 拒接来电：调服务端拒绝并关闭面板。
     pub(crate) fn decline_dm_call(&mut self, cx: &mut Context<Self>) {
         self.call_ring = None;
+        self.record_call("declined");
         let friend = self.dm_call.as_ref().map(|call| call.friend.clone());
         self.dm_call = None;
         if self.is_online()
@@ -8333,6 +8381,12 @@ impl DiscordApp {
     /// 挂断私信通话（面板由 `dm_call.is_some()` 决定是否渲染）。
     pub(crate) fn end_dm_call(&mut self, cx: &mut Context<Self>) {
         self.call_ring = None;
+        let outcome = self
+            .dm_call
+            .as_ref()
+            .map(|call| if call.connected { "connected" } else { "cancelled" })
+            .unwrap_or("cancelled");
+        self.record_call(outcome);
         let friend = self.dm_call.as_ref().map(|call| call.friend.clone());
         if let Some(handle) = self.voice_handle.take() {
             let _ = handle.commands.send_blocking(crate::voice::VoiceCommand::Disconnect);
@@ -11340,13 +11394,28 @@ impl DiscordApp {
             }
             "CALL_DECLINE" | "CALL_END" => {
                 self.call_ring = None;
-                if let Some(call) = &self.dm_call
-                    && call.incoming
-                    && !call.connected
-                    && call.call_id.as_deref()
-                        == data.get("id").and_then(|value| value.as_str())
+                if self.dm_call.as_ref().and_then(|call| call.call_id.as_deref())
+                    == data.get("id").and_then(|value| value.as_str())
                 {
-                    self.automod_notice = Some(format!("未接来电：{}", call.friend));
+                    let outcome = self
+                        .dm_call
+                        .as_ref()
+                        .map(|call| {
+                            if call.connected {
+                                "connected"
+                            } else if call.incoming {
+                                "missed"
+                            } else {
+                                "cancelled"
+                            }
+                        })
+                        .unwrap_or("cancelled");
+                    if outcome == "missed"
+                        && let Some(call) = &self.dm_call
+                    {
+                        self.automod_notice = Some(format!("未接来电：{}", call.friend));
+                    }
+                    self.record_call(outcome);
                 }
                 if self.dm_call.as_ref().and_then(|call| call.call_id.as_deref())
                     == data.get("id").and_then(|value| value.as_str())
@@ -12330,6 +12399,7 @@ impl DiscordApp {
             boosts: Some(self.boosts.clone()),
             friend_requests: self.friend_requests.clone(),
             blocked_users: self.blocked_users.clone(),
+            call_history: self.call_history.clone(),
             me: self.me.clone(),
             active_server: self.active_server,
             active_channel: self.active_channel.clone(),
@@ -12385,6 +12455,9 @@ impl DiscordApp {
         }
         self.friend_requests = saved.friend_requests;
         self.blocked_users = saved.blocked_users;
+        if !saved.call_history.is_empty() {
+            self.call_history = saved.call_history;
+        }
         // 旧快照没有 invites 字段时保留种子邀请，而不是清空。
         if let Some(invites) = saved.invites {
             self.invites = invites;
@@ -13266,6 +13339,9 @@ impl DiscordApp {
             })
             .when(self.screen_picker_open, |el| {
                 el.child(screen_picker::render(self, cx))
+            })
+            .when(self.show_call_history, |el| {
+                el.child(call_history_panel::render(self, cx))
             })
             .when(self.show_help_center, |el| {
                 el.child(help_center::render(self, cx))
