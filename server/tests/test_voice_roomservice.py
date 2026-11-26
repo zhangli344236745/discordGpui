@@ -88,3 +88,42 @@ async def test_webhook_tolerates_clock_skew(client: httpx.AsyncClient) -> None:
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
     )
     assert resp.status_code == 200, resp.text
+
+
+async def test_track_published_updates_projection_by_source(client: httpx.AsyncClient) -> None:
+    """LiveKit 的 track.type 是 AUDIO/VIDEO，必须按 source 更新 mic/camera 标记。"""
+    headers = await auth_headers(client)
+    user = await me(client, headers)
+    server = await create_server(client, headers)
+    channel = await first_channel(client, headers, server["id"], kind="voice")
+    join = await client.post(f"/api/v1/channels/{channel['id']}/voice/join", headers=headers)
+    room = join.json()["room"]
+
+    for kind, source in (("track_published", "MICROPHONE"), ("track_published", "CAMERA")):
+        event = {
+            "event": kind,
+            "room": {"name": room},
+            "participant": {"identity": user["id"]},
+            "track": {"type": "VIDEO" if source == "CAMERA" else "AUDIO", "source": source},
+        }
+        body = json.dumps(event).encode()
+        digest = base64.b64encode(hashlib.sha256(body).digest()).decode()
+        token = jwt.encode(
+            {
+                "iss": settings.livekit_api_key,
+                "exp": datetime.now(UTC) + timedelta(minutes=5),
+                "sha256": digest,
+            },
+            settings.livekit_api_secret,
+            algorithm="HS256",
+        )
+        resp = await client.post(
+            "/api/v1/livekit/webhook",
+            content=body,
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        )
+        assert resp.status_code == 200, resp.text
+
+    participants = await client.get(f"/api/v1/channels/{channel['id']}/voice/participants", headers=headers)
+    rows = participants.json()
+    assert rows[0]["mic"] is True and rows[0]["camera"] is True, rows

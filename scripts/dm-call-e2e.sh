@@ -111,7 +111,8 @@ DISCORD_API_BASE="http://127.0.0.1:$PORT" DISCORD_SESSION_FILE="$TMP/b.json" DIS
   "$ROOT/target/debug/discord-gpui" >"$TMP/b.log" 2>&1 &
 B_PID=$!
 sleep 7
-DISCORD_API_BASE="http://127.0.0.1:$PORT" DISCORD_SESSION_FILE="$TMP/a.json" DISCORD_DM_CALL_AUTO="call" \
+DISCORD_API_BASE="http://127.0.0.1:$PORT" DISCORD_SESSION_FILE="$TMP/a.json" \
+DISCORD_DM_CALL_AUTO="call" DISCORD_DM_CALL_CAMERA="1" DISCORD_DM_CALL_SCREEN="1" \
   "$ROOT/target/debug/discord-gpui" >"$TMP/a.log" 2>&1 &
 A_PID=$!
 wait_until() {
@@ -134,14 +135,28 @@ for role in a b; do
 done
 echo "PASS dm-call: 双端连接房间并发布麦克风"
 
-for kind in participant_joined track_published; do
-  wait_until 15 grep -q "livekit webhook event=$kind" "$TMP/server.log"
-  count="$(grep -c "livekit webhook event=$kind" "$TMP/server.log")"
-  [ "$count" -ge 2 ] && echo "PASS dm-call: webhook $kind x$count" || fail "缺少 webhook $kind"
-done
+wait_until 20 bash -c "grep -c 'livekit webhook event=participant_joined' '$TMP/server.log' | grep -q '^2$'" ||
+  fail "缺少 participant_joined x2"
+echo "PASS dm-call: webhook participant_joined x2"
+
+wait_until 20 bash -c "[ \$(grep -c 'livekit webhook event=track_published' '$TMP/server.log') -ge 2 ]" ||
+  fail "缺少 track_published x2"
+echo "PASS dm-call: webhook track_published x2"
 
 grep -q 'livekit webhook event=participant_joined room=dm:' "$TMP/server.log" ||
   fail "房间名不是 dm: 前缀"
 echo "PASS dm-call: 通话房间名 dm: 前缀"
+
+# 摄像头：A 端自动开启，LiveKit 应上报 CAMERA 轨道
+wait_until 20 grep -q "camera published" "$TMP/a.log" || fail "摄像头未发布"
+wait_until 20 grep -q 'event=track_published .*CAMERA' "$TMP/server.log" ||
+  fail "缺少 CAMERA track_published webhook"
+echo "PASS dm-call: 摄像头轨道已发布"
+
+# 屏幕共享：A 端自动开启，LiveKit 应上报 SCREEN_SHARE 轨道
+wait_until 25 grep -q "screen published" "$TMP/a.log" || fail "屏幕共享未发布"
+wait_until 20 grep -q "event=track_published .*SCREEN_SHARE" "$TMP/server.log" ||
+  fail "缺少 SCREEN_SHARE track_published webhook"
+echo "PASS dm-call: 屏幕共享轨道已发布"
 
 echo "dm call e2e passed"

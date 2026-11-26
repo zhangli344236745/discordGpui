@@ -7599,6 +7599,38 @@ impl DiscordApp {
                         crate::voice::VoiceEvent::Connected => {
                             app.voice_notice = Some("已连接语音".to_string());
                             app.refresh_voice_devices(cx);
+                            // e2e/调试：通话接通后自动开摄像头（DISCORD_DM_CALL_CAMERA=1）
+                            if std::env::var("DISCORD_DM_CALL_CAMERA").ok().as_deref() == Some("1")
+                                && app.dm_call.as_ref().is_some_and(|call| !call.camera_on)
+                            {
+                                if let Some(call) = app.dm_call.as_mut() {
+                                    call.camera_on = true;
+                                }
+                                if let Some(handle) = &app.voice_handle {
+                                    let _ = handle
+                                        .commands
+                                        .send_blocking(crate::voice::VoiceCommand::SetCamera(true));
+                                }
+                                app.sync_dm_call_state(cx);
+                            }
+                            // e2e/调试：屏幕共享（DISCORD_DM_CALL_SCREEN=1）
+                            if std::env::var("DISCORD_DM_CALL_SCREEN").ok().as_deref() == Some("1")
+                                && app
+                                    .dm_call
+                                    .as_ref()
+                                    .is_some_and(|call| !call.screen_sharing)
+                            {
+                                if let Some(call) = app.dm_call.as_mut() {
+                                    call.screen_sharing = true;
+                                    call.camera_on = true;
+                                }
+                                if let Some(handle) = &app.voice_handle {
+                                    let _ = handle.commands.send_blocking(
+                                        crate::voice::VoiceCommand::SetScreen(true),
+                                    );
+                                }
+                                app.sync_dm_call_state(cx);
+                            }
                         }
                         crate::voice::VoiceEvent::Reconnecting => {
                             app.voice_notice = Some("语音重连中…".to_string());
@@ -7615,6 +7647,12 @@ impl DiscordApp {
                         crate::voice::VoiceEvent::MicUnavailable(reason) => {
                             app.voice_notice = Some(reason.clone());
                             app.voice_device_note = Some(reason.clone());
+                        }
+                        crate::voice::VoiceEvent::CameraUnavailable(reason) => {
+                            app.voice_notice = Some(reason.clone());
+                        }
+                        crate::voice::VoiceEvent::ScreenUnavailable(reason) => {
+                            app.voice_notice = Some(reason.clone());
                         }
                         crate::voice::VoiceEvent::Failed(reason) => {
                             app.voice_notice = Some(reason.clone());
@@ -7909,11 +7947,19 @@ impl DiscordApp {
 
     /// 通话内摄像头开关；关摄像头时同时停止屏幕分享，避免两个画面同时开着。
     pub(crate) fn toggle_dm_call_camera(&mut self, cx: &mut Context<Self>) {
-        if let Some(call) = self.dm_call.as_mut() {
+        let camera_on = if let Some(call) = self.dm_call.as_mut() {
             call.camera_on = !call.camera_on;
             if !call.camera_on {
                 call.screen_sharing = false;
             }
+            call.camera_on
+        } else {
+            false
+        };
+        if let Some(handle) = &self.voice_handle {
+            let _ = handle
+                .commands
+                .send_blocking(crate::voice::VoiceCommand::SetCamera(camera_on));
         }
         self.sync_dm_call_state(cx);
         cx.notify();
@@ -7921,11 +7967,19 @@ impl DiscordApp {
 
     /// 通话内屏幕分享开关；开分享时自动开摄像头，让预览区有画面。
     pub(crate) fn toggle_dm_call_screen(&mut self, cx: &mut Context<Self>) {
-        if let Some(call) = self.dm_call.as_mut() {
+        let sharing = if let Some(call) = self.dm_call.as_mut() {
             call.screen_sharing = !call.screen_sharing;
             if call.screen_sharing {
                 call.camera_on = true;
             }
+            call.screen_sharing
+        } else {
+            false
+        };
+        if let Some(handle) = &self.voice_handle {
+            let _ = handle
+                .commands
+                .send_blocking(crate::voice::VoiceCommand::SetScreen(sharing));
         }
         self.sync_dm_call_state(cx);
         cx.notify();

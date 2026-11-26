@@ -53,7 +53,19 @@ scripts/voice-e2e.sh                  # 需要 docker + livekit/livekit-server �
   其他端通过 `VOICE_STATE_UPDATE` 收到 camera/screen 标记；
 - 麦克风同时驱动引擎真实静音；摄像头/屏幕目前只同步状态，没有视频流。
 
-## 仍未实现：摄像头与屏幕共享（4.3 剩余）
+## 摄像头与屏幕共享（已实现采集与发布）
+
+- 摄像头：`native/camera_capture.mm`（AVFoundation，640x480 NV12）→ `I420Buffer` →
+  `NativeVideoSource::capture_frame` → 发布 `TrackSource::Camera`；
+- 屏幕共享：`native/screen_capture.mm`（CGDisplayStream，主屏等比缩放到 1280x720，15fps）
+  → 同一转换路径 → 发布 `TrackSource::Screenshare`；
+- 权限：摄像头走 AVFoundation 授权流程；屏幕录制用 `CGPreflightScreenCaptureAccess`
+  预检，未授权时通过 `ScreenUnavailable` 事件提示而不崩溃；
+- 已验证（`scripts/dm-call-e2e.sh`）：两端麦克风 + A 端摄像头/屏幕，
+  LiveKit webhook 分别上报 `source=CAMERA`（640x360 编码层）与 `source=SCREEN_SHARE`（1280x720）；
+- 服务端 webhook 按 `track.source`（而不是 `type`）更新 mic/camera/screen 投影。
+
+## 仍未实现：远端画面渲染（4.3 剩余）
 
 LiveKit Rust SDK 只提供 `NativeVideoSource`（手动推帧），没有平台摄像头/屏幕采集封装，需要：
 

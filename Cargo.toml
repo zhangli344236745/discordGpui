@@ -21,3 +21,6 @@ pollster = "0.4"
 default = []
 # 真实音视频：需要首次构建下载预编译 libwebrtc（或用 LK_CUSTOM_WEBRTC 指向本地解压目录）
 voice-livekit = ["dep:livekit", "dep:tokio"]
+
+[build-dependencies]
+cc = "1"

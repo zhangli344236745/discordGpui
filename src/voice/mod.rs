@@ -7,6 +7,13 @@
 
 use async_channel::{Receiver, Sender};
 
+#[cfg(all(feature = "voice-livekit", target_os = "macos"))]
+mod camera;
+#[cfg(all(feature = "voice-livekit", target_os = "macos"))]
+mod screen;
+#[cfg(all(feature = "voice-livekit", target_os = "macos"))]
+mod yuv;
+
 // 未启用 voice-livekit 时这些变体不会构造，但 app.rs 仍按同一契约处理。
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
@@ -18,6 +25,8 @@ pub enum VoiceEvent {
     ParticipantJoined(String),
     ParticipantLeft(String),
     MicUnavailable(String),
+    CameraUnavailable(String),
+    ScreenUnavailable(String),
     Failed(String),
 }
 
@@ -37,6 +46,8 @@ pub enum VoiceCommand {
     },
     SetRecordingDevice(String),
     SetPlayoutDevice(String),
+    SetCamera(bool),
+    SetScreen(bool),
     Disconnect,
 }
 
@@ -92,6 +103,8 @@ async fn run(
     commands: Receiver<VoiceCommand>,
 ) {
     use livekit::prelude::*;
+    #[cfg(all(feature = "voice-livekit", target_os = "macos"))]
+    use livekit::webrtc::prelude::RtcVideoSource;
 
     // 平台 ADM：负责麦克风采集与远端音频播放，drop 时自动释放。
     let audio = match PlatformAudio::new() {
@@ -118,6 +131,12 @@ async fn run(
         source: TrackSource::Microphone,
         ..Default::default()
     };
+    // 摄像头按需启动：SetCamera(true) 才创建采集与轨道
+    #[cfg(all(feature = "voice-livekit", target_os = "macos"))]
+    let mut camera: Option<(camera::CameraSession, TrackSid)> = None;
+    #[cfg(all(feature = "voice-livekit", target_os = "macos"))]
+    let mut screen: Option<(screen::ScreenSession, TrackSid)> = None;
+
     let mic = match room
         .local_participant()
         .publish_track(LocalTrack::Audio(track.clone()), options)
@@ -170,6 +189,98 @@ async fn run(
                         let device = PlayoutDeviceId::from_unchecked_guid(&id);
                         if let Err(error) = audio.set_playout_device(&device) {
                             eprintln!("[voice] set playout device failed: {error}");
+                        }
+                    }
+                    Ok(VoiceCommand::SetScreen(on)) => {
+                        #[cfg(all(feature = "voice-livekit", target_os = "macos"))]
+                        if on && screen.is_none() {
+                            match screen::start() {
+                                Ok((session, source)) => {
+                                    let track = LocalVideoTrack::create_video_track(
+                                        "screen",
+                                        RtcVideoSource::Native(source),
+                                    );
+                                    let options = TrackPublishOptions {
+                                        source: TrackSource::Screenshare,
+                                        ..Default::default()
+                                    };
+                                    match room
+                                        .local_participant()
+                                        .publish_track(LocalTrack::Video(track), options)
+                                        .await
+                                    {
+                                        Ok(publication) => {
+                                            eprintln!("[voice] screen published");
+                                            screen = Some((session, publication.sid()));
+                                        }
+                                        Err(error) => {
+                                            eprintln!("[voice] publish screen failed: {error}");
+                                            let _ = events
+                                                .send(VoiceEvent::ScreenUnavailable(format!(
+                                                    "屏幕共享发布失败：{error}"
+                                                )))
+                                                .await;
+                                        }
+                                    }
+                                }
+                                Err(reason) => {
+                                    eprintln!("[voice] screen start failed: {reason}");
+                                    let _ = events
+                                        .send(VoiceEvent::ScreenUnavailable(reason))
+                                        .await;
+                                }
+                            }
+                        } else if !on && screen.is_some() {
+                            let (session, sid) = screen.take().unwrap();
+                            let _ = room.local_participant().unpublish_track(&sid).await;
+                            drop(session);
+                            eprintln!("[voice] screen unpublished");
+                        }
+                    }
+                    Ok(VoiceCommand::SetCamera(on)) => {
+                        #[cfg(all(feature = "voice-livekit", target_os = "macos"))]
+                        if on && camera.is_none() {
+                            match camera::start() {
+                                Ok((session, source)) => {
+                                    let track = LocalVideoTrack::create_video_track(
+                                        "camera",
+                                        RtcVideoSource::Native(source),
+                                    );
+                                    let options = TrackPublishOptions {
+                                        source: TrackSource::Camera,
+                                        ..Default::default()
+                                    };
+                                    match room
+                                        .local_participant()
+                                        .publish_track(LocalTrack::Video(track), options)
+                                        .await
+                                    {
+                                        Ok(publication) => {
+                                            eprintln!("[voice] camera published");
+                                            camera = Some((session, publication.sid()));
+                                        }
+                                        Err(error) => {
+                                            eprintln!("[voice] publish camera failed: {error}");
+                                            let _ = events
+                                                .send(VoiceEvent::CameraUnavailable(format!(
+                                                    "摄像头发布失败：{error}"
+                                                )))
+                                                .await;
+                                        }
+                                    }
+                                }
+                                Err(reason) => {
+                                    eprintln!("[voice] camera start failed: {reason}");
+                                    let _ = events
+                                        .send(VoiceEvent::CameraUnavailable(reason))
+                                        .await;
+                                }
+                            }
+                        } else if !on && camera.is_some() {
+                            let (session, sid) = camera.take().unwrap();
+                            let _ = room.local_participant().unpublish_track(&sid).await;
+                            drop(session);
+                            eprintln!("[voice] camera unpublished");
                         }
                     }
                     Ok(VoiceCommand::Disconnect) | Err(_) => {

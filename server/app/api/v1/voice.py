@@ -202,10 +202,11 @@ async def livekit_webhook(request: Request, db: AsyncSession = Depends(get_db)) 
     event = json.loads(raw or b"{}")
     kind = event.get("event")
     log.info(
-        "livekit webhook event=%s room=%s identity=%s",
+        "livekit webhook event=%s room=%s identity=%s track=%s",
         kind,
         (event.get("room") or {}).get("name", ""),
         (event.get("participant") or {}).get("identity", ""),
+        json.dumps(event.get("track") or {}, ensure_ascii=False)[:200],
     )
     room = (event.get("room") or {}).get("name", "")
     identity = (event.get("participant") or {}).get("identity", "")
@@ -221,14 +222,16 @@ async def livekit_webhook(request: Request, db: AsyncSession = Depends(get_db)) 
             await db.delete(row)
     elif kind in {"track_published", "track_unpublished"}:
         row = await db.get(VoiceParticipant, (room, identity))
-        track = (event.get("track") or {}).get("type", "")
+        track = event.get("track") or {}
+        # LiveKit 的 type 是 AUDIO/VIDEO，具体来源在 source 字段
+        source = (track.get("source") or track.get("type") or "").upper()
         published = kind == "track_published"
         if row is not None:
-            if track == "MICROPHONE":
+            if source == "MICROPHONE":
                 row.mic = published
-            elif track == "CAMERA":
+            elif source == "CAMERA":
                 row.camera = published
-            elif track in {"SCREEN_SHARE", "SCREEN_SHARE_AUDIO"}:
+            elif source in {"SCREEN_SHARE", "SCREEN_SHARE_AUDIO"}:
                 row.screen = published
     elif kind == "room_finished":
         for row in (await db.scalars(select(VoiceParticipant).where(VoiceParticipant.room == room))).all():
