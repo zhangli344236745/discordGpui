@@ -385,7 +385,8 @@ impl Worker {
             .map_err(|error| NetError::decode(format!("刷新响应解析失败：{error}")))?;
         let tokens = Tokens::from(dto);
         self.store.set(tokens.clone());
-        if self.remember {
+        // refresh 会轮换令牌：只要存在会话文件就写回，否则下次启动会拿到已失效的旧令牌
+        if self.remember || self.config.session_file.exists() {
             let _ = auth::save_refresh_token(
                 &self.config.session_file,
                 &self.config.base,

@@ -54,8 +54,8 @@ services:
         "--dev",
         "--bind", "0.0.0.0",
         "--node-ip", "127.0.0.1",
-        "--keys", "devkey: devsecret-devsecret-devsecret-1234",
-        "--webhook-url", "http://host.docker.internal:8080/api/v1/livekit/webhook",
+        "--config-body",
+        "keys:\n  devkey: devsecret-devsecret-devsecret-1234\nwebhook:\n  api_key: devkey\n  urls:\n    - http://api:8080/api/v1/livekit/webhook\n",
       ]
     ports:
       - "7880:7880"

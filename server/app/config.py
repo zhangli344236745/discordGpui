@@ -54,7 +54,8 @@ class Settings(BaseSettings):
     totp_issuer: str = "Discord GPUI"
 
     # LiveKit
-    livekit_url: str = "wss://localhost:7880"
+    # 本地开发默认连本机 LiveKit（ws）；生产用 LIVEKIT_URL=wss://... 覆盖
+    livekit_url: str = "ws://127.0.0.1:7880"
     # RoomService 的 HTTP 地址；为空则从 livekit_url 推导
     livekit_http_url: str = ""
     # 服务器侧静音/踢人是否真实调用 RoomService；未启用只改本地投影（Demo）

@@ -64,6 +64,17 @@ scripts/backup-smoke.sh            # 建库→备份→清空→恢复→校验 
 0 3 * * * cd /opt/discord && BACKUP_KEEP_DAYS=7 scripts/backup.sh >> backups/backup.log 2>&1
 ```
 
+### 本地语音联调
+
+```bash
+scripts/dev-voice.sh --client     # LiveKit + 后端 + 客户端
+```
+
+- LiveKit 以 `--dev` 启动，密钥与 `server/app/config.py` 默认值一致；
+- webhook 地址必须指向后端端口（默认 8090），否则参与者投影不会更新；
+- 后端通过 `LIVEKIT_URL=ws://127.0.0.1:7880` 指向本机 LiveKit（生产用 wss）；
+- 若宿主机端口被占用，`PORT=8091 scripts/dev-voice.sh` 并给客户端设置对应的 `DISCORD_API_BASE`。
+
 ## 4. 观测
 
 - `GET /metrics`：Prometheus 格式。核心序列：`dgpui_http_requests_total`（含状态码）、
