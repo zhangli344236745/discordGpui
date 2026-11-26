@@ -889,6 +889,8 @@ impl AuditEntry {
 /// 全量搜索的一条命中结果（跨频道 / 私信）。
 #[derive(Clone)]
 pub struct SearchHit {
+    /// 命中消息 id（用于跳转定位）。
+    pub message_id: String,
     /// 频道所属服务器名；私信结果固定为「私信」。
     pub server: String,
     /// 频道名；私信结果为好友名。

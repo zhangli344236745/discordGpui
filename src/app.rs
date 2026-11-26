@@ -750,6 +750,8 @@ pub struct DiscordApp {
     pub(crate) twofa_code_edit: Entity<InputState>,
     pub(crate) old_password_edit: Entity<InputState>,
     pub(crate) new_password_edit: Entity<InputState>,
+    /// 搜索结果跳转后待定位的消息 (会话键, 消息 id)。
+    pub(crate) pending_jump: Option<(String, String)>,
     /// 本地通话记录（最新在前，最多 30 条）与面板显隐。
     pub(crate) call_history: Vec<crate::data::CallRecord>,
     pub(crate) show_call_history: bool,
@@ -1737,6 +1739,7 @@ impl DiscordApp {
             video_frames: HashMap::new(),
             remote_video_status: None,
             video_focus: None,
+            pending_jump: None,
             call_history: Vec::new(),
             show_call_history: false,
             commands_by_server: HashMap::new(),
@@ -4737,6 +4740,31 @@ impl DiscordApp {
     /// 取消回复（输入条「取消」按钮）。
     pub(crate) fn cancel_reply(&mut self) {
         self.reply_to = None;
+    }
+
+    /// 若有待定位的搜索结果，且当前会话已加载到该消息，则滚动并高亮。
+    fn try_reveal_pending(&mut self, cx: &mut Context<Self>) {
+        let Some((key, message_id)) = self.pending_jump.clone() else {
+            return;
+        };
+        if key != self.session_key() {
+            self.pending_jump = None;
+            return;
+        }
+        if let Some(index) = self
+            .current_messages()
+            .iter()
+            .position(|message| message.id == message_id)
+        {
+            self.reveal_message(index);
+            self.pending_jump = None;
+            self.automod_notice = Some("已定位到搜索结果".into());
+            return;
+        }
+        // 还没加载到：继续向前翻页
+        if self.has_more_messages() && !self.loading_older {
+            self.load_older_messages(cx);
+        }
     }
 
     /// 滚动到指定消息并高亮。滚动容器的 item 下标要算上顶栏提示与未读分隔线。
@@ -8941,6 +8969,7 @@ impl DiscordApp {
                                         hit.channel_name.clone()
                                     };
                                     SearchHit {
+                                        message_id: hit.message_id.clone(),
                                         server,
                                         channel,
                                         is_dm: hit.dm_id.is_some(),
@@ -8991,6 +9020,7 @@ impl DiscordApp {
                                 continue;
                             }
                             hits.push(SearchHit {
+                                message_id: message.id.clone(),
                                 server: server.name.clone(),
                                 channel: channel.name.clone(),
                                 is_dm: false,
@@ -9015,6 +9045,7 @@ impl DiscordApp {
                         continue;
                     }
                     hits.push(SearchHit {
+                        message_id: message.id.clone(),
                         server: "私信".into(),
                         channel: conversation.friend.to_string(),
                         is_dm: true,
@@ -9051,6 +9082,24 @@ impl DiscordApp {
         {
             self.active_server = server_index;
             self.select_channel(hit.channel, window, cx);
+        }
+        if hit.message_id.is_empty() {
+            cx.notify();
+            return;
+        }
+        if let Some(index) = self
+            .current_messages()
+            .iter()
+            .position(|message| message.id == hit.message_id)
+        {
+            self.reveal_message(index);
+            self.automod_notice = Some("已定位到搜索结果".into());
+        } else {
+            self.pending_jump = Some((self.session_key(), hit.message_id.clone()));
+            self.automod_notice = Some("正在定位搜索结果…".into());
+            if self.has_more_messages() {
+                self.load_older_messages(cx);
+            }
         }
         cx.notify();
     }
@@ -11345,6 +11394,7 @@ impl DiscordApp {
                         older.append(existing);
                         *existing = older;
                         app.has_more_messages.insert(key, page.has_more);
+                        app.try_reveal_pending(cx);
                     }
                     Err(error) => {
                         app.automod_notice = Some(format!("加载更早消息失败：{}", error.user_message()));
@@ -11484,6 +11534,7 @@ impl DiscordApp {
                         app.has_more_messages.insert(key.clone(), page.has_more);
                         app.messages.insert(key, existing);
                         app.mark_active_channel_read(cx);
+                        app.try_reveal_pending(cx);
                     }
                     Err(error) => {
                         app.loaded_channels.remove(&key);
@@ -12091,7 +12142,7 @@ impl DiscordApp {
             if result.is_ok() {
                 let _ = net.execute(api::mark_dm_read(&dm_id, None), true).await;
             }
-            let _ = this.update(cx, |app, _cx| match result {
+            let _ = this.update(cx, |app, cx| match result {
                 Ok(page) => {
                     let mut messages: Vec<Message> = page
                         .items
@@ -12107,6 +12158,7 @@ impl DiscordApp {
                     messages.sort_by(|a, b| a.id.cmp(&b.id));
                     hydrate::resolve_reply_refs(&mut messages);
                     app.dm_messages.insert(friend.clone(), messages);
+                    app.try_reveal_pending(cx);
                 }
                 Err(error) => {
                     app.loaded_dms.remove(&friend);
