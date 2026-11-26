@@ -33,6 +33,11 @@ pub(crate) const SECTIONS: &[(ServerSettingsSection, &str, IconName)] = &[
     (ServerSettingsSection::Invites, "邀请", IconName::Link),
     (ServerSettingsSection::Members, "成员", IconName::Users),
     (ServerSettingsSection::Commands, "斜杠命令", IconName::Hash),
+    (
+        ServerSettingsSection::Integrations,
+        "机器人 / Webhook",
+        IconName::Bot,
+    ),
     (ServerSettingsSection::Audit, "审核日志", IconName::Logs),
     (ServerSettingsSection::Boost, "加成", IconName::Sparkles),
 ];

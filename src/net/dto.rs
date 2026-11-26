@@ -461,6 +461,45 @@ pub struct VoiceJoinDto {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct BotDto {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub tag: String,
+    #[serde(default)]
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct BotCreatedDto {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub tag: String,
+    pub token: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct WebhookDto {
+    pub id: String,
+    pub name: String,
+    pub channel_id: String,
+    #[serde(default)]
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct WebhookCreatedDto {
+    pub id: String,
+    pub name: String,
+    pub channel_id: String,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub token: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct SlashCommandDto {
     pub id: String,
     pub name: String,

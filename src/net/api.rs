@@ -217,6 +217,44 @@ pub fn voice_set_state(room: &str, mic: bool, camera: bool, screen: bool) -> Api
     .with_body(json!({ "mic": mic, "camera": camera, "screen": screen }))
 }
 
+pub fn server_bots(server_id: &str) -> ApiRequest {
+    ApiRequest::new(Method::Get, format!("/api/v1/servers/{server_id}/bots"))
+}
+
+pub fn create_bot(server_id: &str, name: &str) -> ApiRequest {
+    ApiRequest::new(Method::Post, format!("/api/v1/servers/{server_id}/bots"))
+        .with_body(json!({ "name": name }))
+}
+
+pub fn revoke_bot(server_id: &str, bot_id: &str) -> ApiRequest {
+    ApiRequest::new(
+        Method::Delete,
+        format!("/api/v1/servers/{server_id}/bots/{bot_id}"),
+    )
+}
+
+pub fn server_webhooks(server_id: &str) -> ApiRequest {
+    ApiRequest::new(
+        Method::Get,
+        format!("/api/v1/servers/{server_id}/webhooks"),
+    )
+}
+
+pub fn create_webhook(server_id: &str, name: &str, channel_id: &str) -> ApiRequest {
+    ApiRequest::new(
+        Method::Post,
+        format!("/api/v1/servers/{server_id}/webhooks"),
+    )
+    .with_body(json!({ "name": name, "channel_id": channel_id }))
+}
+
+pub fn revoke_webhook(server_id: &str, webhook_id: &str) -> ApiRequest {
+    ApiRequest::new(
+        Method::Delete,
+        format!("/api/v1/servers/{server_id}/webhooks/{webhook_id}"),
+    )
+}
+
 pub fn server_commands(server_id: &str) -> ApiRequest {
     ApiRequest::new(
         Method::Get,

@@ -370,6 +370,7 @@ pub(crate) enum ServerSettingsSection {
     Invites,
     Members,
     Commands,
+    Integrations,
     Audit,
     Boost,
 }
@@ -656,6 +657,15 @@ pub struct DiscordApp {
     pub(crate) command_name_edit: Entity<InputState>,
     pub(crate) command_response_edit: Entity<InputState>,
     pub(crate) commands_notice: Option<String>,
+    /// 服务器设置「机器人 / Webhook」：缓存、输入、新建后的一次性凭证与提示。
+    pub(crate) bots_by_server: HashMap<String, Vec<crate::net::dto::BotDto>>,
+    pub(crate) webhooks_by_server: HashMap<String, Vec<crate::net::dto::WebhookDto>>,
+    pub(crate) bot_name_edit: Entity<InputState>,
+    pub(crate) webhook_name_edit: Entity<InputState>,
+    pub(crate) webhook_channel: Option<String>,
+    pub(crate) bot_secret: Option<(String, String)>,
+    pub(crate) webhook_secret: Option<(String, String)>,
+    pub(crate) integrations_notice: Option<String>,
     /// 服务器自定义表情（Demo：可移除与恢复，不做上传）。
     pub(crate) server_emojis: Vec<&'static str>,
     pub(crate) removed_server_emojis: Vec<&'static str>,
@@ -1129,6 +1139,9 @@ impl DiscordApp {
             cx.new(|cx| InputState::new(window, cx).placeholder("命令名（小写，如 deploy）"));
         let command_response_edit =
             cx.new(|cx| InputState::new(window, cx).placeholder("回复模板，可含 {args}"));
+        let bot_name_edit = cx.new(|cx| InputState::new(window, cx).placeholder("机器人名称"));
+        let webhook_name_edit =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Webhook 名称"));
         let role_name_edit = cx.new(|cx| InputState::new(window, cx).placeholder("角色名称"));
         let automod_name_edit =
             cx.new(|cx| InputState::new(window, cx).placeholder("规则名称，例如 广告拦截"));
@@ -1645,6 +1658,14 @@ impl DiscordApp {
             command_name_edit,
             command_response_edit,
             commands_notice: None,
+            bots_by_server: HashMap::new(),
+            webhooks_by_server: HashMap::new(),
+            bot_name_edit,
+            webhook_name_edit,
+            webhook_channel: None,
+            bot_secret: None,
+            webhook_secret: None,
+            integrations_notice: None,
             server_emojis: vec![
                 "🎨", "🚀", "🔥", "✅", "👀", "🦀", "🎧", "🎮", "🍜", "🌙", "💡", "🐧",
             ],
@@ -9021,8 +9042,12 @@ impl DiscordApp {
             self.select_role(first, window, cx);
         }
         self.commands_notice = None;
+        self.integrations_notice = None;
         if section == ServerSettingsSection::Commands {
             self.refresh_server_commands(cx);
+        }
+        if section == ServerSettingsSection::Integrations {
+            self.refresh_integrations(cx);
         }
         // 进自动审核页时默认选中第一条规则。
         if section == ServerSettingsSection::AutoMod
@@ -9129,6 +9154,213 @@ impl DiscordApp {
                             Some(format!("删除失败：{}", error.user_message()));
                     }
                 }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// 拉取机器人 / Webhook 列表（进入页面与增删后调用）。
+    pub(crate) fn refresh_integrations(&mut self, cx: &mut Context<Self>) {
+        let Some(server_id) = self
+            .remote
+            .servers
+            .get(&self.active_server_name())
+            .cloned()
+        else {
+            return;
+        };
+        let Some(net) = self.net.clone() else {
+            return;
+        };
+        if self.webhook_channel.is_none() {
+            self.webhook_channel = self
+                .servers
+                .get(self.active_server)
+                .map(|server| {
+                    server
+                        .categories
+                        .iter()
+                        .flat_map(|category| category.channels.iter())
+                        .find(|channel| channel.kind == ChannelKind::Text)
+                        .map(|channel| channel.name.clone())
+                })
+                .flatten();
+        }
+        let server = self.active_server_name();
+        cx.spawn(async move |this, cx| {
+            let bots = net
+                .execute_as::<Vec<crate::net::dto::BotDto>>(api::server_bots(&server_id), true)
+                .await;
+            let webhooks = net
+                .execute_as::<Vec<crate::net::dto::WebhookDto>>(
+                    api::server_webhooks(&server_id),
+                    true,
+                )
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                if let Ok(rows) = bots {
+                    app.bots_by_server.insert(server.clone(), rows);
+                }
+                if let Ok(rows) = webhooks {
+                    app.webhooks_by_server.insert(server, rows);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub(crate) fn set_webhook_channel(&mut self, channel: String, cx: &mut Context<Self>) {
+        self.webhook_channel = Some(channel);
+        cx.notify();
+    }
+
+    /// 创建机器人：token 只在创建时返回一次。
+    pub(crate) fn create_bot(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let name = self.bot_name_edit.read(cx).value().trim().to_string();
+        if name.len() < 2 {
+            self.integrations_notice = Some("机器人名称至少 2 个字符".into());
+            cx.notify();
+            return;
+        }
+        let (Some(server_id), Some(net)) = (
+            self.remote.servers.get(&self.active_server_name()).cloned(),
+            self.net.clone(),
+        ) else {
+            self.integrations_notice = Some("当前离线，无法创建机器人".into());
+            cx.notify();
+            return;
+        };
+        self.bot_name_edit
+            .update(cx, |input, cx| input.set_value(String::new(), window, cx));
+        cx.spawn(async move |this, cx| {
+            let result = net
+                .execute_as::<crate::net::dto::BotCreatedDto>(
+                    api::create_bot(&server_id, &name),
+                    true,
+                )
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                match result {
+                    Ok(bot) => {
+                        app.bot_secret = Some((bot.name.clone(), bot.token.clone()));
+                        app.integrations_notice =
+                            Some(format!("已创建机器人 {}#{}，token 只显示一次", bot.name, bot.tag));
+                        app.refresh_integrations(cx);
+                    }
+                    Err(error) => {
+                        app.integrations_notice =
+                            Some(format!("创建机器人失败：{}", error.user_message()));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub(crate) fn revoke_bot(&mut self, bot_id: String, cx: &mut Context<Self>) {
+        let (Some(server_id), Some(net)) = (
+            self.remote.servers.get(&self.active_server_name()).cloned(),
+            self.net.clone(),
+        ) else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let result = net
+                .execute(api::revoke_bot(&server_id, &bot_id), true)
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                app.integrations_notice = Some(match result {
+                    Ok(_) => "机器人已撤销".into(),
+                    Err(error) => format!("撤销失败：{}", error.user_message()),
+                });
+                app.refresh_integrations(cx);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub(crate) fn create_webhook(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let name = self
+            .webhook_name_edit
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
+        let Some(channel_name) = self.webhook_channel.clone() else {
+            self.integrations_notice = Some("请选择要投递的频道".into());
+            cx.notify();
+            return;
+        };
+        if name.is_empty() {
+            self.integrations_notice = Some("请填写 Webhook 名称".into());
+            cx.notify();
+            return;
+        }
+        let Some(channel_id) = self
+            .remote
+            .channels
+            .get(&format!("{}/{}", self.active_server_name(), channel_name))
+            .cloned()
+        else {
+            self.integrations_notice = Some("找不到目标频道".into());
+            cx.notify();
+            return;
+        };
+        let (Some(server_id), Some(net)) = (
+            self.remote.servers.get(&self.active_server_name()).cloned(),
+            self.net.clone(),
+        ) else {
+            return;
+        };
+        self.webhook_name_edit
+            .update(cx, |input, cx| input.set_value(String::new(), window, cx));
+        cx.spawn(async move |this, cx| {
+            let result = net
+                .execute_as::<crate::net::dto::WebhookCreatedDto>(
+                    api::create_webhook(&server_id, &name, &channel_id),
+                    true,
+                )
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                match result {
+                    Ok(hook) => {
+                        app.webhook_secret = Some((hook.name.clone(), hook.url.clone()));
+                        app.integrations_notice =
+                            Some(format!("已创建 Webhook「{}」，URL 只显示一次", hook.name));
+                        app.refresh_integrations(cx);
+                    }
+                    Err(error) => {
+                        app.integrations_notice =
+                            Some(format!("创建 Webhook 失败：{}", error.user_message()));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub(crate) fn revoke_webhook(&mut self, webhook_id: String, cx: &mut Context<Self>) {
+        let (Some(server_id), Some(net)) = (
+            self.remote.servers.get(&self.active_server_name()).cloned(),
+            self.net.clone(),
+        ) else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let result = net
+                .execute(api::revoke_webhook(&server_id, &webhook_id), true)
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                app.integrations_notice = Some(match result {
+                    Ok(_) => "Webhook 已撤销".into(),
+                    Err(error) => format!("撤销失败：{}", error.user_message()),
+                });
+                app.refresh_integrations(cx);
                 cx.notify();
             });
         })

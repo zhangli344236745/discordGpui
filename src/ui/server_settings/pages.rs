@@ -29,6 +29,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
         ServerSettingsSection::Invites => invites(app, cx),
         ServerSettingsSection::Members => members(app, cx),
         ServerSettingsSection::Commands => commands(app, cx),
+        ServerSettingsSection::Integrations => integrations(app, cx),
         ServerSettingsSection::Audit => audit(app, cx),
         ServerSettingsSection::Boost => boost(app, cx),
     }
@@ -1079,6 +1080,269 @@ fn automod(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
 }
 
 /// 动作二选一按钮。
+fn integrations(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
+    let server = app.active_server_name();
+    let bots = app.bots_by_server.get(&server).cloned().unwrap_or_default();
+    let webhooks = app.webhooks_by_server.get(&server).cloned().unwrap_or_default();
+    let text_channels: Vec<String> = app
+        .servers
+        .get(app.active_server)
+        .map(|server| {
+            server
+                .categories
+                .iter()
+                .flat_map(|category| category.channels.iter())
+                .filter(|channel| channel.kind == crate::data::ChannelKind::Text)
+                .map(|channel| channel.name.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut page = shell(
+        "机器人 / Webhook",
+        "Bot 用 `Authorization: Bot <token>` 调用接口；Webhook 用生成的 URL 直接投递消息。",
+    );
+
+    if let Some(note) = &app.integrations_notice {
+        page = page.child(
+            div()
+                .text_size(px(12.))
+                .text_color(rgb(palette::text_secondary()))
+                .child(note.clone()),
+        );
+    }
+
+    // ---- Bot ----
+    let mut bot_card = card()
+        .child(field_label("机器人"))
+        .child(
+            h_flex()
+                .gap_2()
+                .items_center()
+                .child(
+                    div().w(px(240.)).child(
+                        <Input as Sizable>::with_size(Input::new(&app.bot_name_edit), Size::Small)
+                            .w_full(),
+                    ),
+                )
+                .child(command_action(
+                    "创建机器人",
+                    "server-bot-create".to_string(),
+                    false,
+                    Box::new(|this, window, cx| this.create_bot(window, cx)),
+                    cx,
+                )),
+        );
+
+    if let Some((name, token)) = &app.bot_secret {
+        let value = token.clone();
+        bot_card = bot_card.child(
+            h_flex()
+                .gap_2()
+                .items_center()
+                .px_2()
+                .py_2()
+                .rounded(px(6.))
+                .bg(rgb(palette::bg_rail()))
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .gap_0p5()
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(rgb(palette::success()))
+                                .child(format!("{name} 的 token（只显示一次）")),
+                        )
+                        .child(
+                            div()
+                                .truncate()
+                                .text_size(px(11.))
+                                .text_color(rgb(palette::text_secondary()))
+                                .child(token.clone()),
+                        ),
+                )
+                .child(command_action(
+                    "复制",
+                    "server-bot-copy".to_string(),
+                    false,
+                    Box::new(move |this, _, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(value.clone()));
+                        this.integrations_notice = Some("token 已复制".into());
+                        cx.notify();
+                    }),
+                    cx,
+                )),
+        );
+    }
+
+    if bots.is_empty() {
+        bot_card = bot_card.child(hint("还没有机器人。"));
+    }
+    for (index, bot) in bots.into_iter().enumerate() {
+        let bot_id = bot.id.clone();
+        bot_card = bot_card.child(
+            h_flex()
+                .gap_3()
+                .items_center()
+                .px_2()
+                .py_2()
+                .rounded(px(6.))
+                .bg(rgb(palette::bg_rail()))
+                .child(
+                    div()
+                        .flex_1()
+                        .text_size(px(13.))
+                        .text_color(rgb(palette::text_primary()))
+                        .child(format!("{}#{}", bot.name, bot.tag)),
+                )
+                .child(command_action(
+                    "撤销",
+                    format!("server-bot-revoke-{index}"),
+                    true,
+                    Box::new(move |this, _, cx| this.revoke_bot(bot_id.clone(), cx)),
+                    cx,
+                )),
+        );
+    }
+
+    // ---- Webhook ----
+    let mut webhook_card = card().child(field_label("Webhook"));
+    let mut chips = h_flex().gap_1().flex_wrap();
+    for (index, channel) in text_channels.iter().enumerate() {
+        let selected = app.webhook_channel.as_deref() == Some(channel.as_str());
+        let name = channel.clone();
+        chips = chips.child(
+            div()
+                .px_2()
+                .py_1()
+                .rounded(px(4.))
+                .text_size(px(11.))
+                .bg(rgb(if selected {
+                    palette::accent()
+                } else {
+                    palette::bg_rail()
+                }))
+                .text_color(if selected {
+                    rgb(palette::WHITE)
+                } else {
+                    rgb(palette::text_secondary())
+                })
+                .child(format!("# {name}"))
+                .id(format!("webhook-channel-{index}"))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.set_webhook_channel(name.clone(), cx)
+                })),
+        );
+    }
+    webhook_card = webhook_card
+        .child(chips)
+        .child(
+            h_flex()
+                .gap_2()
+                .items_center()
+                .child(
+                    div().w(px(240.)).child(
+                        <Input as Sizable>::with_size(
+                            Input::new(&app.webhook_name_edit),
+                            Size::Small,
+                        )
+                        .w_full(),
+                    ),
+                )
+                .child(command_action(
+                    "创建 Webhook",
+                    "server-webhook-create".to_string(),
+                    false,
+                    Box::new(|this, window, cx| this.create_webhook(window, cx)),
+                    cx,
+                )),
+        );
+
+    if let Some((name, url)) = &app.webhook_secret {
+        let value = url.clone();
+        webhook_card = webhook_card.child(
+            h_flex()
+                .gap_2()
+                .items_center()
+                .px_2()
+                .py_2()
+                .rounded(px(6.))
+                .bg(rgb(palette::bg_rail()))
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .gap_0p5()
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(rgb(palette::success()))
+                                .child(format!("{name} 的 URL（只显示一次）")),
+                        )
+                        .child(
+                            div()
+                                .truncate()
+                                .text_size(px(11.))
+                                .text_color(rgb(palette::text_secondary()))
+                                .child(url.clone()),
+                        ),
+                )
+                .child(command_action(
+                    "复制",
+                    "server-webhook-copy".to_string(),
+                    false,
+                    Box::new(move |this, _, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(value.clone()));
+                        this.integrations_notice = Some("Webhook URL 已复制".into());
+                        cx.notify();
+                    }),
+                    cx,
+                )),
+        );
+    }
+
+    if webhooks.is_empty() {
+        webhook_card = webhook_card.child(hint("还没有 Webhook。"));
+    }
+    for (index, hook) in webhooks.into_iter().enumerate() {
+        let hook_id = hook.id.clone();
+        let channel_name = app
+            .remote
+            .channels
+            .iter()
+            .find(|(_, id)| id.as_str() == hook.channel_id)
+            .and_then(|(key, _)| key.split_once('/').map(|(_, name)| name.to_string()))
+            .unwrap_or_else(|| "未知频道".into());
+        webhook_card = webhook_card.child(
+            h_flex()
+                .gap_3()
+                .items_center()
+                .px_2()
+                .py_2()
+                .rounded(px(6.))
+                .bg(rgb(palette::bg_rail()))
+                .child(
+                    div()
+                        .flex_1()
+                        .text_size(px(13.))
+                        .text_color(rgb(palette::text_primary()))
+                        .child(format!("{} → #{}", hook.name, channel_name)),
+                )
+                .child(command_action(
+                    "撤销",
+                    format!("server-webhook-revoke-{index}"),
+                    true,
+                    Box::new(move |this, _, cx| this.revoke_webhook(hook_id.clone(), cx)),
+                    cx,
+                )),
+        );
+    }
+
+    page.child(bot_card).child(webhook_card)
+}
+
 fn commands(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> Div {
     let server = app.active_server_name();
     let rows = app.commands_by_server.get(&server).cloned().unwrap_or_default();
