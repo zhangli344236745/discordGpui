@@ -95,7 +95,7 @@ dgpu_camera_t *dgpu_camera_start(dgpu_frame_cb callback, char *err, size_t err_l
 
   AVCaptureSession *session = [[AVCaptureSession alloc] init];
   [session beginConfiguration];
-  session.sessionPreset = AVCaptureSessionPreset640x480;
+  session.sessionPreset = AVCaptureSessionPreset1280x720;
   if (![session canAddInput:input]) {
     dgpu_set_error(err, err_len, @"摄像头输入不可用");
     [session commitConfiguration];

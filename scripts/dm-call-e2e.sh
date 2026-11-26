@@ -159,4 +159,9 @@ wait_until 20 grep -q "event=track_published .*SCREEN_SHARE" "$TMP/server.log" |
   fail "缺少 SCREEN_SHARE track_published webhook"
 echo "PASS dm-call: 屏幕共享轨道已发布"
 
+# 远端渲染：B 端应解出 A 的摄像头/屏幕帧（BGRA → RenderImage）
+wait_until 25 grep -q "first remote camera frame" "$TMP/b.log" || fail "B 端未渲染远端摄像头"
+wait_until 20 grep -q "first remote screen frame" "$TMP/b.log" || fail "B 端未渲染远端屏幕"
+echo "PASS dm-call: 远端摄像头/屏幕画面已渲染"
+
 echo "dm call e2e passed"

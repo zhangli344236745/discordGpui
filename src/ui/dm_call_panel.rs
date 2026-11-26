@@ -74,6 +74,22 @@ fn preview(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElement {
             .into_any_element();
     }
 
+    // 远端真实画面优先：屏幕 > 摄像头
+    if let Some(frame) = app.remote_screen_frame.clone() {
+        return img(ImageSource::Render(frame))
+            .w_full()
+            .h(px(180.))
+            .object_fit(ObjectFit::Cover)
+            .into_any_element();
+    }
+    if let Some(frame) = app.remote_camera_frame.clone() {
+        return img(ImageSource::Render(frame))
+            .w_full()
+            .h(px(180.))
+            .object_fit(ObjectFit::Cover)
+            .into_any_element();
+    }
+
     if call.screen_sharing {
         return v_flex()
             .h(px(160.))
@@ -87,7 +103,7 @@ fn preview(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElement {
                 div()
                     .text_size(px(11.))
                     .text_color(rgb(palette::text_dim()))
-                    .child("屏幕分享中（演示占位，不采集真实屏幕）"),
+                    .child("屏幕分享中，等待对方画面…"),
             )
             .into_any_element();
     }
@@ -110,7 +126,7 @@ fn preview(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElement {
                 div()
                     .text_size(px(11.))
                     .text_color(rgb(palette::text_dim()))
-                    .child("摄像头画面（演示占位，不采集真实视频）"),
+                    .child("摄像头已开启，等待对方画面…"),
             )
             .into_any_element();
     }

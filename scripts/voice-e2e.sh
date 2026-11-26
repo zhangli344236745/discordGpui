@@ -101,6 +101,7 @@ TOKEN="$(python3 -c "import json;print(json.load(open('$TMP/ctx.json'))['token']
 DISCORD_API_BASE="http://127.0.0.1:$PORT" \
 DISCORD_SESSION_FILE="$TMP/session.json" \
 DISCORD_VOICE_AUTOJOIN="$CHANNEL" \
+DISCORD_VOICE_CAMERA="1" DISCORD_VOICE_SCREEN="1" \
   "$ROOT/target/debug/discord-gpui" >"$TMP/client.log" 2>&1 &
 CLIENT_PID=$!
 
@@ -120,22 +121,22 @@ kill -0 "$CLIENT_PID" 2>/dev/null || { echo "FAIL voice: 客户端退出"; tail 
 grep -qiE "panic|Terminating app" "$TMP/client.log" "$TMP/server.log" && { echo "FAIL voice: 崩溃"; tail -20 "$TMP/client.log"; exit 1; }
 echo "PASS voice: room + microphone"
 
-for kind in participant_joined track_published; do
-  wait_until 15 grep -q "livekit webhook event=$kind" "$TMP/server.log"
-  if [ $? -eq 0 ]; then
-    echo "PASS voice: webhook $kind"
-  else
-    echo "FAIL voice: 缺少 webhook $kind"
-    tail -20 "$TMP/server.log"
-    exit 1
-  fi
-done
+wait_until 20 grep -q "camera published" "$TMP/client.log" || { echo "FAIL voice: 摄像头未发布"; exit 1; }
+wait_until 20 grep -q "screen published" "$TMP/client.log" || { echo "FAIL voice: 屏幕共享未发布"; exit 1; }
+echo "PASS voice: 摄像头与屏幕共享已发布"
+
+wait_until 20 grep -q "event=track_published .*CAMERA" "$TMP/server.log" || { echo "FAIL voice: 缺少 CAMERA webhook"; exit 1; }
+wait_until 20 grep -q "event=track_published .*SCREEN_SHARE" "$TMP/server.log" || { echo "FAIL voice: 缺少 SCREEN_SHARE webhook"; exit 1; }
+echo "PASS voice: webhook CAMERA + SCREEN_SHARE"
+
+wait_until 15 grep -q "livekit webhook event=participant_joined" "$TMP/server.log" || { echo "FAIL voice: 缺少 participant_joined"; exit 1; }
+echo "PASS voice: webhook participant_joined"
 
 for _ in $(seq 1 40); do
   participants="$(curl -s --noproxy '*' -H "Authorization: Bearer $TOKEN" \
     "http://127.0.0.1:$PORT/api/v1/channels/$CHANNEL/voice/participants")"
-  if printf '%s' "$participants" | python3 -c 'import json,sys; rows=json.load(sys.stdin); sys.exit(0 if rows and rows[0]["mic"] is True else 1)'; then
-    echo "PASS voice: participant projection mic=true"
+  if printf '%s' "$participants" | python3 -c 'import json,sys; rows=json.load(sys.stdin); sys.exit(0 if rows and rows[0]["mic"] is True and rows[0]["camera"] is True and rows[0]["screen"] is True else 1)'; then
+    echo "PASS voice: participant projection mic/camera/screen=true"
     break
   fi
   sleep 0.25

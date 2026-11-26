@@ -1494,7 +1494,9 @@ version = "0.1.0"
 dependencies = [
  "async-channel",
  "cc",
+ "futures-util",
  "gpui-kit",
+ "image",
  "livekit",
  "pollster",
  "rfd",

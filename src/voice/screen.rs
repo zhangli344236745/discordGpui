@@ -59,6 +59,13 @@ extern "C" fn on_frame(
         return;
     };
     let (w, h) = (width as usize, height as usize);
+    {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static LOGGED: AtomicBool = AtomicBool::new(false);
+        if !LOGGED.swap(true, Ordering::Relaxed) {
+            eprintln!("[voice] screen capture first frame {w}x{h}");
+        }
+    }
     let (sy, suv) = (stride_y.max(0) as usize, stride_uv.max(0) as usize);
     let y_slice = unsafe { std::slice::from_raw_parts(y, sy * h) };
     let uv_slice = unsafe { std::slice::from_raw_parts(uv, suv * h.div_ceil(2)) };

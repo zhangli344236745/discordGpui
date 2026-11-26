@@ -65,22 +65,27 @@ scripts/voice-e2e.sh                  # 需要 docker + livekit/livekit-server �
   LiveKit webhook 分别上报 `source=CAMERA`（640x360 编码层）与 `source=SCREEN_SHARE`（1280x720）；
 - 服务端 webhook 按 `track.source`（而不是 `type`）更新 mic/camera/screen 投影。
 
-## 仍未实现：远端画面渲染与频道面板开关（4.3 剩余）
+## 远端画面渲染与频道面板开关（已实现）
 
-采集与发布已经打通（见上），剩下的是**把远端视频画出来**以及**频道语音面板的摄像头/屏幕按钮**：
+- 解码：`RoomEvent::TrackSubscribed` 里对远端视频建 `NativeVideoStream`，异步流按 ~15fps
+  节流，`i420_to_bgra` 转 BGRA 后经 `async_channel` 送到 UI 线程；
+- 上屏：UI 侧 `ImageBuffer<Rgba<u8>>`（BGRA 布局）→ `image::Frame` → `gpui::RenderImage`
+  → `img(ImageSource::Render(..))`，DM 通话面板与频道语音房间面板都会显示远端画面
+  （屏幕共享优先于摄像头）；
+- 频道语音面板新增摄像头/屏幕按钮，和 DM 通话一样驱动 `SetCamera/SetScreen` 并
+  `PUT /voice/{room}/me` 同步状态；
+- 引擎晚于开关创建时会补发一次 SetCamera/SetScreen，避免竞态丢状态；
+- 摄像头采集统一为 1280x720（AVCaptureSessionPreset1280x720）；
+- 验证：
+  - `scripts/voice-e2e.sh`：频道内摄像头+屏幕发布、`CAMERA`/`SCREEN_SHARE` webhook、
+    服务端投影 `mic/camera/screen=true`；
+  - `scripts/dm-call-e2e.sh`：双端通话中 B 端解出 A 的摄像头/屏幕帧并渲染
+    （日志 `first remote camera/screen frame`）。
 
-1. **拉流**：`RoomEvent::TrackSubscribed` 里对 `RemoteVideoTrack` 建
-   `NativeVideoStream::new(track.rtc_track(), Some(2))`，其内部 `VideoFrameQueue`
-   在解码线程产出 `I420Buffer`；
-2. **转格式**：`libwebrtc::native::yuv_helper::i420_to_bgra`（或 `i420_to_rgba`）；
-3. **上屏**：转成 `gpui::RenderImage`（`image::Frame` + `RenderImage::new`），
-   在 DM 通话面板/语音房间面板按参与者渲染成 tile；帧率按 15fps 节流，避免 UI 过载；
-4. **本地预览**：把 `NativeVideoSource` 的最近一帧同样送 UI（可复用同一条转换路径）；
-5. **频道面板**：`ui/voice_room.rs` 增加摄像头/屏幕按钮，复用 `SetCamera/SetScreen` 命令
-   与 `PUT /voice/{room}/me`（后端与引擎均已支持）。
+## 后续可选增量
 
-这部分主要风险在 GPUI 纹理/图像组件的接入与 UI 布局，建议作为独立 UI 增量实现；
-传输、采集、权限与服务端状态同步均已验证。
+- 本地摄像头小窗预览（把 `NativeVideoSource` 最近一帧同样送 UI）；
+- 屏享分辨率/码率自适应、按参与者平铺的多路视频布局（当前展示最近一帧）。
 
 ## 更早的「仅信令」部分（离线/未启用 feature 时仍生效）
 

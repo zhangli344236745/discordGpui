@@ -13,6 +13,8 @@ serde_json = "1.0"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"], optional = true }
 tungstenite = { version = "0.24.0", features = ["rustls-tls-webpki-roots"] }
 ureq = { version = "2.12.1", features = ["json"] }
+futures-util = { version = "0.3.34", optional = true }
+image = { version = "0.25.10", default-features = false, optional = true }
 
 [dev-dependencies]
 pollster = "0.4"
@@ -20,7 +22,7 @@ pollster = "0.4"
 [features]
 default = []
 # 真实音视频：需要首次构建下载预编译 libwebrtc（或用 LK_CUSTOM_WEBRTC 指向本地解压目录）
-voice-livekit = ["dep:livekit", "dep:tokio"]
+voice-livekit = ["dep:livekit", "dep:tokio", "dep:futures-util", "dep:image"]
 
 [build-dependencies]
 cc = "1"

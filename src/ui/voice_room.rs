@@ -17,6 +17,22 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
         None => return div().into_any_element(),
     };
 
+    // 远端画面：优先显示屏幕共享，其次摄像头
+    let mut panel = v_flex();
+    if let Some(frame) = app
+        .remote_screen_frame
+        .clone()
+        .or_else(|| app.remote_camera_frame.clone())
+    {
+        panel = panel.child(
+            img(ImageSource::Render(frame))
+                .w_full()
+                .h(px(120.))
+                .object_fit(ObjectFit::Cover)
+                .rounded(px(6.)),
+        );
+    }
+
     let mut rows = v_flex().gap_1();
 
     // 自己：状态取自底部用户栏的麦克风开关。
@@ -198,6 +214,7 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                 .text_color(rgb(palette::text_muted()))
                 .child(format!("语音房间 · {} 人", app.voice_participants.len() + 1)),
         )
+        .child(panel)
         .child(rows)
         .child(div().h(px(1.)).bg(rgb(palette::bg_divider())))
         .child(
@@ -237,6 +254,59 @@ pub fn render(app: &DiscordApp, cx: &mut Context<DiscordApp>) -> impl IntoElemen
                             this.toggle_mic(cx);
                             cx.notify();
                         })),
+                )
+                .child(
+                    div()
+                        .w(px(30.))
+                        .h(px(28.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(4.))
+                        .bg(if app.voice_camera_on {
+                            rgb(palette::accent())
+                        } else {
+                            rgb(palette::bg_rail())
+                        })
+                        .text_color(if app.voice_camera_on {
+                            rgb(palette::WHITE)
+                        } else {
+                            rgb(palette::text_secondary())
+                        })
+                        .hover(|el| el.bg(rgb(palette::bg_toolbar_hover())))
+                        .child(ico(
+                            if app.voice_camera_on {
+                                IconName::Video
+                            } else {
+                                IconName::VideoOff
+                            },
+                            Size::XSmall,
+                        ))
+                        .id("voice-room-camera")
+                        .on_click(cx.listener(|this, _, _, cx| this.toggle_voice_camera(cx))),
+                )
+                .child(
+                    div()
+                        .w(px(30.))
+                        .h(px(28.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(4.))
+                        .bg(if app.voice_screen_on {
+                            rgb(palette::accent())
+                        } else {
+                            rgb(palette::bg_rail())
+                        })
+                        .text_color(if app.voice_screen_on {
+                            rgb(palette::WHITE)
+                        } else {
+                            rgb(palette::text_secondary())
+                        })
+                        .hover(|el| el.bg(rgb(palette::bg_toolbar_hover())))
+                        .child(ico(IconName::ScreenShare, Size::XSmall))
+                        .id("voice-room-screen")
+                        .on_click(cx.listener(|this, _, _, cx| this.toggle_voice_screen(cx))),
                 )
                 .child(
                     h_flex()

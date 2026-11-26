@@ -706,6 +706,13 @@ pub struct DiscordApp {
     pub(crate) voice_input_device: Option<(String, String)>,
     pub(crate) voice_output_device: Option<(String, String)>,
     pub(crate) voice_device_note: Option<String>,
+    /// 频道语音内的摄像头/屏幕共享开关。
+    pub(crate) voice_camera_on: bool,
+    pub(crate) voice_screen_on: bool,
+    /// 远端视频最近一帧（DM 通话面板直接展示）。
+    pub(crate) remote_camera_frame: Option<std::sync::Arc<gpui_kit::RenderImage>>,
+    pub(crate) remote_screen_frame: Option<std::sync::Arc<gpui_kit::RenderImage>>,
+    pub(crate) remote_video_status: Option<String>,
     pub(crate) voice_handle: Option<crate::voice::VoiceHandle>,
 
     // 私信通话：Some 即显示悬浮通话面板，跨会话与设置页保持。
@@ -1600,6 +1607,11 @@ impl DiscordApp {
             voice_input_device: None,
             voice_output_device: None,
             voice_device_note: None,
+            remote_camera_frame: None,
+            remote_screen_frame: None,
+            remote_video_status: None,
+            voice_camera_on: false,
+            voice_screen_on: false,
             voice_handle: None,
             dm_call: None,
             discover_servers: seed_discover_servers(),
@@ -7529,6 +7541,8 @@ impl DiscordApp {
         self.voice_channel = None;
         self.voice_channel_id = None;
         self.voice_room = None;
+        self.voice_camera_on = false;
+        self.voice_screen_on = false;
         self.voice_participants.clear();
         self.show_voice_room = false;
     }
@@ -7576,6 +7590,12 @@ impl DiscordApp {
             return;
         };
         self.toggle_voice(server_index, channel_name.to_string(), cx);
+        if std::env::var("DISCORD_VOICE_CAMERA").ok().as_deref() == Some("1") {
+            self.toggle_voice_camera(cx);
+        }
+        if std::env::var("DISCORD_VOICE_SCREEN").ok().as_deref() == Some("1") {
+            self.toggle_voice_screen(cx);
+        }
     }
 
     /// 启动真实语音引擎（feature 未启用时返回，仅保留信令层）。
@@ -7587,7 +7607,35 @@ impl DiscordApp {
             return;
         };
         let events = handle.events.clone();
+        #[cfg(feature = "voice-livekit")]
+        let frames = handle.frames.clone();
         self.voice_handle = Some(handle);
+
+        // 引擎可能晚于开关创建：把已选中的摄像头/屏幕状态补发一次
+        if let Some(handle) = &self.voice_handle {
+            if self.voice_camera_on {
+                let _ = handle
+                    .commands
+                    .send_blocking(crate::voice::VoiceCommand::SetCamera(true));
+            }
+            if self.voice_screen_on {
+                let _ = handle
+                    .commands
+                    .send_blocking(crate::voice::VoiceCommand::SetScreen(true));
+            }
+        }
+
+        // 远端视频：BGRA → RenderImage，保留最近一帧（仅带引擎的构建）
+        #[cfg(feature = "voice-livekit")]
+        cx.spawn(async move |this, cx| {
+            while let Ok(frame) = frames.recv().await {
+                let _ = this.update(cx, |app, cx| {
+                    app.apply_remote_video(frame, cx);
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
         cx.spawn(async move |this, cx| {
             while let Ok(event) = events.recv().await {
                 let close = matches!(
@@ -7663,6 +7711,9 @@ impl DiscordApp {
                     }
                     if close {
                         app.voice_handle = None;
+                        app.remote_camera_frame = None;
+                        app.remote_screen_frame = None;
+                        app.remote_video_status = None;
                         app.voice_devices = None;
                         app.voice_input_device = None;
                         app.voice_output_device = None;
@@ -11895,6 +11946,42 @@ impl DiscordApp {
         self.sync_voice_state(cx);
     }
 
+    /// 把远端视频帧转成 GPUI 图像并记录首帧状态（仅 voice-livekit 构建）。
+    #[cfg(feature = "voice-livekit")]
+    fn apply_remote_video(&mut self, frame: crate::voice::VideoFrameData, _cx: &mut Context<Self>) {
+        use image::{ImageBuffer, Rgba};
+
+        // 引擎已输出 BGRA；RenderImage 直接按 BGRA 解释，这里只借用 RGBA 的类型布局
+        let Some(buffer) = ImageBuffer::<Rgba<u8>, Vec<u8>>::from_raw(
+            frame.width,
+            frame.height,
+            frame.bgra.as_ref().clone(),
+        ) else {
+            return;
+        };
+        let render = std::sync::Arc::new(gpui_kit::RenderImage::new([image::Frame::new(buffer)]));
+        let first = match frame.kind.as_str() {
+            "camera" => {
+                let first = self.remote_camera_frame.is_none();
+                self.remote_camera_frame = Some(render);
+                first
+            }
+            "screen" => {
+                let first = self.remote_screen_frame.is_none();
+                self.remote_screen_frame = Some(render);
+                first
+            }
+            _ => false,
+        };
+        if first {
+            eprintln!(
+                "[video] first remote {} frame from {} ({}x{})",
+                frame.kind, frame.identity, frame.width, frame.height
+            );
+            self.remote_video_status = Some(format!("正在接收 {} 画面", frame.identity));
+        }
+    }
+
     /// 拉取当前引擎的输入/输出设备列表（仅连接语音后可用）。
     pub(crate) fn refresh_voice_devices(&mut self, cx: &mut Context<Self>) {
         let Some(handle) = &self.voice_handle else {
@@ -11970,6 +12057,30 @@ impl DiscordApp {
         cx.notify();
     }
 
+    /// 频道语音：切换摄像头（发布/取消 Camera 轨道并同步状态）。
+    pub(crate) fn toggle_voice_camera(&mut self, cx: &mut Context<Self>) {
+        self.voice_camera_on = !self.voice_camera_on;
+        if let Some(handle) = &self.voice_handle {
+            let _ = handle
+                .commands
+                .send_blocking(crate::voice::VoiceCommand::SetCamera(self.voice_camera_on));
+        }
+        self.sync_voice_state(cx);
+        cx.notify();
+    }
+
+    /// 频道语音：切换屏幕共享。
+    pub(crate) fn toggle_voice_screen(&mut self, cx: &mut Context<Self>) {
+        self.voice_screen_on = !self.voice_screen_on;
+        if let Some(handle) = &self.voice_handle {
+            let _ = handle
+                .commands
+                .send_blocking(crate::voice::VoiceCommand::SetScreen(self.voice_screen_on));
+        }
+        self.sync_voice_state(cx);
+        cx.notify();
+    }
+
     /// 把本端麦克风/摄像头/共享状态写回服务端，供其他端展示。
     fn sync_voice_state(&mut self, cx: &mut Context<Self>) {
         // 先驱动本地引擎，再广播状态
@@ -11985,8 +12096,12 @@ impl DiscordApp {
             return;
         }
         let mic = self.mic_on;
+        let camera = self.voice_camera_on;
+        let screen = self.voice_screen_on;
         cx.spawn(async move |_, _| {
-            let _ = net.execute(api::voice_set_state(&room, mic, false, false), true).await;
+            let _ = net
+                .execute(api::voice_set_state(&room, mic, camera, screen), true)
+                .await;
         })
         .detach();
     }

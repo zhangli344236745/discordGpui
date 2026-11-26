@@ -15,6 +15,18 @@ mod screen;
 mod yuv;
 
 // 未启用 voice-livekit 时这些变体不会构造，但 app.rs 仍按同一契约处理。
+/// 远端视频帧（BGRA，供 UI 直接构造 RenderImage）。
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub struct VideoFrameData {
+    pub identity: String,
+    /// "camera" 或 "screen"
+    pub kind: String,
+    pub width: u32,
+    pub height: u32,
+    pub bgra: std::sync::Arc<Vec<u8>>,
+}
+
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub enum VoiceEvent {
@@ -54,6 +66,9 @@ pub enum VoiceCommand {
 pub struct VoiceHandle {
     pub commands: Sender<VoiceCommand>,
     pub events: Receiver<VoiceEvent>,
+    // 无 voice-livekit 时没有解码器写入，保留字段让 UI 代码保持同一契约
+    #[allow(dead_code)]
+    pub frames: Receiver<VideoFrameData>,
 }
 
 /// 当前构建是否包含真实音视频能力。
@@ -71,6 +86,7 @@ pub fn start(_url: String, _token: String) -> Option<VoiceHandle> {
 pub fn start(url: String, token: String) -> Option<VoiceHandle> {
     let (command_tx, command_rx) = async_channel::unbounded();
     let (event_tx, event_rx) = async_channel::unbounded();
+    let (frame_tx, frame_rx) = async_channel::bounded(4);
 
     std::thread::Builder::new()
         .name("discord-voice".into())
@@ -85,13 +101,14 @@ pub fn start(url: String, token: String) -> Option<VoiceHandle> {
                     return;
                 }
             };
-            runtime.block_on(run(url, token, event_tx, command_rx));
+            runtime.block_on(run(url, token, event_tx, command_rx, frame_tx));
         })
         .ok()?;
 
     Some(VoiceHandle {
         commands: command_tx,
         events: event_rx,
+        frames: frame_rx,
     })
 }
 
@@ -101,10 +118,13 @@ async fn run(
     token: String,
     events: Sender<VoiceEvent>,
     commands: Receiver<VoiceCommand>,
+    frames: Sender<VideoFrameData>,
 ) {
+    use futures_util::StreamExt;
     use livekit::prelude::*;
-    #[cfg(all(feature = "voice-livekit", target_os = "macos"))]
-    use livekit::webrtc::prelude::RtcVideoSource;
+    use livekit::webrtc::native::yuv_helper;
+    use livekit::webrtc::prelude::{RtcVideoSource, VideoBuffer};
+    use livekit::webrtc::video_stream::native::NativeVideoStream;
 
     // 平台 ADM：负责麦克风采集与远端音频播放，drop 时自动释放。
     let audio = match PlatformAudio::new() {
@@ -210,7 +230,10 @@ async fn run(
                                         .await
                                     {
                                         Ok(publication) => {
-                                            eprintln!("[voice] screen published");
+                                            eprintln!(
+                                                "[voice] screen published sid={}",
+                                                publication.sid()
+                                            );
                                             screen = Some((session, publication.sid()));
                                         }
                                         Err(error) => {
@@ -256,7 +279,10 @@ async fn run(
                                         .await
                                     {
                                         Ok(publication) => {
-                                            eprintln!("[voice] camera published");
+                                            eprintln!(
+                                                "[voice] camera published sid={}",
+                                                publication.sid()
+                                            );
                                             camera = Some((session, publication.sid()));
                                         }
                                         Err(error) => {
@@ -296,6 +322,64 @@ async fn run(
                     return;
                 };
                 match event {
+                    RoomEvent::TrackSubscribed { track, publication, participant } => {
+                        if let RemoteTrack::Video(video) = track {
+                            let kind = match publication.source() {
+                                TrackSource::Camera => "camera",
+                                TrackSource::Screenshare => "screen",
+                                _ => "video",
+                            }
+                            .to_string();
+                            let identity = display_name(&participant);
+                            eprintln!(
+                                "[voice] remote video subscribed kind={kind} name={} sid={}",
+                                publication.name(),
+                                publication.sid()
+                            );
+                            let frames = frames.clone();
+                            let mut stream = NativeVideoStream::new(video.rtc_track());
+                            tokio::spawn(async move {
+                                let mut last_sent = std::time::Instant::now();
+                                while let Some(frame) = stream.next().await {
+                                    // 限到 ~15fps，避免 UI 被高频帧拖垮
+                                    if last_sent.elapsed() < std::time::Duration::from_millis(66) {
+                                        continue;
+                                    }
+                                    last_sent = std::time::Instant::now();
+                                    let buffer = frame.buffer.to_i420();
+                                    let (width, height) = (buffer.width(), buffer.height());
+                                    if width == 0 || height == 0 {
+                                        continue;
+                                    }
+                                    let (y, u, v) = buffer.data();
+                                    let (stride_y, stride_u, stride_v) = buffer.strides();
+                                    let mut bgra = vec![0u8; (width * height * 4) as usize];
+                                    yuv_helper::i420_to_bgra(
+                                        y,
+                                        stride_y,
+                                        u,
+                                        stride_u,
+                                        v,
+                                        stride_v,
+                                        &mut bgra,
+                                        width * 4,
+                                        width as i32,
+                                        height as i32,
+                                    );
+                                    let payload = VideoFrameData {
+                                        identity: identity.clone(),
+                                        kind: kind.clone(),
+                                        width,
+                                        height,
+                                        bgra: std::sync::Arc::new(bgra),
+                                    };
+                                    if frames.send(payload).await.is_err() {
+                                        break;
+                                    }
+                                }
+                            });
+                        }
+                    }
                     RoomEvent::ParticipantConnected(participant) => {
                         let name = display_name(&participant);
                         let _ = events.send(VoiceEvent::ParticipantJoined(name)).await;

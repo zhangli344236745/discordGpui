@@ -56,6 +56,7 @@ extern "C" fn on_frame(
         return;
     }
     let (w, h) = (width as usize, height as usize);
+    log_first_frame("camera", w, h);
     let Some(source) = sink().lock().ok().and_then(|guard| guard.clone()) else {
         return;
     };
@@ -96,12 +97,20 @@ extern "C" fn on_frame(
     source.capture_frame(&frame);
 }
 
+fn log_first_frame(kind: &str, width: usize, height: usize) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static LOGGED: AtomicBool = AtomicBool::new(false);
+    if !LOGGED.swap(true, Ordering::Relaxed) {
+        eprintln!("[voice] {kind} capture first frame {width}x{height}");
+    }
+}
+
 /// 启动摄像头；返回可发布的视频源与会话句柄。
 pub fn start() -> Result<(CameraSession, NativeVideoSource), String> {
     let source = NativeVideoSource::new(
         VideoResolution {
-            width: 640,
-            height: 360,
+            width: 1280,
+            height: 720,
         },
         false,
     );
